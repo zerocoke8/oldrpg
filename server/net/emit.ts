@@ -17,15 +17,16 @@ export function makeEmit(reg: Registry) {
     sock.send(JSON.stringify(msg));
   }
 
-  /** 로그 id 는 수신자별로 스코프된 불투명 문자열이다. 순서 정보를 담지
-   *  않으므로 남의 활동량이 새지 않고, log.replace 가 주소로 쓰기에 충분하다. */
+  /** 로그 id 는 수신자별로 스코프된 불투명 문자열이다. 접두사가 무작위라
+   *  전역 순서 정보를 담지 않고(남의 활동량이 새지 않고), 서버 재시작 후에도
+   *  옛 id 와 충돌하지 않는다. log.replace 가 주소로 쓰기에 충분하다. */
   function log(
     s: Session,
     kind: LogKind,
     text: string,
     extra?: { speaker?: PlayerBrief; roomId?: RoomId; source?: TextSource },
   ): string {
-    const id = `${s.connId}:${s.logN++}`;
+    const id = `${s.logPrefix}:${s.logN++}`;
     const msg: LogEvent = { t: "log", id, kind, text };
     if (extra?.speaker) msg.speaker = extra.speaker;
     if (extra?.roomId) msg.roomId = extra.roomId;

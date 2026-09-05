@@ -56,6 +56,9 @@ export interface Ctx {
   q: Queries;
   roomText: RoomTextService;
   clock: () => number;
+  /** 종료 중인가. true 면 handleClose 가 아무 일도 하지 않는다 —
+   *  db.close() 뒤에 도착하는 소켓 close 이벤트가 닫힌 핸들에 쓰는 것을 막는다. */
+  isShuttingDown: () => boolean;
 }
 
 /* ------------------------------------------------------------------ */
@@ -102,7 +105,13 @@ export function handleHello(
   ctx: Ctx,
   socket: WebSocket,
   env: Extract<Envelope, { t: "hello" }>,
-): HelloOutcome | { error: "protocol_version" } {
+  /** '실제로 새 캐릭터를 만들려는 순간' 에 호출된다. false 면 만들지 않는다.
+   *  예산을 "token 이 null 인가" 가 아니라 "행을 만드는가" 에 물리는 것이 요점이다 —
+   *  전자는 형식만 맞는 아무 64자리 hex 토큰으로 우회된다(알 수 없는 토큰은
+   *  신규 생성으로 흡수되므로). 거절 모양은 두 경로가 동일해서
+   *  "그 토큰이 존재하는가" 를 묻는 오라클이 되지 않는다. */
+  mayCreate: () => boolean,
+): HelloOutcome | { error: "protocol_version" | "flooding" } {
   if (env.pv !== PROTOCOL_VERSION) return { error: "protocol_version" };
 
   const now = ctx.clock();
@@ -141,6 +150,7 @@ export function handleHello(
       ctx.q.touchPlayer.run(now, playerId);
     }
   } else {
+    if (!mayCreate()) return { error: "flooding" };
     playerId = randomUUID();
     name = sanitizeName(env.name, LIMITS.nameMaxLen) ?? defaultName(playerId);
     token = randomBytes(32).toString("hex");
@@ -212,12 +222,12 @@ export function handleHello(
     hp,
     maxHp,
     lastSeq: 0,
+    logPrefix: randomBytes(4).toString("hex"),
     logN: 1,
     chain: Promise.resolve(),
     linger: null,
     actionTokens: LIMITS.actionsPerSec,
     resyncTokens: LIMITS.resyncPerSec,
-    frameTokens: LIMITS.framesPerSec,
     lastRefill: now,
     awaitingPong: 0,
   };
@@ -247,12 +257,13 @@ export function sendConnectBurst(ctx: Ctx, s: Session, token: string, displaced:
 /* ------------------------------------------------------------------ */
 
 function refill(s: Session, now: number): void {
-  const dt = (now - s.lastRefill) / 1000;
-  if (dt <= 0) return;
+  // Date.now() 는 단조가 아니다 (NTP 보정, 수동 시계 변경). 음수 dt 를 그대로
+  // 쓰면 토큰이 음수가 되어 모든 클라이언트가 rate_limited 로 잠긴다.
+  const dt = Math.max(0, (now - s.lastRefill) / 1000);
   s.lastRefill = now;
+  if (dt === 0) return;
   s.actionTokens = Math.min(LIMITS.actionsPerSec, s.actionTokens + dt * LIMITS.actionsPerSec);
   s.resyncTokens = Math.min(LIMITS.resyncPerSec, s.resyncTokens + dt * LIMITS.resyncPerSec);
-  s.frameTokens = Math.min(LIMITS.framesPerSec, s.frameTokens + dt * LIMITS.framesPerSec);
 }
 
 const reject = (ctx: Ctx, s: Session, seq: number, reason: RejectReason): void => {
@@ -436,11 +447,18 @@ function doResync(ctx: Ctx, s: Session, seq: number): void {
 export function handleClose(ctx: Ctx, s: Session, epoch: number): void {
   // ★ 에폭 가드. 이 한 줄이 없으면 새로고침이 옛 소켓의 늦은 close 를 통해
   //   '새' 세션을 지워 상대 미니맵에서 영구히 사라진다.
+  if (ctx.isShuttingDown()) return; // db 는 이미 닫혔거나 닫히는 중이다
   if (s.connId !== epoch || !ctx.reg.isCurrent(s)) return;
   if (s.socket === null) return; // 이미 유예 중
 
   s.socket = null;
-  ctx.q.touchPlayer.run(ctx.clock(), s.playerId);
+  try {
+    ctx.q.touchPlayer.run(ctx.clock(), s.playerId);
+  } catch (err) {
+    // 여기서 던지면 ws 의 'close' 리스너 안이라 uncaughtException 이 되고,
+    // 그 전에 s.socket=null 을 해 둔 탓에 유예 타이머도 안 걸려 세션이 영구히 남는다.
+    console.error("[handleClose] touchPlayer", err);
+  }
 
   s.linger = setTimeout(() => {
     // 유예 만료. 다시 한 번 에폭을 확인한다 — 그 사이 입양됐을 수 있다.
@@ -449,4 +467,6 @@ export function handleClose(ctx: Ctx, s: Session, epoch: number): void {
     ctx.presence.announceDeparture(s);
     ctx.reg.remove(s.playerId);
   }, GRACE_MS);
+  // 유예 타이머가 프로세스를 붙잡아 두지 않게 한다.
+  s.linger.unref?.();
 }

@@ -21,6 +21,11 @@ import type {
   LogKind,
 } from "../../shared/protocol";
 
+/** 클라이언트 내부 이벤트. 와이어에는 존재하지 않지만 같은 리듀서를 지난다 —
+ *  UI 상태의 출처를 하나로 유지하기 위해서다. `t` 가 `__` 로 시작하므로
+ *  서버 메시지와 충돌할 수 없다. */
+export type LocalMsg = { t: "__conn"; status: UiState["status"]; notice: string | null };
+
 export interface LogLine {
   id: string;
   kind: LogKind;
@@ -59,8 +64,11 @@ const pushLog = (log: LogLine[], line: LogLine): LogLine[] => {
   return next.length > MAX_LOG ? next.slice(next.length - MAX_LOG) : next;
 };
 
-export function reduce(st: UiState, m: ServerMsg): UiState {
+export function reduce(st: UiState, m: ServerMsg | LocalMsg): UiState {
   switch (m.t) {
+    case "__conn":
+      return { ...st, status: m.status, notice: m.notice };
+
     case "welcome":
       return { ...st, status: "live", limits: m.limits, notice: null };
 

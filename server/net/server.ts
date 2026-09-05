@@ -31,6 +31,10 @@ interface Conn {
   epoch: number;
   frameTokens: number;
   lastRefill: number;
+  /** fatal() 이 호출됐다. WebSocket close 는 핸드셰이크라 즉시 닫히지 않으므로,
+   *  이 플래그가 없으면 계약을 어긴 클라이언트가 error 를 받은 뒤에도
+   *  ws 의 closeTimeout(30초) 동안 계속 액션을 보낼 수 있다. */
+  dead: boolean;
 }
 
 export function startServer(ctx: Ctx, port: number): WebSocketServer {
@@ -43,31 +47,39 @@ export function startServer(ctx: Ctx, port: number): WebSocketServer {
   const socketsPerIp = new Map<string, number>();
   const newCharsPerIp = new Map<string, number[]>();
 
-  function fatal(socket: WebSocket, code: ErrorCode, message: string, reconnect: boolean): void {
+  function fatal(conn: Conn, code: ErrorCode, message: string, reconnect: boolean): void {
+    conn.dead = true; // 이 뒤로 이 연결의 인바운드는 전부 버린다
     try {
-      socket.send(JSON.stringify({ t: "error", code, message, reconnect }));
+      conn.socket.send(JSON.stringify({ t: "error", code, message, reconnect }));
     } catch {
       /* 이미 닫힘 */
     }
-    socket.close();
+    conn.socket.close();
+    // 상대가 close 핸드셰이크를 무시하면 ws 는 30초를 기다린다. 계약을 어긴
+    // 연결에 그만큼 자원을 내줄 이유가 없다.
+    setTimeout(() => conn.socket.terminate(), 1000).unref?.();
   }
 
-  function ipBudgetOk(ip: string): boolean {
+  /** '실제로 새 캐릭터를 만드는' 순간 호출된다. 통과하면 그 자리에서 예산을 쓴다.
+   *  "token 이 null 인가" 에 물리면 형식만 맞는 아무 64자리 hex 토큰으로 우회된다 —
+   *  알 수 없는 토큰은 (오라클이 되지 않으려고) 신규 생성으로 흡수되기 때문이다. */
+  function mayCreateCharacter(ip: string): boolean {
     const now = ctx.clock();
     const hits = (newCharsPerIp.get(ip) ?? []).filter((t) => now - t < NEW_CHAR_WINDOW_MS);
+    if (hits.length >= NEW_CHARS_PER_IP) {
+      if (hits.length) newCharsPerIp.set(ip, hits);
+      else newCharsPerIp.delete(ip);
+      return false;
+    }
+    hits.push(now);
     newCharsPerIp.set(ip, hits);
-    return hits.length < NEW_CHARS_PER_IP;
+    return true;
   }
 
   wss.on("connection", (socket, req) => {
     const ip = req.socket.remoteAddress ?? "unknown";
     const open = (socketsPerIp.get(ip) ?? 0) + 1;
     socketsPerIp.set(ip, open);
-    if (open > MAX_SOCKETS_PER_IP) {
-      socketsPerIp.set(ip, open - 1);
-      fatal(socket, "flooding", "동시 연결이 너무 많습니다.", true);
-      return;
-    }
 
     const conn: Conn = {
       socket,
@@ -76,17 +88,26 @@ export function startServer(ctx: Ctx, port: number): WebSocketServer {
       epoch: 0,
       frameTokens: LIMITS.framesPerSec,
       lastRefill: ctx.clock(),
+      dead: false,
     };
 
+    if (open > MAX_SOCKETS_PER_IP) {
+      fatal(conn, "flooding", "동시 연결이 너무 많습니다.", true);
+      return;
+    }
+
     socket.on("message", (data) => {
+      if (conn.dead) return; // error 를 이미 보냈다. 소켓이 실제로 닫힐 때까지 버린다.
       const now = ctx.clock();
       // 프레임 예산: hello/pong 을 포함한 '모든' 인바운드 프레임이 여기를 지난다.
       // 액션 버킷만 있으면 hello 폭주나 pong 폭주를 막지 못한다.
-      const dt = (now - conn.lastRefill) / 1000;
+      // Date.now() 는 단조가 아니다. 음수 dt 를 그대로 쓰면 토큰이 음수가 되어
+      // 시계가 뒤로 튄 순간 모든 클라이언트가 flooding 으로 끊긴다.
+      const dt = Math.max(0, (now - conn.lastRefill) / 1000);
       conn.lastRefill = now;
       conn.frameTokens = Math.min(LIMITS.framesPerSec, conn.frameTokens + dt * LIMITS.framesPerSec);
       if (conn.frameTokens < 1) {
-        fatal(socket, "flooding", "메시지가 너무 빠릅니다.", true);
+        fatal(conn, "flooding", "메시지가 너무 빠릅니다.", true);
         return;
       }
       conn.frameTokens -= 1;
@@ -95,36 +116,33 @@ export function startServer(ctx: Ctx, port: number): WebSocketServer {
       try {
         parsed = JSON.parse(String(data));
       } catch {
-        fatal(socket, "bad_message", "JSON 파싱 실패", true);
+        fatal(conn, "bad_message", "JSON 파싱 실패", true);
         return;
       }
 
       // ── 1단계 파싱: 봉투. 여기서 실패하는 프레임만이 error 자격이 있다. ──
       const env = zEnvelope.safeParse(parsed);
       if (!env.success) {
-        fatal(socket, "bad_message", "알 수 없는 메시지 형식", true);
+        fatal(conn, "bad_message", "알 수 없는 메시지 형식", true);
         return;
       }
 
       if (env.data.t === "hello") {
         if (conn.session) {
           // 연결당 정확히 한 번. 두 번째 hello 는 계약 위반이다.
-          fatal(socket, "bad_message", "hello 는 연결당 한 번만 보냅니다.", false);
+          fatal(conn, "bad_message", "hello 는 연결당 한 번만 보냅니다.", false);
           return;
         }
-        if (!env.data.token && !ipBudgetOk(ip)) {
-          fatal(socket, "flooding", "새 캐릭터를 너무 자주 만들고 있습니다.", false);
-          return;
-        }
-        const out = handleHello(ctx, socket, env.data);
+        const out = handleHello(ctx, socket, env.data, () => mayCreateCharacter(ip));
         if ("error" in out) {
-          fatal(socket, "protocol_version", "클라이언트가 낡았습니다. 새로고침하세요.", false);
+          if (out.error === "flooding") {
+            // 거절 모양이 token:null 경로와 '동일' 해야 한다 — 다르면
+            // "그 토큰이 존재하는가" 를 묻는 오라클이 된다.
+            fatal(conn, "flooding", "새 캐릭터를 너무 자주 만들고 있습니다.", false);
+          } else {
+            fatal(conn, "protocol_version", "클라이언트가 낡았습니다. 새로고침하세요.", false);
+          }
           return;
-        }
-        if (!env.data.token) {
-          const hits = newCharsPerIp.get(ip);
-          if (hits) hits.push(now);
-          else newCharsPerIp.set(ip, [now]);
         }
         conn.session = out.session;
         conn.epoch = out.session.connId;
@@ -139,7 +157,7 @@ export function startServer(ctx: Ctx, port: number): WebSocketServer {
         // hello 전에 온 action/pong. 액션이면 seq 가 있으므로 ack 로 답하는 것이
         // 원칙이지만, 세션이 없으면 보낼 대상 Session 이 없다. 연결을 끊는 쪽이
         // 정직하고, 클라이언트는 재접속하면 된다 (pending 은 연결과 함께 사라진다).
-        fatal(socket, "bad_message", "hello 를 먼저 보내야 합니다.", true);
+        fatal(conn, "bad_message", "hello 를 먼저 보내야 합니다.", true);
         return;
       }
 
@@ -154,7 +172,7 @@ export function startServer(ctx: Ctx, port: number): WebSocketServer {
       // ── seq 단조 검사 ────────────────────────────────────────────────
       if (env.data.seq <= conn.session.lastSeq) {
         // 역행/중복. 연결을 끊으므로 pending 이 desync 를 남길 수 없다.
-        fatal(socket, "bad_seq", "seq 가 역행했습니다.", true);
+        fatal(conn, "bad_seq", "seq 가 역행했습니다.", true);
         return;
       }
       conn.session.lastSeq = env.data.seq;
@@ -164,7 +182,10 @@ export function startServer(ctx: Ctx, port: number): WebSocketServer {
     });
 
     socket.on("close", () => {
-      socketsPerIp.set(ip, Math.max(0, (socketsPerIp.get(ip) ?? 1) - 1));
+      const left = Math.max(0, (socketsPerIp.get(ip) ?? 1) - 1);
+      // 0이면 키를 지운다. 안 지우면 IP 마다 항목이 영원히 쌓인다.
+      if (left) socketsPerIp.set(ip, left);
+      else socketsPerIp.delete(ip);
       if (conn.session) handleClose(ctx, conn.session, conn.epoch);
     });
 
@@ -176,6 +197,13 @@ export function startServer(ctx: Ctx, port: number): WebSocketServer {
   /* 하트비트. 노트북 덮개를 닫은 소켓은 close 를 발화하지 않아,
      이게 없으면 상대 미니맵에 유령 점이 영원히 남는다. */
   const beat = setInterval(() => {
+    // 창이 지난 IP 항목을 청소한다 (무한 성장 방지).
+    const cutoff = ctx.clock() - NEW_CHAR_WINDOW_MS;
+    for (const [ip, hits] of newCharsPerIp) {
+      const live = hits.filter((t) => t >= cutoff);
+      if (live.length) newCharsPerIp.set(ip, live);
+      else newCharsPerIp.delete(ip);
+    }
     let nonce = 0;
     for (const s of ctx.reg.all()) {
       if (!s.socket) continue; // 유예 중

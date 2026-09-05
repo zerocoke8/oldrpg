@@ -340,9 +340,89 @@ async function main() {
   check("플래그를 선언하지 않은 방도 같은 형식으로 계산된다 (특례 없음)",
     noFlagRoom.split(".").length === 3);
 
+  // ── ⑫ 캐릭터 생성 예산 (형식만 맞는 토큰으로 우회되지 않아야 한다) ───
+  section("⑫ 캐릭터 생성 예산 — 가짜 토큰으로 우회 불가");
+  // 알 수 없는 토큰은 (오라클이 되지 않으려고) '신규 생성' 으로 흡수된다.
+  // 따라서 예산을 "token 이 null 인가" 에 물리면 형식만 맞는 아무 64자리 hex
+  // 로 무제한 players 행을 만들 수 있다. 예산은 '행을 만드는가' 에 물려야 한다.
+  const bogus = (n: number) => String(n).padStart(64, "0");
+  const tryHello = (token: string | null) =>
+    new Promise<{ ok: boolean; code?: string }>((resolve) => {
+      const w = new WebSocket(`ws://127.0.0.1:${PORT}`);
+      let settled = false;
+      const done = (r: { ok: boolean; code?: string }) => {
+        if (settled) return;
+        settled = true;
+        resolve(r);
+        try {
+          w.close();
+        } catch {
+          /* 이미 닫힘 */
+        }
+      };
+      w.on("open", () =>
+        w.send(JSON.stringify({ t: "hello", pv: PROTOCOL_VERSION, token, name: null })),
+      );
+      w.on("message", (d) => {
+        const m = JSON.parse(String(d)) as ServerMsg;
+        if (m.t === "error") done({ ok: false, code: m.code });
+        if (m.t === "snapshot") done({ ok: true });
+      });
+      w.on("close", () => done({ ok: false, code: "closed" }));
+      setTimeout(() => done({ ok: false, code: "timeout" }), 3000);
+    });
+
+  // 지금까지 이 IP 로 만든 신규 캐릭터: alice, bob, carol = 3. 예산은 5.
+  const r4 = await tryHello(bogus(4));
+  const r5 = await tryHello(bogus(5));
+  check("가짜 토큰도 '신규 생성' 으로 흡수된다 (토큰 존재 오라클 없음)", r4.ok && r5.ok);
+  const r6 = await tryHello(bogus(6));
+  check("예산을 넘기면 가짜 토큰도 거절된다 (우회 불가)",
+    !r6.ok && r6.code === "flooding", JSON.stringify(r6));
+  const r7 = await tryHello(null);
+  check("token:null 경로의 거절 모양이 동일하다 (오라클 아님)",
+    !r7.ok && r7.code === "flooding", JSON.stringify(r7));
+
+  // ── ⑬ 종료 경로 (적대적 리뷰가 재현시킨 결함들의 회귀 테스트) ───────
+  section("⑬ 종료");
+  // (a) hello 를 보내지 않은 소켓이 있어도 종료가 멈추지 않아야 한다.
+  //     reg.all() 만 순회하면 이런 소켓은 Session 이 없어 영원히 안 닫히고,
+  //     업그레이드된 소켓이 http 서버의 연결 수에 잡혀 wss.close() 콜백이
+  //     영영 호출되지 않는다.
+  const silent = new WebSocket(`ws://127.0.0.1:${PORT}`);
+  await new Promise<void>((res, rej) => {
+    silent.once("open", () => res());
+    silent.once("error", rej);
+  });
+  // (b) 살아 있는 세션이 있는 채로 닫아도 uncaughtException 이 나면 안 된다.
+  //     (db.close() 뒤에 도착하는 소켓 close 이벤트가 닫힌 핸들을 만진다)
+  // 기존 토큰으로 붙는다 — ⑫ 가 신규 생성 예산을 이미 다 썼고,
+  // 여기서 확인하려는 것은 '살아 있는 세션을 둔 채로 닫기' 이지 생성이 아니다.
+  const lively = new Client("lively");
+  await lively.connect(bobToken);
+
+  let uncaught: unknown = null;
+  const onUncaught = (e: unknown) => (uncaught = e);
+  process.once("uncaughtException", onUncaught);
+
+  const closeRace = await Promise.race([
+    server.close().then(() => "closed" as const),
+    sleep(5000).then(() => "hung" as const),
+  ]);
+  check("hello 를 안 보낸 소켓이 있어도 종료가 완료된다", closeRace === "closed", String(closeRace));
+
+  await sleep(300); // 소켓 close 이벤트가 도착할 시간
+  process.removeListener("uncaughtException", onUncaught);
+  check("살아 있는 세션을 두고 닫아도 uncaughtException 이 없다", uncaught === null,
+    uncaught instanceof Error ? uncaught.message : String(uncaught));
+
   // ── 정리 ────────────────────────────────────────────────────────────
   alice.close();
-  await server.close();
+  try {
+    silent.terminate();
+  } catch {
+    /* 이미 닫힘 */
+  }
   rmSync(DB, { force: true });
   rmSync(`${DB}-wal`, { force: true });
   rmSync(`${DB}-shm`, { force: true });

@@ -38,12 +38,21 @@ export function Status(props: {
           {self.hp}/{self.maxHp}
         </span>
       </div>
-      <div style={{ fontSize: 11, color: C.dim, marginTop: 8 }}>
-        {room?.occupants.length
-          ? `이 방에 ${room.occupants.map((o) => o.name).join(", ")}`
-          : "이 방에는 당신뿐이다"}
-        {" · "}
-        <span style={{ color: C.dim }}>탐색한 방 {self.seen.length}</span>
+      {/* ★ HUD 크롬이다. 프로토콜 불변식 (1)의 명시적 예외 —
+          '라벨 + 데이터' 이지 서사 문장이 아니다. "○○ 님이 들어왔다" 같은
+          문장은 여기서 만들지 않고 서버의 log 로만 온다. 그래서 2단계에
+          문구가 바뀌어도 이 컴포넌트는 그대로다. */}
+      <div style={{ fontSize: 11, color: C.dim, marginTop: 8, display: "flex", gap: 10 }}>
+        <span>
+          동행 {room?.occupants.length ?? 0}
+          {room?.occupants.length ? (
+            <span style={{ color: C.other }}>
+              {" "}
+              {room.occupants.map((o) => o.name).join(", ")}
+            </span>
+          ) : null}
+        </span>
+        <span>탐색한 방 {self.seen.length}</span>
       </div>
     </div>
   );

@@ -29,7 +29,14 @@ export default function App() {
         dispatch(m);
         if (m.t === "ack" || m.t === "snapshot") bump((n) => n + 1);
       },
-      onClose: () => bump((n) => n + 1),
+      onClose: (willRetry) =>
+        // 이걸 버리면 화면은 계속 "연결됨" 이라고 말하면서 플레이어는
+        // 아무에게도 보이지 않는 유령 점을 걷게 된다.
+        dispatch({
+          t: "__conn",
+          status: willRetry ? "connecting" : "closed",
+          notice: willRetry ? "연결이 끊겼다. 다시 잇는 중…" : "연결이 끊겼다.",
+        }),
     });
     sock.current = s;
     return () => s.close();
@@ -41,13 +48,18 @@ export default function App() {
   const act = useCallback(
     (a: Action) => {
       const seq = recon.next();
+      const sent = sock.current?.send({ t: "action", seq, action: a }) ?? false;
+      // ★ 나가지 않은 프레임은 예측하지 않는다. 소켓이 끊긴 동안 방향키를
+      //   누르면 서버가 영영 볼 수 없는 이동이 pending 에 쌓여, 재접속 전까지
+      //   화면의 나만 엉뚱한 칸을 걷는다. (seq 에 구멍이 나는 것은 무해하다 —
+      //   서버는 '엄격 증가' 만 요구한다.)
+      if (!sent) return;
       if (a.type === "move") {
         // 낙관적 예측. 서버가 거절하면 ack.pos 가 확정 위치를 되돌려주고,
         // view() 가 순수 함수라 롤백 코드 없이 화면이 맞춰진다.
         recon.predictMove(seq, a.dir, st.limits?.maxPending ?? 8);
         bump((n) => n + 1);
       }
-      sock.current?.send({ t: "action", seq, action: a });
     },
     [recon, st.limits],
   );
@@ -55,6 +67,10 @@ export default function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!HANDLED_KEYS.includes(e.key)) return;
+      // 버튼에 포커스가 있을 때 Enter/Space 를 가로채면 D패드를 키보드로
+      // 누를 수 없게 된다 (접근성). 그 경우는 브라우저 기본 동작에 맡긴다.
+      const el = e.target;
+      if (el instanceof HTMLElement && el.closest("button, input, textarea, select, a[href]")) return;
       e.preventDefault();
       const a = actionForKey(e.key);
       if (a) act(a);

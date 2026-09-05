@@ -47,16 +47,20 @@ export interface Session {
    *  재접속한 클라이언트가 seq 1을 보내고 전부 거절당해, 미니맵에는 살아
    *  있는데 움직일 수 없는 상태가 된다. */
   lastSeq: number;
-  /** 수신자별 로그 id 카운터. 전역 단조면 남의 활동량이 샌다. */
+  /** 로그 id = `${logPrefix}:${logN++}`.
+   *  접두사가 '연결마다 무작위' 인 이유 둘:
+   *   - 전역 단조 카운터(connId)를 쓰면 남의 접속 활동량이 id 로 샌다
+   *   - 서버를 재시작하면 connId 가 1부터 다시 시작해, 재접속한 클라이언트의
+   *     로그 리스트에서 옛 줄과 새 줄의 id 가 충돌한다 (React key 중복) */
+  logPrefix: string;
   logN: number;
   /** Phase B 직렬화. 세션마다 하나라, 방 A 의 묘사가 이미 방 B 로 간
    *  플레이어에게 도착하는 인터리브가 구조적으로 불가능하다. */
   chain: Promise<void>;
   linger: NodeJS.Timeout | null;
-  // 레이트리밋 상태 (토큰 버킷)
+  // 레이트리밋 상태 (토큰 버킷). 프레임 버킷은 연결 단위라 net/server.ts 가 따로 든다.
   actionTokens: number;
   resyncTokens: number;
-  frameTokens: number;
   lastRefill: number;
   awaitingPong: number;
 }

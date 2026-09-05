@@ -33,7 +33,9 @@ const WS_URL =
   `ws://${location.hostname}:8787`;
 
 export interface Socket {
-  send(msg: ClientMsg): void;
+  /** 프레임이 실제로 나갔으면 true. 소켓이 닫혀 있으면 false —
+   *  호출자는 이때 낙관적 예측을 하면 안 된다 (서버가 볼 수 없는 이동이다). */
+  send(msg: ClientMsg): boolean;
   close(): void;
 }
 
@@ -99,7 +101,9 @@ export function connect(handlers: {
 
   return {
     send(msg) {
-      if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+      if (ws?.readyState !== WebSocket.OPEN) return false;
+      ws.send(JSON.stringify(msg));
+      return true;
     },
     close() {
       closedByUs = true;
