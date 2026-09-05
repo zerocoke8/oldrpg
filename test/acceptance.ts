@@ -1,0 +1,357 @@
+/* 1단계 인수 테스트. 진짜 서버, 진짜 WebSocket 두 개, 진짜 SQLite.
+ *
+ * 이번 단계의 목표를 글자 그대로 검증한다:
+ *   "브라우저 두 개를 띄웠을 때 서로의 위치가 미니맵에 보이고,
+ *    같은 방에 있으면 'OO가 들어왔다' 메시지가 뜨는 것"
+ *
+ * 그리고 설계에서 '가장 틀리기 쉽다' 고 지목된 것들:
+ *   - 새로고침이 조용한가 (유예)
+ *   - 새로고침이 상대 미니맵에서 나를 지우지 않는가 (connId 에폭 가드)
+ *   - 벽 부딪힘이 error 가 아니라 ack 인가
+ *   - 거절된 액션도 pending 을 비우는가 (ack 가 항상 pos 를 싣는가)
+ *   - state_hash 캐시가 진짜로 도는가 (조회 -> 생성 -> 기록) */
+
+import { rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import WebSocket from "ws";
+import { boot } from "../server/index";
+import { PROTOCOL_VERSION, type ServerMsg } from "../shared/protocol";
+import { GRACE_MS } from "../server/net/session";
+import type { Dir } from "../shared/ids";
+
+const PORT = 8899;
+const DB = join(tmpdir(), `mud-acceptance-${process.pid}.db`);
+
+let failures = 0;
+let checks = 0;
+function check(label: string, cond: boolean, detail = ""): void {
+  checks++;
+  if (cond) {
+    console.log(`  ok   ${label}`);
+  } else {
+    failures++;
+    console.log(`  FAIL ${label}${detail ? `\n       ${detail}` : ""}`);
+  }
+}
+const section = (s: string) => console.log(`\n${s}`);
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** 최소한의 테스트 클라이언트. 클라이언트 재조정 로직과 '같은' 규칙을 쓴다. */
+class Client {
+  ws!: WebSocket;
+  inbox: ServerMsg[] = [];
+  token: string | null = null;
+  seq = 0;
+  constructor(readonly label: string) {}
+
+  async connect(token: string | null = this.token): Promise<void> {
+    this.ws = new WebSocket(`ws://127.0.0.1:${PORT}`);
+    await new Promise<void>((res, rej) => {
+      this.ws.once("open", () => res());
+      this.ws.once("error", rej);
+    });
+    this.ws.on("message", (d) => {
+      const m = JSON.parse(String(d)) as ServerMsg;
+      this.inbox.push(m);
+      if (m.t === "welcome") this.token = m.token;
+      if (m.t === "ping") this.ws.send(JSON.stringify({ t: "pong", nonce: m.nonce }));
+    });
+    this.seq = 0;
+    this.ws.send(JSON.stringify({ t: "hello", pv: PROTOCOL_VERSION, token, name: null }));
+    await this.until((m) => m.t === "snapshot");
+  }
+
+  send(action: unknown): number {
+    const seq = ++this.seq;
+    this.ws.send(JSON.stringify({ t: "action", seq, action }));
+    return seq;
+  }
+  move(dir: Dir): number {
+    return this.send({ type: "move", dir });
+  }
+
+  /** 특정 메시지가 올 때까지 기다린다. */
+  async until<T extends ServerMsg>(pred: (m: ServerMsg) => boolean, ms = 2000): Promise<T> {
+    const deadline = Date.now() + ms;
+    for (;;) {
+      const hit = this.inbox.find(pred);
+      if (hit) return hit as T;
+      if (Date.now() > deadline) throw new Error(`${this.label}: timeout waiting; inbox=${JSON.stringify(this.inbox.map((m) => m.t))}`);
+      await sleep(5);
+    }
+  }
+  /** ack 를 기다린다 — 성공이든 거절이든. */
+  ack(seq: number) {
+    return this.until((m) => m.t === "ack" && m.seq === seq);
+  }
+  of<T extends ServerMsg["t"]>(t: T): Extract<ServerMsg, { t: T }>[] {
+    return this.inbox.filter((m) => m.t === t) as Extract<ServerMsg, { t: T }>[];
+  }
+  logs(kind?: string): Extract<ServerMsg, { t: "log" }>[] {
+    return this.of("log").filter((m) => !kind || m.kind === kind);
+  }
+  clear(): void {
+    this.inbox = [];
+  }
+  close(): void {
+    this.ws.close();
+  }
+}
+
+async function main() {
+  rmSync(DB, { force: true });
+  rmSync(`${DB}-wal`, { force: true });
+  rmSync(`${DB}-shm`, { force: true });
+  const server = boot(DB, PORT);
+
+  const alice = new Client("alice");
+  const bob = new Client("bob");
+
+  // ── ① 접속 ──────────────────────────────────────────────────────────
+  section("① 두 클라이언트 접속 (스폰 b1:3,3)");
+  await alice.connect(null);
+  const aSnap = await alice.until<Extract<ServerMsg, { t: "snapshot" }>>((m) => m.t === "snapshot");
+  check("Alice 스냅샷이 스폰 좌표", aSnap.self.pos.x === 3 && aSnap.self.pos.y === 3);
+  check("Alice 혼자이므로 presence 비어 있음", aSnap.presence.length === 0);
+  check("맵 전체(7x7)를 받았다", aSnap.region.tiles.length === 7 && aSnap.region.width === 7);
+  check("Phase B 방 묘사가 도착했다 (씨앗 기반)",
+    alice.logs("narr").some((l) => l.text.includes("석조 교차로")),
+    JSON.stringify(alice.logs("narr").map((l) => l.text)));
+  check("방 묘사에 source='fallback' 이 실려 있다",
+    alice.logs("narr")[0]?.source === "fallback");
+
+  alice.clear();
+  await bob.connect(null);
+
+  // ── ② 인수 조건 2: "OO가 들어왔다" ──────────────────────────────────
+  section("② 같은 방 입장 -> Alice 화면에 presence 메시지");
+  const enter = await alice.until<Extract<ServerMsg, { t: "room.enter" }>>((m) => m.t === "room.enter");
+  const bobName = enter.player.name;
+  check("Alice 가 room.enter 를 받았다", enter.player.id.length > 0);
+  check(`Alice 로그에 "${bobName} 님이 ... 나타났다"`,
+    alice.logs("presence").some((l) => l.text.includes(bobName) && l.text.includes("나타났다")),
+    JSON.stringify(alice.logs("presence").map((l) => l.text)));
+
+  // ── ①' 인수 조건 1: 미니맵에 상대가 보인다 ──────────────────────────
+  section("②' 미니맵 presence");
+  const join = await alice.until<Extract<ServerMsg, { t: "presence.join" }>>((m) => m.t === "presence.join");
+  check("Alice 가 Bob 의 presence.join 을 좌표와 함께 받았다",
+    join.pos.x === 3 && join.pos.y === 3);
+  const bSnap = bob.of("snapshot")[0]!;
+  check("Bob 의 스냅샷에 Alice 가 이미 들어 있다 (join 없이도)",
+    bSnap.presence.length === 1 && bSnap.presence[0]!.pos.x === 3);
+  check("Bob 의 room.occupants 와 snapshot.presence 가 일치한다",
+    bSnap.room.occupants.length === bSnap.presence.length);
+  check("Bob 이 로스터 줄을 Phase A 에서 받았다",
+    bob.logs("presence").some((l) => l.text.includes("서 있다")));
+
+  // ── ③ 벽 (거절 경로) ────────────────────────────────────────────────
+  section("③ 벽 부딪힘 — error 가 아니라 ack");
+  alice.clear();
+  bob.clear();
+  const wallSeq = bob.move("north"); // (3,2) 는 벽
+  const wallAck = await bob.ack(wallSeq);
+  check("ack{ok:false, reason:'blocked'}",
+    wallAck.t === "ack" && wallAck.ok === false && wallAck.reason === "blocked");
+  check("거절인데도 ack 가 권위 pos 를 싣는다 (롤백 분기 불필요)",
+    wallAck.t === "ack" && wallAck.pos.x === 3 && wallAck.pos.y === 3);
+  check("error 는 오지 않았다", bob.of("error").length === 0);
+  check("벽 문장은 log{sys} 로 왔다",
+    bob.logs("sys").some((l) => l.text.includes("벽")));
+  await sleep(60);
+  check("벽 부딪힘은 남에게 아무것도 보내지 않았다", alice.inbox.length === 0,
+    JSON.stringify(alice.inbox.map((m) => m.t)));
+
+  // ── ④ 이동: 미니맵 갱신 + 퇴장 ──────────────────────────────────────
+  section("④ Bob 이 서쪽으로 이동 (3,3) -> (2,3)");
+  alice.clear();
+  bob.clear();
+  const wSeq = bob.move("west");
+  const wAck = await bob.ack(wSeq);
+  check("ack{ok:true} 에 새 좌표", wAck.t === "ack" && wAck.ok && wAck.pos.x === 2);
+  check("self.patch 로 안개(seen)가 갱신됐다",
+    bob.of("self.patch").some((p) => p.seen?.includes("b1:2,3")));
+  check("Bob 이 room.describe 를 받았다 (프로즈 없음)",
+    bob.of("room.describe")[0]?.room.roomId === "b1:2,3");
+
+  const move = await alice.until<Extract<ServerMsg, { t: "presence.move" }>>((m) => m.t === "presence.move");
+  check("Alice 미니맵의 Bob 점이 (2,3) 으로 옮겨졌다", move.pos.x === 2 && move.pos.y === 3);
+  check("Alice 가 room.leave 를 받았다 (toDir=west)",
+    alice.of("room.leave")[0]?.toDir === "west");
+  check("Alice 로그: '서쪽으로 사라졌다'",
+    alice.logs("presence").some((l) => l.text.includes("서쪽") && l.text.includes("사라졌다")));
+
+  const aIdx = alice.inbox.findIndex((m) => m.t === "presence.move");
+  const lIdx = alice.inbox.findIndex((m) => m.t === "room.leave");
+  check("순서 규칙: presence.move 가 room.leave 보다 먼저",
+    aIdx >= 0 && lIdx >= 0 && aIdx < lIdx, `presence.move@${aIdx} room.leave@${lIdx}`);
+
+  await bob.until((m) => m.t === "log" && m.kind === "narr" && m.roomId === "b1:2,3");
+  check("Phase B: 새 방의 묘사가 뒤이어 도착했다",
+    bob.logs("narr").some((l) => l.text.includes("물방울")));
+
+  // ── ⑤ 되돌아오기: "OO가 들어왔다" (방향 포함) ───────────────────────
+  section("⑤ Bob 이 되돌아옴 -> Alice 화면에 '서쪽에서 들어왔다'");
+  alice.clear();
+  bob.clear();
+  const eSeq = bob.move("east");
+  await bob.ack(eSeq);
+  const reEnter = await alice.until<Extract<ServerMsg, { t: "room.enter" }>>((m) => m.t === "room.enter");
+  check("room.enter 의 fromDir 이 'west' (이동 방향의 반대)", reEnter.fromDir === "west");
+  check(`Alice 로그: "${bobName} 님이 서쪽에서 들어왔다."`,
+    alice.logs("presence").some((l) => l.text === `${bobName} 님이 서쪽에서 들어왔다.`),
+    JSON.stringify(alice.logs("presence").map((l) => l.text)));
+  check("Bob 은 다시 Alice 의 로스터 줄을 받았다",
+    bob.logs("presence").some((l) => l.text.includes("서 있다")));
+
+  // ── ⑥ say: 방 단위 팬아웃 ───────────────────────────────────────────
+  section("⑥ say — 방 단위 팬아웃과 speaker 분리");
+  alice.clear();
+  bob.clear();
+  const sSeq = bob.send({ type: "say", text: "여기 뭐 있냐" });
+  await bob.ack(sSeq);
+  const heard = await alice.until<Extract<ServerMsg, { t: "log" }>>((m) => m.t === "log" && m.kind === "say");
+  check("Alice 가 같은 방에서 발화를 들었다", heard.text === "여기 뭐 있냐");
+  check("화자가 구조화 필드로 분리되어 있다 (문장 합성 아님)",
+    heard.speaker?.id === enter.player.id);
+  check("발화자 자신도 받는다", bob.logs("say").length === 1);
+
+  // ── ⑦ 새로고침이 조용한가 (유예) ────────────────────────────────────
+  section("⑦ Bob 새로고침 — 유예 안에서는 아무 일도 없어야 한다");
+  alice.clear();
+  const bobToken = bob.token;
+  bob.close();
+  await sleep(300); // 유예(8초)보다 훨씬 짧게
+  check("Alice 에게 presence.leave 가 오지 않았다", alice.of("presence.leave").length === 0);
+  check("Alice 에게 room.leave 가 오지 않았다", alice.of("room.leave").length === 0);
+  check("Alice 로그에 '사라졌다' 가 없다",
+    !alice.logs("presence").some((l) => l.text.includes("사라졌다")),
+    JSON.stringify(alice.logs("presence").map((l) => l.text)));
+
+  const bob2 = new Client("bob2");
+  await bob2.connect(bobToken);
+  await sleep(200);
+  check("Bob 이 같은 캐릭터로 돌아왔다", bob2.of("welcome")[0]?.self.id === enter.player.id);
+  check("돌아온 좌표가 (3,3) 로 보존됐다",
+    bob2.of("snapshot")[0]?.self.pos.x === 3 && bob2.of("snapshot")[0]?.self.pos.y === 3);
+  check("Alice 에게 재입장 알림도 오지 않았다 (완전히 조용하다)",
+    alice.of("presence.join").length === 0 && alice.of("room.enter").length === 0,
+    JSON.stringify(alice.inbox.map((m) => m.t)));
+
+  // ★ 에폭 가드: 옛 소켓의 늦은 close 가 '새' 세션을 지우면 안 된다
+  section("⑦' connId 에폭 가드 — 새로고침이 나를 미니맵에서 지우지 않는가");
+  await sleep(GRACE_MS + 500); // 옛 소켓의 유예가 만료될 시간을 지나서
+  check("유예 만료 후에도 Alice 에게 leave 가 오지 않았다 (입양됐으므로)",
+    alice.of("presence.leave").length === 0,
+    JSON.stringify(alice.inbox.map((m) => m.t)));
+  alice.clear();
+  const stillSeq = bob2.move("west");
+  await bob2.ack(stillSeq);
+  const stillMove = await alice.until<Extract<ServerMsg, { t: "presence.move" }>>((m) => m.t === "presence.move");
+  check("새로고침한 Bob 이 여전히 Alice 미니맵에서 움직인다", stillMove.pos.x === 2);
+
+  // ── ⑧ 두 번째 탭 = 같은 토큰 -> 교체 ────────────────────────────────
+  section("⑧ 같은 토큰의 두 번째 소켓 — 새 소켓이 이긴다");
+  const bob3 = new Client("bob3");
+  await bob3.connect(bobToken);
+  const replaced = await bob2.until<Extract<ServerMsg, { t: "error" }>>((m) => m.t === "error");
+  check("옛 소켓이 error{replaced} 를 받았다", replaced.code === "replaced");
+  check("reconnect:false (무한 강퇴 핑퐁 방지)", replaced.reconnect === false);
+
+  // ── ⑨ 유예 만료 -> 진짜 퇴장 ────────────────────────────────────────
+  // 두 계열이 '다른 수신자 집합' 을 갖는다는 것을 여기서 실증한다:
+  //   presence.* -> 나를 볼 수 있는 모두 (미니맵)
+  //   room.*     -> 그 방의 재실자만   (서사)
+  section("⑨-a 다른 방에서 접속 종료 — 미니맵 점만 사라지고 서사는 없다");
+  alice.clear();
+  bob3.close(); // bob3 는 (2,3), alice 는 (3,3)
+  await sleep(GRACE_MS + 800);
+  check("유예가 지나자 presence.leave 가 왔다", alice.of("presence.leave").length === 1);
+  check("다른 방이므로 room.leave 는 오지 않는다 (두 계열의 수신자가 다르다)",
+    alice.of("room.leave").length === 0);
+  check("따라서 서사 로그도 없다",
+    !alice.logs("presence").some((l) => l.text.includes("사라졌다")),
+    JSON.stringify(alice.logs("presence").map((l) => l.text)));
+
+  section("⑨-b 같은 방에서 접속 종료 — presence + room + 로그 전부");
+  const carol = new Client("carol");
+  await carol.connect(null); // 스폰 = (3,3) = Alice 와 같은 방
+  const carolName = (await alice.until<Extract<ServerMsg, { t: "room.enter" }>>(
+    (m) => m.t === "room.enter",
+  )).player.name;
+  alice.clear();
+  carol.close();
+  await sleep(GRACE_MS + 800);
+  check("presence.leave 가 왔다", alice.of("presence.leave").length === 1);
+  check("같은 방이므로 room.leave 도 왔다 (toDir=null)",
+    alice.of("room.leave")[0]?.toDir === null);
+  check(`로그: "${carolName} 님이 어둠 속으로 사라졌다."`,
+    alice.logs("presence").some((l) => l.text === `${carolName} 님이 어둠 속으로 사라졌다.`),
+    JSON.stringify(alice.logs("presence").map((l) => l.text)));
+
+  // ── ⑩ 프로토콜 방어 ─────────────────────────────────────────────────
+  section("⑩ 적대적 클라이언트");
+  alice.clear();
+  const before = alice.of("ack").length;
+  alice.ws.send(JSON.stringify({ t: "action", seq: ++alice.seq, action: { type: "move", dir: "__proto__" } }));
+  const badDir = await alice.until<Extract<ServerMsg, { t: "ack" }>>((m) => m.t === "ack" && alice.of("ack").length > before);
+  check("dir:'__proto__' 가 ack{bad_args} 로 거절됐다 (error 아님)",
+    badDir.ok === false && badDir.reason === "bad_args");
+  check("거절도 pos 를 실어 pending 을 비운다", badDir.pos.x === 3);
+
+  const unkSeq = alice.send({ type: "attack", targetId: "x" });
+  const unk = await alice.ack(unkSeq);
+  check("모르는 액션은 ack{unknown_action} (크래시도 error 도 아님)",
+    unk.t === "ack" && unk.reason === "unknown_action");
+
+  const longSeq = alice.send({ type: "say", text: "가".repeat(500) });
+  const long = await alice.ack(longSeq);
+  check("너무 긴 say 는 자르지 않고 ack{too_long} 으로 거절",
+    long.t === "ack" && long.reason === "too_long");
+
+  // 좌표를 '주장' 하려는 시도 — 액션 타입에 좌표 필드가 아예 없다
+  const spoofSeq = alice.send({ type: "move", dir: "north", x: 99, y: 99 });
+  const spoof = await alice.ack(spoofSeq);
+  check("좌표 필드를 끼워 넣은 move 는 strict 스키마가 거절",
+    spoof.t === "ack" && spoof.reason === "bad_args");
+
+  // seq 역행 -> 치명적, 연결 종료
+  const closed = new Promise<void>((r) => alice.ws.once("close", () => r()));
+  alice.ws.send(JSON.stringify({ t: "action", seq: 1, action: { type: "look" } }));
+  const seqErr = await alice.until<Extract<ServerMsg, { t: "error" }>>((m) => m.t === "error");
+  check("seq 역행은 error{bad_seq}", seqErr.code === "bad_seq");
+  await closed;
+  check("error 는 연결을 끊는다 (그래서 pending 이 살아남을 수 없다)", true);
+
+  // ── ⑪ state_hash 캐시가 진짜로 돌았는가 ─────────────────────────────
+  section("⑪ 캐시 조회 -> 생성 -> 기록 이 진짜로 돌았는가");
+  const rows = server.ctx.q.getRoomText.get("b1:3,3", server.ctx.world.stateHash("b1:3,3"));
+  check("걸어간 방의 room_text 행이 기록되어 있다", Boolean(rows));
+  check("1단계 출처는 fallback", rows?.source === "fallback");
+  const visited = server.ctx.q.getRoomText.get("b1:2,3", server.ctx.world.stateHash("b1:2,3"));
+  check("두 번째로 걸어간 방도 lazy 기록됐다", Boolean(visited));
+  const unvisited = server.ctx.q.getRoomText.get("b1:5,5", server.ctx.world.stateHash("b1:5,5"));
+  check("아무도 안 간 방은 기록되지 않았다 (부팅 프리시드 없음)", unvisited === undefined);
+
+  const hash = server.ctx.world.stateHash("b1:5,4");
+  check("state_hash 는 세 조각이다 (seedId.declHash.valueDigest)", hash.split(".").length === 3);
+  const noFlagRoom = server.ctx.world.stateHash("b1:3,3");
+  check("플래그를 선언하지 않은 방도 같은 형식으로 계산된다 (특례 없음)",
+    noFlagRoom.split(".").length === 3);
+
+  // ── 정리 ────────────────────────────────────────────────────────────
+  alice.close();
+  await server.close();
+  rmSync(DB, { force: true });
+  rmSync(`${DB}-wal`, { force: true });
+  rmSync(`${DB}-shm`, { force: true });
+
+  console.log(`\n${failures === 0 ? "PASS" : "FAIL"} — ${checks - failures}/${checks} 검사 통과`);
+  process.exit(failures === 0 ? 0 : 1);
+}
+
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});
