@@ -15,6 +15,7 @@ import type { Dir, Pos, RoomId } from "../../shared/ids";
 import { OPPOSITE, roomIdOf } from "../../shared/ids";
 import type {
   CombatView,
+  NpcBrief,
   PresenceEntry,
   RoomView,
   Snapshot,
@@ -37,6 +38,8 @@ export function makePresence(
   /** 그 방에 살아 있는 적이 있는가. 역시 주입 — presence 는 world/ 를
    *  import 하지 않는다 (world/combat 이 net/emit 을 쓰므로 순환이 된다). */
   hasEnemy: (roomId: RoomId) => boolean = () => false,
+  /** 그 방의 NPC 들. 역시 주입 — presence 는 engine/ 을 최소한만 안다. */
+  npcsIn: (roomId: RoomId) => NpcBrief[] = () => [],
 ) {
   const others = (self: Session): Session[] =>
     reg.all().filter((s) => s.playerId !== self.playerId);
@@ -49,7 +52,7 @@ export function makePresence(
       .inRoom(roomId)
       .filter((s) => !self || s.playerId !== self.playerId)
       .map((s) => s.brief);
-    return { roomId, pos, occupants, hasEnemy: hasEnemy(roomId) };
+    return { roomId, pos, occupants, npcs: npcsIn(roomId), hasEnemy: hasEnemy(roomId) };
   }
 
   function visiblePresence(self: Session): PresenceEntry[] {

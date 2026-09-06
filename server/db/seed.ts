@@ -6,7 +6,8 @@
  *
  * room_text 는 여기서 건드리지 않는다 (첫 입장 때 lazy 기록). */
 
-import { allRooms, contentHash, MAX_SENSITIVE, WORLD_FLAG_DEFAULTS } from "../engine/map";
+import { allRooms, contentHash, MAX_SENSITIVE, WORLD_FLAG_DEFAULTS, declHashOf } from "../engine/map";
+import { NPCS } from "../engine/npcs";
 import type { Db } from "./open";
 import type { Queries } from "./queries";
 
@@ -50,6 +51,25 @@ export function seed(db: Db, q: Queries, now: number): { seededRooms: number; re
         });
         seededRooms += info.changes;
       }
+      // NPC 도 같은 방식으로 투영한다 (저작 주체는 코드, 표는 그림자).
+      for (const n of NPCS) {
+        const decl = [...new Set(n.sensitiveFlags)].sort();
+        if (decl.length > MAX_SENSITIVE) {
+          throw new Error(
+            `NPC ${n.id} 이 ${decl.length}개의 플래그를 선언했다 (상한 ${MAX_SENSITIVE}).`,
+          );
+        }
+        q.upsertNpc.run({
+          id: n.id,
+          room_id: n.roomId,
+          name: n.name,
+          persona_seed: n.persona,
+          sensitive_flags: JSON.stringify(decl),
+          flags_decl_hash: declHashOf(decl),
+          now,
+        });
+      }
+
       q.setMeta.run("content_hash", want, now);
     }
   });

@@ -64,6 +64,12 @@ export function makeActionSchemas(limits: { sayMaxLen: number; unparsedMaxLen: n
     // 스키마는 '문자열이고 길이가 온당한가' 까지만 본다.
     skill: z.object({ type: z.literal("skill"), skillId: z.string().max(32) }).strict(),
     stop: z.object({ type: z.literal("stop") }).strict(),
+    // npcId / topic 이 실제로 존재하고 '지금 열려 있는지' 는 핸들러가 다시 본다 —
+    // 스키마는 형태만 본다 (charter 82줄: 서버가 전부 재검증한다).
+    talk: z.object({ type: z.literal("talk"), npcId: z.string().max(64) }).strict(),
+    ask: z
+      .object({ type: z.literal("ask"), npcId: z.string().max(64), topic: z.string().max(64) })
+      .strict(),
     maxLen: { say: limits.sayMaxLen, unparsed: limits.unparsedMaxLen },
   };
 }

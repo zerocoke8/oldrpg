@@ -69,6 +69,20 @@ async function main() {
         promptVersion: "room.v1.ko",
       };
     },
+    /* NPC 대사에도 같은 지연을 준다 — 규칙 4가 대사에서도 지켜지는지,
+       그리고 교체된 뒤에도 화자("제단지기: ")가 남는지를 화면에서 본다. */
+    llmNpcRenderer: async (req) => {
+      await sleep(LLM_MS);
+      const calm = req.flags.some(([k, v]) => k === "guardian_slain" && v === true)
+        ? "이제는 말해도 괜찮다는 듯 목소리가 낮아진다."
+        : "말끝을 흐린다."; // 폴백 꼬리("그 이상은 말하지 않는다")와 눈으로 구별된다
+      return {
+        text: `${req.seed}. ${calm}`,
+        source: "llm" as const,
+        model: "fake-model",
+        promptVersion: "npc.v1.ko",
+      };
+    },
     queue: { concurrency: 2 },
   });
   const vite = await createVite({
@@ -248,7 +262,59 @@ async function main() {
   check("걸어 나가니 전투 패널이 사라졌다",
     (await c.locator("button:has-text('물러나기')").count()) === 0);
 
-  console.log("\n⑩ 3단계 — 세계가 바뀌어도 서 있는 화면을 갈아치우지 않는다");
+  console.log("\n⑩ 4b단계 — NPC 대화 (말을 걸어야 나온다)");
+  /* B 는 스폰(3,3). 제단지기의 방(3,1)까지: 좌 좌 상 상 우 우.
+     (3,2) 가 벽이라 서쪽으로 돌아 올라간다. */
+  for (const k of ["ArrowLeft", "ArrowLeft", "ArrowUp", "ArrowUp", "ArrowRight", "ArrowRight"]) {
+    await b.keyboard.press(k);
+    await sleep(280);
+  }
+  await sleep(LLM_MS + 500);
+  /** 화면에 남아 있는 대사 줄. 앞에 '새로 생성됨' 뱃지가 붙을 수 있다. */
+  const npcLines = async () => (await logText(b)).filter((t) => t.includes("제단지기: "));
+  /** badges() 는 c 의 화면을 센다. B 의 화면에는 이쪽을 쓴다. */
+  const bBadges = () => b.locator("text=새로 생성됨").count();
+
+  const atNpc = await logText(b);
+  check("NPC 가 '있다' 고만 알린다",
+    atNpc.some((t) => t.includes("제단지기이(가) 이곳에 있다")), JSON.stringify(atNpc.slice(-3)));
+  check("★ 말을 걸기 전에는 대사가 없다", (await npcLines()).length === 0);
+  check("말 걸기 버튼이 떴다", (await b.locator("button:has-text('제단지기')").count()) > 0);
+  await b.screenshot({ path: join(SHOTS, "13-NPC-있음.png") });
+
+  const badgesBeforeTalk = await bBadges();
+  await b.locator("button:has-text('제단지기')").first().click();
+  await sleep(250);
+  const greetLine = (await npcLines())[0];
+  check("말을 거니 인사가 나온다", Boolean(greetLine), JSON.stringify(await logText(b)));
+  check("★ 폴백이 '즉시' 나왔다 — 모델을 기다리지 않았다 (규칙 4)",
+    Boolean(greetLine?.includes("낯선 이를 흘깃")) && (await bBadges()) === badgesBeforeTalk,
+    String(greetLine));
+  check("주제 버튼이 떴다", (await b.locator("button:has-text('파수꾼에 대해')").count()) > 0);
+  check("★ 아직 잠긴 주제는 화면에 없다 (그 존재 자체가 스포일러다)",
+    (await b.locator("button:has-text('봉인된 문에 대해')").count()) === 0);
+  await b.screenshot({ path: join(SHOTS, "14-대화창.png") });
+
+  const linesBeforeUpgrade = (await logText(b)).length;
+  await sleep(LLM_MS + 600);
+  const upgraded = (await npcLines())[0];
+  check("★ 확정본으로 조용히 교체됐다 (줄 수는 그대로, 내용만)",
+    Boolean(upgraded?.includes("말끝을 흐린다")) &&
+      !upgraded?.includes("그 이상은 말하지 않는다") &&
+      (await logText(b)).length === linesBeforeUpgrade,
+    `${linesBeforeUpgrade} 줄 / ${upgraded}`);
+  check("★ 교체된 뒤에도 화자가 남아 있다",
+    Boolean(upgraded?.includes("제단지기: ")), String(upgraded));
+  check("'새로 생성됨' 뱃지가 대사에도 켜졌다", (await bBadges()) > badgesBeforeTalk);
+
+  await b.locator("button:has-text('파수꾼에 대해')").first().click();
+  await sleep(LLM_MS + 600);
+  check("주제를 물으면 그 이야기가 나온다",
+    (await npcLines()).some((t) => t.includes("그림자 파수꾼")),
+    JSON.stringify(await npcLines()));
+  await b.screenshot({ path: join(SHOTS, "15-주제-물음.png") });
+
+  console.log("\n⑪ 3단계 — 세계가 바뀌어도 서 있는 화면을 갈아치우지 않는다");
   // c 는 (3,5) 에 있다 — guardian_slain 을 선언한 방(영향권)이다.
   // a 를 영향권으로 보낸다: (3,3) -> (2,3) -> (1,3) -> (1,4)
   for (const k of ["ArrowLeft", "ArrowLeft", "ArrowDown"]) {
@@ -271,7 +337,7 @@ async function main() {
     aAfter.some((t) => t.includes("주변의 공기가 달라졌다")), JSON.stringify(aAfter.slice(-2)));
   check("같은 영향권의 C 도 '주변의 공기가 달라졌다'",
     cAfter.some((t) => t.includes("주변의 공기가 달라졌다")), JSON.stringify(cAfter.slice(-2)));
-  check("비영향권의 B(스폰)는 '멀리서 무언가 무너지는 소리'",
+  check("비영향권의 B(제단지기의 방)는 '멀리서 무언가 무너지는 소리'",
     bAfter.some((t) => t.includes("멀리서 무언가 무너지는")), JSON.stringify(bAfter.slice(-2)));
   check("★ A 의 방 묘사는 그대로다 — 이벤트 한 줄만 늘었다",
     aAfter.length === aBeforeLines + 1, `${aBeforeLines} -> ${aAfter.length}`);
@@ -289,6 +355,34 @@ async function main() {
     aReentry.some((t) => t.includes("좁고 가파른 내리막") && t.includes("가벼")),
     JSON.stringify(aReentry.slice(-3)));
   await a.screenshot({ path: join(SHOTS, "9-다음-입장부터.png") });
+
+  console.log("\n⑫ 4a -> 3단계 -> 4b — 파수꾼이 사라지자 새 이야기가 열린다");
+  // B 는 아직 제단지기 옆에 서 있다. 대화창은 열린 채였지만, 새 주제는
+  // '다시 말을 걸어야' 나타난다 — 서 있는 화면을 갈아치우지 않는 것과 같은 규칙이다.
+  await b.locator("button:has-text('제단지기')").first().click();
+  await sleep(300);
+  check("★ 봉인된 문 이야기가 열렸다",
+    (await b.locator("button:has-text('봉인된 문에 대해')").count()) > 0);
+  await b.locator("button:has-text('봉인된 문에 대해')").first().click();
+  await sleep(400);
+  check("이제 답한다",
+    (await logText(b)).some((t) => t.includes("제단지기: ") && t.includes("봉인된 문")),
+    JSON.stringify((await logText(b)).slice(-2)));
+  check("★ 폴백을 거치지 않고 처음부터 확정본이다 (사전 생성의 효과)",
+    (await logText(b)).some((t) => t.includes("봉인된 문") && t.includes("목소리가 낮아진다")),
+    JSON.stringify((await logText(b)).slice(-2)));
+  await b.screenshot({ path: join(SHOTS, "16-새-주제.png") });
+
+  // 방을 벗어나면 대화창이 닫힌다 — 서버가 '닫아라' 를 보내서가 아니라
+  // "그 방에 그 NPC 가 없다" 는 구조화 사실에서 파생된다.
+  /* ★ 방금 주제 버튼을 눌렀으므로 포커스가 버튼에 있다. App 은 버튼에
+     포커스가 있을 때 화살표를 가로채지 않는다(접근성) — 사람이라면 화면을
+     한 번 누르고 걷는다. 테스트도 같은 일을 한다. */
+  await b.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await b.keyboard.press("ArrowLeft");
+  await sleep(400);
+  check("방을 벗어나니 대화창이 닫혔다",
+    (await b.locator("button:has-text('파수꾼에 대해')").count()) === 0);
 
   await browser.close();
   await vite.close();

@@ -7,6 +7,7 @@ import { connect, type Socket } from "./net/socket";
 import { Reconciler } from "./net/reconcile";
 import { initialState, reduce } from "./state/store";
 import { Combat } from "./ui/Combat";
+import { Dialogue } from "./ui/Dialogue";
 import { Dpad } from "./ui/Dpad";
 import { Log } from "./ui/Log";
 import { Minimap } from "./ui/Minimap";
@@ -123,6 +124,9 @@ export default function App() {
       </div>
 
       {st.combat && <Combat combat={st.combat} selfId={st.self.id} act={act} />}
+
+      {/* 대화는 전투 아래, 로그 위. 방에 NPC 가 없으면 아무것도 그리지 않는다. */}
+      {st.room && <Dialogue room={st.room} dialogue={st.dialogue} act={act} />}
 
       <Log lines={st.log} />
 

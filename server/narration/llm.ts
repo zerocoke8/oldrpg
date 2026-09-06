@@ -9,8 +9,14 @@
  * source 를 보고 '승급 안 됨' 으로 처리한다. */
 
 import Anthropic from "@anthropic-ai/sdk";
-import type { RoomTextRenderer, RoomTextRequest, RoomTextResult } from "../../shared/narration";
-import { loadRoomPrompt, type Mood } from "./prompts";
+import type {
+  NpcLineRenderer,
+  NpcLineRequest,
+  RoomTextRenderer,
+  RoomTextRequest,
+  RoomTextResult,
+} from "../../shared/narration";
+import { loadNpcPrompt, loadRoomPrompt, type Mood } from "./prompts";
 import { moodTextFor } from "./static";
 
 /** 테스트가 스텁을 꽂을 수 있도록 클라이언트 표면을 좁힌 것.
@@ -118,6 +124,73 @@ export function makeLlmRenderer(
         console.warn(`[llm] API ${err.status} ${req.roomId}: ${err.message}`);
       } else {
         console.warn(`[llm] ${req.roomId}:`, err);
+      }
+      return fallback(req);
+    }
+  };
+}
+
+/** NPC 대사 렌더러. 방 묘사와 같은 클라이언트·같은 실패 처리를 쓴다 —
+ *  다른 것은 프롬프트 파일과 사용자 메시지의 모양뿐이다. */
+export function makeLlmNpcRenderer(
+  moods: ReadonlyMap<string, Mood>,
+  fallback: NpcLineRenderer,
+  opts: LlmOptions = {},
+): NpcLineRenderer {
+  const model = opts.model ?? process.env.MUD_MODEL ?? "claude-opus-5";
+  const maxTokens = opts.maxTokens ?? 4000;
+  const effort = opts.effort ?? "low";
+  const timeout = opts.timeoutMs ?? 30_000;
+  const prompt = loadNpcPrompt(opts.promptVersion);
+  const client = opts.client ?? new Anthropic({ timeout, maxRetries: 2 });
+
+  return async (req: NpcLineRequest): Promise<RoomTextResult> => {
+    try {
+      const mood = req.flags
+        .filter(([, v]) => v === true)
+        .map(([k]) => moods.get(k)?.prompt)
+        .filter((x): x is string => Boolean(x))
+        .join(" ");
+      const res = await client.messages.create({
+        model,
+        max_tokens: maxTokens,
+        output_config: { effort },
+        system: [{ type: "text", text: prompt.system, cache_control: { type: "ephemeral" } }],
+        messages: [
+          {
+            role: "user",
+            content: prompt.render({
+              name: req.npcName,
+              persona: req.persona,
+              seed: req.seed,
+              mood,
+            }),
+          },
+        ],
+      });
+
+      if (res.stop_reason === "refusal") {
+        console.warn(`[llm] refusal ${req.npcId}/${req.topic}`);
+        return fallback(req);
+      }
+      if (res.stop_reason === "max_tokens") {
+        console.warn(`[llm] truncated ${req.npcId}/${req.topic}`);
+        return fallback(req);
+      }
+      const text = res.content
+        .filter((b): b is Anthropic.TextBlock => b.type === "text")
+        .map((b) => b.text)
+        .join("")
+        .trim();
+      if (!text) return fallback(req);
+      return { text, source: "llm", model, promptVersion: prompt.version };
+    } catch (err) {
+      if (err instanceof Anthropic.AuthenticationError) {
+        console.error("[llm] 인증 실패 — ANTHROPIC_API_KEY 를 확인할 것");
+      } else if (err instanceof Anthropic.APIError) {
+        console.warn(`[llm] API ${err.status} ${req.npcId}/${req.topic}`);
+      } else {
+        console.warn(`[llm] ${req.npcId}/${req.topic}:`, err);
       }
       return fallback(req);
     }

@@ -21,6 +21,7 @@ import type {
   LogKind,
   WorldFlagView,
   CombatView,
+  DialogueView,
 } from "../../shared/protocol";
 
 /** 클라이언트 내부 이벤트. 와이어에는 존재하지 않지만 같은 리듀서를 지난다 —
@@ -51,6 +52,9 @@ export interface UiState {
   world: Map<string, WorldFlagView>;
   /** 진행 중인 전투. 실시간이라 이 값이 초당 여러 번 바뀐다. */
   combat: CombatView | null;
+  /** 열려 있는 대화창. 주제 '목록' 일 뿐 대사는 여기 없다 —
+   *  대사는 log{kind:"npc"} 가 나른다 (불변식 1: 문장은 log 만 나른다). */
+  dialogue: DialogueView | null;
 }
 
 export const initialState = (): UiState => ({
@@ -64,9 +68,14 @@ export const initialState = (): UiState => ({
   limits: null,
   world: new Map(),
   combat: null,
+  dialogue: null,
 });
 
 const MAX_LOG = 300;
+
+/** 그 NPC 가 아직 이 방에 있으면 대화창을 유지한다. 없으면 닫는다. */
+const keepDialogue = (d: DialogueView | null, room: RoomView): DialogueView | null =>
+  d && room.npcs.some((n) => n.id === d.npc.id) ? d : null;
 
 const pushLog = (log: LogLine[], line: LogLine): LogLine[] => {
   const next = [...log, line];
@@ -89,7 +98,16 @@ export function reduce(st: UiState, m: ServerMsg | LocalMsg): UiState {
       // 접속 전에 일어난 세계의 변화도 여기서 복원된다.
       const world = new Map((m.world ?? []).map((f) => [f.key, f]));
       // 새로고침해도 전투가 이어진다 (세션이 유예로 살아남으므로).
-      return { ...st, self: m.self, region: m.region, room: m.room, others, world, combat: m.combat ?? null };
+      return {
+        ...st,
+        self: m.self,
+        region: m.region,
+        room: m.room,
+        others,
+        world,
+        combat: m.combat ?? null,
+        dialogue: keepDialogue(st.dialogue, m.room),
+      };
     }
 
     case "ack":
@@ -98,7 +116,11 @@ export function reduce(st: UiState, m: ServerMsg | LocalMsg): UiState {
       return st;
 
     case "room.describe":
-      return { ...st, room: m.room };
+      // 방이 바뀌면 대화창은 닫힌다. 서버가 '닫아라' 를 보내지 않는 이유는
+      // 그럴 필요가 없기 때문이다 — 방에 그 NPC 가 없다는 구조화 사실에서
+      // 순수하게 파생된다. (그래도 권위는 서버다: 닫히지 않은 창으로 물어도
+      // world/dialogue.ts 가 같은 방인지 다시 본다.)
+      return { ...st, room: m.room, dialogue: keepDialogue(st.dialogue, m.room) };
 
     case "self.patch":
       if (!st.self) return st;
@@ -165,6 +187,10 @@ export function reduce(st: UiState, m: ServerMsg | LocalMsg): UiState {
         ...st,
         log: st.log.map((l) => (l.id === m.id ? { ...l, text: m.text, source: m.source } : l)),
       };
+
+    case "npc.dialogue":
+      // 말을 걸었다 / 주제 목록이 갱신됐다. 대사 문장은 뒤따르는 log 가 싣는다.
+      return { ...st, dialogue: m.dialogue };
 
     case "combat.start":
       return { ...st, combat: m.combat };

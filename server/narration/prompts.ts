@@ -45,6 +45,33 @@ export interface RoomPrompt {
   render(vars: { seed: string; mood: string }): string;
 }
 
+export interface NpcPrompt {
+  readonly version: string;
+  readonly system: string;
+  render(vars: { name: string; persona: string; seed: string; mood: string }): string;
+}
+
+export function loadNpcPrompt(version = "npc.v1.ko"): NpcPrompt {
+  const raw = readFileSync(join(PROMPTS, `${version}.md`), "utf8");
+  const s = sections(raw);
+  if (!s.system || !s.user) {
+    throw new Error(`${version}.md 에 '# system' 과 '# user' 절이 모두 있어야 한다`);
+  }
+  const system = s.system;
+  const user = s.user;
+  return {
+    version,
+    system,
+    render: ({ name, persona, seed, mood }) =>
+      user
+        .replace("{{name}}", name)
+        .replace("{{persona}}", persona)
+        .replace("{{seed}}", seed)
+        .replace("{{mood}}", mood ? `지금 이 구역의 상태: ${mood}` : "")
+        .trim(),
+  };
+}
+
 export function loadRoomPrompt(version = "room.v1.ko"): RoomPrompt {
   const raw = readFileSync(join(PROMPTS, `${version}.md`), "utf8");
   const s = sections(raw);

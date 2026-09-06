@@ -30,6 +30,7 @@ import { defaultName, lines } from "../narration/lines";
 import type { RoomTextService } from "../world/roomText";
 import type { UpgradeService } from "../world/upgrade";
 import type { CombatService } from "../world/combat";
+import type { DialogueService } from "../world/dialogue";
 import type { Emit } from "./emit";
 import type { Presence } from "./presence";
 import { GRACE_MS, type Registry, type Session } from "./session";
@@ -59,6 +60,7 @@ export interface Ctx {
   roomText: RoomTextService;
   upgrades: UpgradeService;
   combat: CombatService;
+  dialogue: DialogueService;
   clock: () => number;
   /** 종료 중인가. true 면 handleClose 가 아무 일도 하지 않는다 —
    *  db.close() 뒤에 도착하는 소켓 close 이벤트가 닫힌 핸들에 쓰는 것을 막는다. */
@@ -74,6 +76,17 @@ export interface Ctx {
 export function noticeEnemy(ctx: Ctx, s: Session, roomId: RoomId): void {
   const def = ctx.combat.enemyIn(roomId);
   if (def) ctx.emit.log(s, "bad", lines.enemyHere(def.name));
+}
+
+/** 이 방에 NPC 가 있으면 '있다' 고만 알린다. Phase A 다 — 구조화 상태에서
+ *  순수 파생되므로 await 가 없다.
+ *
+ *  ★ 자동으로 말을 걸지 않는다. 두 가지 이유가 있고 둘 다 charter 다:
+ *    - 지나가기만 하는 방에서 대사 생성이 도는 것은 순수한 낭비다 (규칙 2의
+ *      "생성은 딱 한 번" 은 비용 이야기이기도 하다).
+ *    - 방에 들어서자마자 대사가 쏟아지면 방 묘사(Phase B)가 그 밑에 묻힌다. */
+export function noticeNpcs(ctx: Ctx, s: Session, roomId: RoomId): void {
+  for (const npc of ctx.dialogue.npcsIn(roomId)) ctx.emit.log(s, "npc", lines.npcHere(npc.name));
 }
 
 /** 방 묘사를 세션별 체인에 얹는다. 이 체인 밖에서 log{narr} 을 보내는 곳은 없다. */
@@ -92,7 +105,7 @@ export function enqueueRoomText(ctx: Ctx, s: Session, roomId: RoomId): void {
       // ★ 규칙 4: 플레이어는 방금 문장을 받았다. 그게 아직 폴백이면
       //   여기서 백그라운드 승급을 걸고, 준비되면 log.replace 로 조용히
       //   갈아끼운다. 플레이어는 한 순간도 모델을 기다리지 않는다.
-      ctx.upgrades.watch(roomId, stateHash, source, s, logId);
+      ctx.upgrades.watch({ kind: "room", roomId, stateHash }, source, s, logId);
     })
     .catch((err: unknown) => {
       // 반드시 삼킨다 — 거부가 체인을 오염시키면 그 세션은 다시는
@@ -265,6 +278,7 @@ export function sendConnectBurst(ctx: Ctx, s: Session, token: string, displaced:
   if (displaced) ctx.emit.log(s, "sys", lines.displaced);
   ctx.presence.sendRoster(s, roomIdOf(s.pos));
   noticeEnemy(ctx, s, roomIdOf(s.pos));
+  noticeNpcs(ctx, s, roomIdOf(s.pos));
   enqueueRoomText(ctx, s, roomIdOf(s.pos));
 }
 
@@ -351,6 +365,18 @@ export function handleAction(
       action = p.data;
       break;
     }
+    case "talk": {
+      const p = SCHEMAS.talk.safeParse(raw);
+      if (!p.success) return reject(ctx, s, seq, "bad_args");
+      action = p.data;
+      break;
+    }
+    case "ask": {
+      const p = SCHEMAS.ask.safeParse(raw);
+      if (!p.success) return reject(ctx, s, seq, "bad_args");
+      action = p.data;
+      break;
+    }
     default:
       // 이 서버가 구현하지 않은 variant. 옛 서버가 새 클라이언트를 만나는
       // 경우가 정확히 이것이고, 크래시가 아니라 거절이어야 한다.
@@ -369,20 +395,26 @@ export function handleAction(
     case "resync":
       return doResync(ctx, s, seq);
     case "attack":
-      return doCombatCommand(ctx, s, seq, () => ctx.combat.attack(s));
+      return doWorldCommand(ctx, s, seq, () => ctx.combat.attack(s));
     case "skill":
-      return doCombatCommand(ctx, s, seq, () => ctx.combat.skill(s, action.skillId));
+      return doWorldCommand(ctx, s, seq, () => ctx.combat.skill(s, action.skillId));
     case "stop":
-      return doCombatCommand(ctx, s, seq, () => ctx.combat.stop(s));
+      return doWorldCommand(ctx, s, seq, () => ctx.combat.stop(s));
+    /* 대화도 전투와 같은 모양이다: "그런 이는 여기에 없다" 는 계약 위반이
+       아니라 엔진이 계산한 세계의 진실이므로 거절이 아니라 문장으로 답한다. */
+    case "talk":
+      return doWorldCommand(ctx, s, seq, () => ctx.dialogue.talk(s, action.npcId));
+    case "ask":
+      return doWorldCommand(ctx, s, seq, () => ctx.dialogue.ask(s, action.npcId, action.topic));
   }
 }
 
-/** 전투 명령은 전부 같은 모양이다: 서비스가 실패 문장을 돌려주거나 null.
+/** 전투와 대화 명령은 전부 같은 모양이다: 서비스가 실패 문장을 돌려주거나 null.
  *
- *  ★ 실패도 ack{ok:true} 다. "여기엔 적이 없다" 는 계약 위반이 아니라
- *    엔진이 계산한 '세계의 진실' 이고, 벽 부딪힘과 정확히 같은 부류다.
- *    (거절 이유가 아니라 문장으로 답하는 것이 요점이다.) */
-function doCombatCommand(
+ *  ★ 실패도 ack{ok:true} 다. "여기엔 적이 없다" / "그런 이는 여기에 없다" 는
+ *    계약 위반이 아니라 엔진이 계산한 '세계의 진실' 이고, 벽 부딪힘과 정확히
+ *    같은 부류다. (거절 이유가 아니라 문장으로 답하는 것이 요점이다.) */
+function doWorldCommand(
   ctx: Ctx,
   s: Session,
   seq: number,
@@ -393,7 +425,7 @@ function doCombatCommand(
   try {
     refusal = run();
   } catch (err) {
-    console.error("[combat]", err);
+    console.error("[worldCommand]", err);
     ctx.emit.log(s, "sys", "무언가 잘못됐다.");
     return;
   }
@@ -446,6 +478,7 @@ function doMove(ctx: Ctx, s: Session, seq: number, dir: Dir): void {
   if (isNewlySeen) ctx.emit.send(s, { t: "self.patch", seen: [...nextSeen] });
   ctx.presence.announceMove(s, from, to, dir);
   noticeEnemy(ctx, s, newRoom);
+  noticeNpcs(ctx, s, newRoom);
 
   // ── Phase B ────────────────────────────────────────────────────────
   enqueueRoomText(ctx, s, newRoom);
@@ -456,6 +489,7 @@ function doLook(ctx: Ctx, s: Session, seq: number): void {
   ctx.emit.send(s, { t: "room.describe", room: ctx.presence.roomView(s.pos, s) });
   ctx.presence.sendRoster(s, roomIdOf(s.pos));
   noticeEnemy(ctx, s, roomIdOf(s.pos));
+  noticeNpcs(ctx, s, roomIdOf(s.pos));
   enqueueRoomText(ctx, s, roomIdOf(s.pos));
 }
 

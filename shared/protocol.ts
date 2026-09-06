@@ -105,7 +105,12 @@ export type Action =
    *  쿨다운은 서버가 강제한다. 클라이언트의 쿨다운 표시는 안내일 뿐이다. */
   | { type: "skill"; skillId: string }
   /** 교전을 끊는다. 방을 벗어나도 같은 효과다. */
-  | { type: "stop" };
+  | { type: "stop" }
+  /** NPC 에게 말을 건다. 인사(greet)를 듣고 열려 있는 주제 목록을 받는다. */
+  | { type: "talk"; npcId: string }
+  /** 그 주제에 대해 묻는다. 잠긴 주제는 서버가 거절한다 —
+   *  클라이언트의 목록은 안내일 뿐 권위가 아니다. */
+  | { type: "ask"; npcId: string; topic: string };
 
 export interface Hello {
   t: "hello";
@@ -170,6 +175,8 @@ export interface RoomView {
    *  유예(linger) 중인 세션도 포함한다 — snapshot.presence 와 반드시 일치해야
    *  하고, 둘이 어긋나면 '점 없는 유령'이 생긴다. */
   occupants: PlayerBrief[];
+  /** 이 방의 NPC 들. 이름만 실린다 — 대사는 말을 걸어야 나온다. */
+  npcs: NpcBrief[];
   /** 살아 있는 적이 있는가. 이름이 아니라 불리언인 이유: 적의 이름과 상태는
    *  교전을 시작해야(combat.start) 알 수 있고, 그 전에 필요한 것은
    *  '공격 버튼을 보여줄까' 하나뿐이다. 문장은 log 가 나른다. */
@@ -179,6 +186,27 @@ export interface RoomView {
 export interface PresenceEntry {
   player: PlayerBrief;
   pos: Pos;
+}
+
+/** 방에 있는 NPC. 이름만 — 대사는 말을 걸어야 나온다.
+ *  방 묘사에 NPC 대사가 묻히지 않게, 그리고 지나가기만 하는 방에서 생성이
+ *  돌지 않게 (비용) 하는 결정이다. */
+export interface NpcBrief {
+  id: string;
+  name: string;
+}
+
+/** 지금 열려 있는 대화 주제 하나. 잠긴 주제는 아예 오지 않는다 —
+ *  "무엇을 물을 수 있는지" 자체가 세계의 상태이고, 스포일러가 될 수 있다. */
+export interface TopicView {
+  id: string;
+  label: string;
+}
+
+/** 말을 건 결과. 구조화 데이터만 — 대사 문장은 뒤따르는 log 가 싣는다. */
+export interface DialogueView {
+  npc: NpcBrief;
+  topics: TopicView[];
 }
 
 /** 전투 중인 적. 구조화 데이터만 — 문장은 log 가 싣는다. */
@@ -261,6 +289,7 @@ export type LogKind =
   | "sys" // 엔진 피드백: 벽 부딪힘, 안내 배너
   | "presence" // "○○ 님이 들어왔다"
   | "say" // 플레이어 발화 (speaker 필드가 반드시 있다)
+  | "npc" // NPC 의 대사
   | "world" // 세계가 바뀌었다 — "멀리서 무언가 무너지는 소리가 들린다"
   | "combat" // 평범한 타격 한 번. 연속된 combat 줄은 클라이언트가 접는다.
   //          스킬·치명타·사망은 good/bad 로 보내서 접히지 않고 드러나게 한다.
@@ -461,6 +490,16 @@ export interface WorldFlagEvent {
   flag: WorldFlagView;
 }
 
+/** 말을 걸었다 / 주제 목록이 바뀌었다. 대사 문장은 log{kind:"npc"} 가 나른다.
+ *
+ *  ★ 3단계와 같은 규칙이 여기에도 있다: 세계가 바뀌어서 대사가 재생성돼도
+ *    화면에 이미 찍힌 대사를 갈아치우지 않는다. 다음에 물었을 때 새 대사가
+ *    나온다. log.replace 는 2단계의 provisional -> 확정 전용이다. */
+export interface NpcDialogue {
+  t: "npc.dialogue";
+  dialogue: DialogueView;
+}
+
 export interface ServerPing {
   t: "ping";
   nonce: number;
@@ -494,10 +533,11 @@ export type ServerMsg =
   | CombatStart
   | CombatUpdate
   | CombatEnd
+  | NpcDialogue
   | WorldFlagEvent
   | ServerPing
   | ErrorEvent;
-// 서버->클라이언트 18종, 클라이언트->서버 3종(액션 variant 8종). 이게 전부다.
+// 서버->클라이언트 19종, 클라이언트->서버 3종(액션 variant 10종). 이게 전부다.
 //
 // world.flag 를 추가하면서 PROTOCOL_VERSION 을 올리지 않았다: 불변식 (3)에
 // 따라 옛 클라이언트는 모르는 t 를 무시하고 계속 돈다. 깨는 변경이 아니다.

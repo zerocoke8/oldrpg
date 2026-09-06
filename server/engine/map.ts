@@ -7,6 +7,7 @@
 import { createHash } from "node:crypto";
 import type { Pos, RegionId, RoomId } from "../../shared/ids";
 import { roomIdOf } from "../../shared/ids";
+import { NPCS } from "./npcs";
 
 export const REGION: RegionId = "b1";
 export const REGION_NAME = "지하 1층";
@@ -157,7 +158,21 @@ export function contentHash(): string {
     .map((r) => [r.id, r.tile, r.seed, r.sensitiveFlags.join(",")].join(""))
     .sort();
   const flags = Object.keys(WORLD_FLAG_DEFAULTS).sort().join(",");
-  return sha([...rows, flags].join(""), 16);
+  /* NPC 도 같은 해시에 들어간다. 빠뜨리면 시더의 단축경로가 살아 있는 채로
+     persona 나 방을 고쳐도 npcs 표가 옛 값을 유지한다 — "표는 코드의 그림자"
+     라는 성질이 조용히 깨진다. (대사 캐시는 별개다: 그쪽은 seed_id 가 내용
+     파생이라 알아서 미스가 난다.) */
+  const npcs = NPCS.map((n) =>
+    [
+      n.id,
+      n.roomId,
+      n.name,
+      n.persona,
+      [...n.sensitiveFlags].sort().join(","),
+      ...n.topics.flatMap((t) => [t.id, t.label ?? "", t.seed, t.requires ?? ""]),
+    ].join("\u0001"),
+  ).sort();
+  return sha([...rows, flags, ...npcs].join(""), 16);
 }
 
 export const regionView = () => ({

@@ -10,7 +10,13 @@
  * 이 파일은 engine/ 도 db/ 도 import 하지 않는다 (.eslintrc.cjs 가 강제).
  * 얼어붙은 RoomTextRequest 만 받고 텍스트를 '반환'할 뿐 기록하지 않는다. */
 
-import type { RoomTextRenderer, RoomTextRequest, RoomTextResult } from "../../shared/narration";
+import type {
+  NpcLineRenderer,
+  NpcLineRequest,
+  RoomTextRenderer,
+  RoomTextRequest,
+  RoomTextResult,
+} from "../../shared/narration";
 import type { Mood } from "./prompts";
 
 const TAIL = "발소리가 축축한 벽에 둔하게 부딪힌다.";
@@ -36,6 +42,25 @@ export function makeStaticRenderer(moods: ReadonlyMap<string, Mood>): RoomTextRe
     const mood = moodTextFor(req, moods, (m) => m.fallback);
     return {
       text: `${req.seed}. ${mood || TAIL}`,
+      source: "fallback",
+      model: null,
+      promptVersion: null,
+    };
+  };
+}
+
+/** NPC 대사의 결정론 폴백. 방과 같은 역할이다 — 키가 없을 때의 렌더러이자,
+ *  LLM 실패 시의 폴백이자, 규칙 4 를 위해 '즉시' 보여줄 문장.
+ *  씨앗을 그대로 한 문장으로 세운다. */
+export function makeStaticNpcRenderer(moods: ReadonlyMap<string, Mood>): NpcLineRenderer {
+  return async (req: NpcLineRequest): Promise<RoomTextResult> => {
+    const mood = req.flags
+      .filter(([, v]) => v === true)
+      .map(([k]) => moods.get(k)?.fallback)
+      .filter((x): x is string => Boolean(x))
+      .join(" ");
+    return {
+      text: `${req.seed}. ${mood || "그 이상은 말하지 않는다."}`,
       source: "fallback",
       model: null,
       promptVersion: null,

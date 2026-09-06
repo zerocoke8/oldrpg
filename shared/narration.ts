@@ -34,3 +34,27 @@ export interface RoomTextResult {
 /** async 인 이유: 1단계에 await 할 것이 없어도, sync 로 만들면 2단계에 모든
  *  호출부가 바뀐다. 키워드 하나 값이다. */
 export type RoomTextRenderer = (req: RoomTextRequest) => Promise<RoomTextResult>;
+
+/* ── NPC 대사 (4b) ─────────────────────────────────────────────────────
+   방 묘사와 '같은' 규약이다. 다른 것은 씨앗이 둘이라는 점뿐 —
+   persona(그 사람의 목소리)와 seed(그 주제에 대해 아는 것). 둘 다 불변이고
+   합쳐서 seedId 가 된다.
+
+   narration/ 은 여기서도 DB 도 engine 도 만지지 않는다. 얼어붙은 레코드를
+   받고 텍스트를 반환할 뿐이다. */
+
+export interface NpcLineRequest {
+  readonly npcId: string;
+  readonly topic: string;
+  readonly stateHash: string;
+  readonly npcName: string;
+  /** 그 사람의 목소리. 모든 주제에 함께 들어간다. */
+  readonly persona: string;
+  /** 이 주제에 대해 무엇을 아는가. */
+  readonly seed: string;
+  readonly seedId: string;
+  /** 그 NPC 가 '선언한' 플래그만. 방과 같은 이유로 좁게 (charter 45줄). */
+  readonly flags: readonly (readonly [string, JsonScalar])[];
+}
+
+export type NpcLineRenderer = (req: NpcLineRequest) => Promise<RoomTextResult>;

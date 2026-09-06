@@ -8,6 +8,7 @@ import { createHash } from "node:crypto";
 import type { RoomId } from "../../shared/ids";
 import type { JsonScalar } from "../../shared/json";
 import { allRooms, type RoomDef } from "./map";
+import { NPC_BY_ID, npcSeedId, topicOf, type NpcDef, type TopicDef } from "./npcs";
 
 const sha = (s: string, n: number): string =>
   createHash("sha256").update(s, "utf8").digest("hex").slice(0, n);
@@ -93,6 +94,46 @@ export class World {
 
   getFlag(key: string): string | undefined {
     return this.flags.get(key);
+  }
+
+  /* ── NPC ────────────────────────────────────────────────────────────
+     방과 정확히 같은 규약이다. 다른 것은 씨앗이 (persona + topic.seed) 로
+     둘이라는 점뿐이고, 그 둘을 합친 것이 seedId 가 된다. */
+
+  /** 그 NPC 가 '선언한' 플래그만 투영한다. 방과 같은 이유로 좁게. */
+  npcProjectFlags(npcId: string): (readonly [string, JsonScalar])[] {
+    const npc = NPC_BY_ID[npcId];
+    if (!npc) return [];
+    return npc.sensitiveFlags.map((k) => {
+      const raw = this.flags.get(k);
+      const parsed: JsonScalar = raw === undefined ? null : (JSON.parse(raw) as JsonScalar);
+      return [k, parsed] as const;
+    });
+  }
+
+  /** state_hash = `${seedId}.${declHash}.${valueDigest}` — 방과 같은 공식. */
+  npcStateHash(npcId: string, topicId: string): string {
+    const npc = NPC_BY_ID[npcId];
+    const topic = npc && topicOf(npc, topicId);
+    if (!npc || !topic) throw new Error(`unknown npc/topic ${npcId}/${topicId}`);
+    const decl = [...npc.sensitiveFlags].sort();
+    const preimage = decl.map((k) => `${k}=${this.flags.get(k) ?? "null"}`).join("\n");
+    return `${npcSeedId(npc, topic)}.${sha(decl.join("\n"), 8)}.${sha(preimage, 16)}`;
+  }
+
+  npcFlagsJson(npcId: string): string {
+    return JSON.stringify(Object.fromEntries(this.npcProjectFlags(npcId)));
+  }
+
+  /** 지금 열려 있는 주제만. requires 플래그가 켜져야 열린다. */
+  openTopics(npcId: string): TopicDef[] {
+    const npc = NPC_BY_ID[npcId];
+    if (!npc) return [];
+    return npc.topics.filter((t) => !t.requires || this.flags.get(t.requires) === "true");
+  }
+
+  npc(npcId: string): NpcDef | undefined {
+    return NPC_BY_ID[npcId];
   }
 
   /** 3단계에서 워커가 쓴다. narration/ 이 engine/ 을 import 하지 않고도

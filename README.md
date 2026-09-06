@@ -8,11 +8,11 @@ LLM이 생성하지만, 게임 규칙과 상태는 전부 결정론적 코드가
 
 ---
 
-## 현재: 4a단계 완료 (실시간 전투)
+## 현재: 4단계 완료 (실시간 전투 + NPC 대사)
 
 1단계(서버 권위 이동 + WebSocket 동기화), 2단계(씨앗 → LLM → DB 고정, 좌표 락,
 `state_hash` 캐시, 실패 시 폴백), 3단계(플래그, 영향 범위, 백그라운드 워커),
-4a단계(실시간 전투)가 끝났다.
+4a단계(실시간 전투), 4b단계(NPC 대사)가 끝났다.
 
 로드맵의 4단계는 "NPC와 전투" 둘이라 **4a(전투) / 4b(NPC 대사)** 로 쪼갰다.
 단계를 건너뛴 것이 아니라 나눈 것이다.
@@ -64,8 +64,9 @@ npm test              # 1단계: 진짜 서버 + WebSocket 2개 + SQLite (64개 
 npm run test:pipeline # 2단계: 가짜 LLM(지연·실패·경합)으로 파이프라인 (56개 검사)
 npm run test:events   # 3단계: 플래그 -> 영향 범위 -> 재생성 (44개 검사)
 npm run test:combat   # 4a단계: 실시간 전투. 시계와 시드를 주입 (48개 검사)
+npm run test:npc      # 4b단계: 대사 생성·주제 권한·재렌더링 (46개 검사)
 npm run test:browser  # 진짜 크로미움 창 2개. 스크린샷은 test/shots/
-npm run test:all      # 셋 다
+npm run test:all      # 전부
 ```
 
 ---
@@ -233,13 +234,12 @@ UPDATE room_text SET text=?, source='llm', ... WHERE room_id=? AND state_hash=? 
 | 미룬 것 | 언제 | 왜 지금이 아닌가 |
 |---|---|---|
 | `room_gen_lock` 표 | 워커를 별도 프로세스로 뗄 때 | **단일 프로세스로 가기로 했다.** 정확성은 PK + `ON CONFLICT DO NOTHING` + `UPDATE ... WHERE source='fallback'` 가 쥐고 있고(프로세스를 넘어서도 성립), 비용 중복은 `narration/queue.ts` 의 키 중복 제거가 막는다 |
-| `npcs` / `npc_lines` | 4단계 | PK가 아직 추측이다. **SQLite는 PK를 ALTER 하지 못한다** — 지금 만들면 틀린 규약이 굳는다. `source`/`flags_json`/`prompt_version` 칼럼 규약과 `state_hash` 공식은 이미 고정됐으므로 그때 복사하면 된다 |
-| `player_items` | 4단계 | 옳은 모양은 `players` 의 JSON 블롭이 아니라 `player_items(player_id, item_id, qty)` 다. 형태는 지금 정했고 표만 안 만들었다. `hp`/`max_hp` 는 반대로 지금 만들었다 — UI가 이미 표시하므로 |
+| `player_items` | 5단계 | 옳은 모양은 `players` 의 JSON 블롭이 아니라 `player_items(player_id, item_id, qty)` 다. 형태는 지금 정했고 표만 안 만들었다. `hp`/`max_hp` 는 반대로 지금 만들었다 — UI가 이미 표시하므로 |
 | `player_seen_rooms` | 안개가 수천 칸이 될 때 | 지금은 `players.seen` JSON 배열. 통째로만 읽고 쓰며 조인이 없다. 와이어 타입은 그대로다 |
 | 서사 로그 영속화 | 필요해지면 | 로그는 휘발성이다. 재접속하면 스냅샷이 `world` 로 세계의 '상태' 는 복원해 주므로, 놓친 '문장' 이 아쉬워질 때가 만들 신호다 |
 | `narration_queue` **표** | 워커가 프로세스를 넘을 때 | 큐 자체는 `narration/queue.ts` 에 있다(메모리). 영속화가 필요해지는 것은 워커가 별도 프로세스가 될 때뿐이고, 그 전까지는 `WHERE source='fallback'`(인덱스 있음)로 언제든 재구성된다 |
 | delta-since-seq 재개 | 3단계 | 재접속이 최초 접속과 **글자 그대로 같은 코드 경로**다. 7x7 스냅샷은 수백 바이트인 반면 재개는 링버퍼·보존 정책·오버런 폴백을 요구한다 |
-| 4단계 액션 동사 | 4단계 | 유니온 멤버 추가는 순수 가산이고, 구현 없는 멤버는 `not_implemented` 분기와 죽은 검증기를 만든다. 옛 서버는 `ack{unknown_action}` 으로 거절할 뿐 크래시하지 않는다 |
+| 5단계 액션 동사 | 5단계 | 유니온 멤버 추가는 순수 가산이고, 구현 없는 멤버는 `not_implemented` 분기와 죽은 검증기를 만든다. 옛 서버는 `ack{unknown_action}` 으로 거절할 뿐 크래시하지 않는다 |
 | `narration/prompts/` | 2단계 | LLM이 없어 프롬프트가 없다. 디렉터리 위치와 파일 규약(`room.v1.ko.md`)은 `room_text.prompt_version` 칼럼으로 이미 고정됐다 |
 | 접속자 표 | **영원히** | 접속은 살아 있는 소켓으로 정의되므로 프로세스보다 오래 살 수 없다. 영속화하면 크래시마다 청소해야 할 거짓 행만 생긴다 |
 | 관심영역(interest management) | 규모 | `canSee(viewer, subject)` 가 유일한 관문이고 가시성 diff를 **대칭**으로 돌린다. 반경 조건이 붙어도 프로토콜은 한 글자도 안 바뀐다 |
@@ -440,15 +440,65 @@ LLM 이 전투에 들어올 자리는 나중에 둘 — **전투 종료 후 요�
 
 ---
 
-## 다음 (4b — NPC 대사)
+## 4b단계 — NPC 대사
 
-배선은 대부분 이미 있다.
+방 묘사의 파이프라인을 **글자 그대로** 재사용한다. `world/npcText.ts` 는
+`world/roomText.ts` 의 쌍둥이고, 승급 큐·좌표락·폴백은 하나를 공유한다.
 
-- **NPC 대사**: `room_text` 와 같은 (씨앗 + 플래그) 패턴. `source`/`flags_json`/
-  `prompt_version` 칼럼 규약과 `state_hash` 공식은 이미 고정됐으므로 복사하면 된다.
-  **PK 는 그때 결정한다** — SQLite 는 PK 를 ALTER 하지 못하므로 지금 추측하면
-  틀린 규약이 굳는다. NPC 대사는 전투와 달리 0.5초 제약이 없으므로
-  2단계의 provisional → `log.replace` 승급 경로를 그대로 쓸 수 있다.
+```
+npcs        id, room_id, name, persona_seed, sensitive_flags[], flags_decl_hash
+npc_lines   (npc_id, topic, state_hash) PK, text, source, flags_json, model, prompt_version
+```
+
+`state_hash = seedId . flagsDeclHash . valueDigest` — 방과 같은 공식이고,
+`seedId = sha256(persona + "\n" + topic.seed)[0:8]` 다. **씨앗이 둘로 나뉜다**:
+`persona`(그 사람의 목소리)와 `topic.seed`(그 주제에 대해 무엇을 아는가).
+둘을 함께 해시하므로 어느 쪽을 고쳐도 캐시 미스이고, 되돌리면 옛 대사가
+그대로 복구된다.
+
+### 이번이 첫 스키마 변경이다
+
+1~4a단계는 스키마를 한 번도 바꾸지 않았다. 이제는 DB 에 **돈을 주고 만든
+LLM 산출물**이 들어 있으므로, `schema.sql` 을 고쳐 다시 만드는 방식이 아니라
+가산 마이그레이션(`db/migrations/002-npcs.sql`)으로 올린다. 새 DB 도 v1 을
+찍고 같은 마이그레이션을 타게 해서, 두 경로가 갈라지지 않게 했다.
+
+PK 를 `(npc_id, topic, state_hash)` 로 정한 이유: SQLite 는 PK 를 ALTER 하지
+못한다. 한 NPC 가 주제별로 다른 대사를 갖고, 주제마다 상태가 다르다.
+
+### 무엇을 물을 수 있는가도 세계의 상태다
+
+주제는 플래그로 열린다(`requires`). 파수꾼을 쓰러뜨리면 제단지기의
+**봉인된 문** 이야기가 열린다 — 4a(전투) → 3단계(플래그) → 4b(대사)가
+한 줄로 이어진다.
+
+- **잠긴 주제는 목록에 아예 없다.** "무엇을 물을 수 있는가" 자체가 스포일러다.
+- **목록은 권한이 아니다.** devtools 로 `ask{topic:"sealed_door"}` 를 보내도
+  서버가 `world.openTopics()` 를 다시 본다. 클라이언트가 받은 것은 안내다.
+- 거절은 `ack{ok:false}` 가 아니라 **문장**이다 — 벽 부딪힘과 같은 부류로,
+  계약 위반이 아니라 엔진이 계산한 세계의 진실이다.
+
+### 방에 들어서도 말을 걸지 않는다
+
+`room.describe` 는 NPC 의 **이름만** 싣고, 로그에 "제단지기이(가) 이곳에 있다"
+한 줄이 나간다. 대사는 `talk` 을 해야 나온다. 두 가지 이유가 있다 —
+지나가기만 하는 방에서 생성이 도는 것은 순수한 낭비이고(규칙 2는 비용
+이야기이기도 하다), 들어서자마자 대사가 쏟아지면 방 묘사가 그 밑에 묻힌다.
+
+### 승급이 화자를 지운 결함 (테스트가 잡았다)
+
+`log.replace` 는 그 줄을 **통째로** 갈아치운다. 대사 줄은 `제단지기: "..."`
+라는 틀을 갖는데, DB 텍스트만 그대로 밀어 넣으면 승급된 순간 화자가 사라진다.
+그래서 `upgrades.watch()` 가 **그 줄을 어떻게 그렸는지**(`format` 콜백)를 함께
+기억한다. 승급 서비스는 여전히 문장을 모르고, 문구는 `narration/lines.ts` 가
+소유한다.
+
+---
+
+## 다음 (5단계 — UI)
+
+- **JRPG 커맨드 윈도우**: `client/ui/Dialogue.tsx` 가 그 축소판이다. 자유 텍스트
+  입력창은 `client/input/parse.ts` 를 부르기만 하면 된다 — 어댑터는 1단계부터 있다.
 - **`player_items`**: 모양은 이미 정했다 (`player_items(player_id, item_id, qty)`).
   전투에 물약을 넣으려면 그때가 이 표를 만들 때다.
 - **전투 요약을 LLM 으로**: 전투가 끝난 뒤 한 문단. 실시간 제약 밖이라

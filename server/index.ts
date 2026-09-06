@@ -11,10 +11,12 @@ import { migrate } from "./db/migrate";
 import { makeQueries } from "./db/queries";
 import { loadFlags, seed } from "./db/seed";
 import { World } from "./engine/world";
-import { makeStaticRenderer } from "./narration/static";
-import { makeLlmRenderer } from "./narration/llm";
+import { makeStaticNpcRenderer, makeStaticRenderer } from "./narration/static";
+import { makeLlmNpcRenderer, makeLlmRenderer } from "./narration/llm";
 import { loadMoods } from "./narration/prompts";
 import { makeRoomTextService } from "./world/roomText";
+import { makeNpcTextService } from "./world/npcText";
+import { makeDialogue } from "./world/dialogue";
 import { makeUpgradeService } from "./world/upgrade";
 import { makeEvents } from "./world/events";
 import { makeCombat, type CombatOptions } from "./world/combat";
@@ -24,9 +26,11 @@ import { Registry } from "./net/session";
 import { startServer } from "./net/server";
 import { enqueueRoomText, type Ctx } from "./net/handlers";
 import { roomIdOf } from "../shared/ids";
+import type { RoomId } from "../shared/ids";
+import type { NpcBrief } from "../shared/protocol";
 import type { Session } from "./net/session";
 import type { ErrorEvent } from "../shared/protocol";
-import type { RoomTextRenderer } from "../shared/narration";
+import type { NpcLineRenderer, RoomTextRenderer } from "../shared/narration";
 import type { QueueOptions } from "./narration/queue";
 import type { UpgradeService } from "./world/upgrade";
 import type { EventService } from "./world/events";
@@ -55,6 +59,9 @@ const PORT = Number(process.env.MUD_PORT ?? 8787);
 export interface BootOptions {
   /** 테스트가 가짜 렌더러를 꽂는 자리. 지정하면 API 키 여부와 무관하게 이걸 쓴다. */
   llmRenderer?: RoomTextRenderer;
+  /** NPC 대사의 가짜 렌더러. 방과 따로인 이유: 4b 테스트는 대사만 승급시키고
+   *  방 묘사는 폴백으로 두고 싶다 (그 반대도 마찬가지). */
+  llmNpcRenderer?: NpcLineRenderer;
   /** 큐 옵션 (테스트에서 동시성/쿨다운을 조인다). */
   queue?: QueueOptions;
   /** 전투 옵션 (테스트가 시계와 시드를 손에 쥔다). */
@@ -83,12 +90,14 @@ export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
   /* presence 는 world/events 를 import 하지 않는다 (순환). 늦게 바인딩한다. */
   let events: EventService | null = null;
   let combat: CombatService | null = null;
+  let npcsIn: ((roomId: RoomId) => NpcBrief[]) | null = null;
   const presence = makePresence(
     reg,
     emit,
     () => events?.publicFlags() ?? [],
     (id) => combat?.viewFor(id) ?? null,
     (roomId) => Boolean(combat?.enemyIn(roomId)),
+    (roomId) => npcsIn?.(roomId) ?? [],
   );
 
   /* ── 서술 레이어 ────────────────────────────────────────────────────
@@ -97,18 +106,36 @@ export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
      호출이 아예 없으므로 실수로 기다리게 만들 방법이 없다. */
   const moods = loadMoods();
   const fallbackRenderer = makeStaticRenderer(moods);
+  const fallbackNpcRenderer = makeStaticNpcRenderer(moods);
 
   const hasKey = Boolean(process.env.ANTHROPIC_API_KEY ?? process.env.ANTHROPIC_AUTH_TOKEN);
   const llmRenderer =
     options.llmRenderer ?? (hasKey ? makeLlmRenderer(moods, fallbackRenderer) : null);
+  const llmNpcRenderer =
+    options.llmNpcRenderer ?? (hasKey ? makeLlmNpcRenderer(moods, fallbackNpcRenderer) : null);
 
   const roomText = makeRoomTextService(world, q, fallbackRenderer, clock);
-  const upgrades = llmRenderer
-    ? makeUpgradeService(world, q, llmRenderer, emit, clock, () => shuttingDown, options.queue ?? {})
-    : // 키가 없으면 승급 경로가 통째로 없다. 게임은 1단계와 똑같이 돈다.
-      NO_UPGRADES;
+  const npcText = makeNpcTextService(world, q, fallbackNpcRenderer, clock);
+  const upgrades =
+    llmRenderer || llmNpcRenderer
+      ? makeUpgradeService(
+          world,
+          q,
+          llmRenderer,
+          llmNpcRenderer,
+          emit,
+          clock,
+          () => shuttingDown,
+          options.queue ?? {},
+        )
+      : // 키가 없으면 승급 경로가 통째로 없다. 게임은 1단계와 똑같이 돈다.
+        NO_UPGRADES;
 
-  events = makeEvents(world, q, reg, emit, moods, roomText, upgrades, clock);
+  events = makeEvents(world, q, reg, emit, moods, roomText, npcText, upgrades, clock);
+  /* 대화는 engine(누가 있나) + npcText(대사) + upgrades(승급) 를 조합한다.
+     presence 보다 뒤에 만들어지므로 npcsIn 은 위에서 늦게 바인딩한다. */
+  const dialogue = makeDialogue(world, npcText, upgrades, emit);
+  npcsIn = dialogue.npcsIn;
   const combatSvc = makeCombat(q, reg, emit, events, clock, options.combat ?? {});
   combat = combatSvc;
 
@@ -121,6 +148,7 @@ export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
     roomText,
     upgrades,
     combat: combatSvc,
+    dialogue,
     clock,
     isShuttingDown: () => shuttingDown,
   };
@@ -175,6 +203,7 @@ export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
     upgrades,
     events,
     combat: combatSvc,
+    npcText,
     close: () =>
       new Promise<void>((resolve) => {
         shuttingDown = true;

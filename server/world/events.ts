@@ -23,12 +23,14 @@ import { roomIdOf } from "../../shared/ids";
 import type { JsonScalar } from "../../shared/json";
 import type { WorldFlagView } from "../../shared/protocol";
 import { isBroadcastFlag, WORLD_FLAGS } from "../engine/map";
+import { npcsSensitiveTo } from "../engine/npcs";
 import type { World } from "../engine/world";
 import type { Queries } from "../db/queries";
 import type { Mood } from "../narration/prompts";
 import type { Emit } from "../net/emit";
 import type { Registry } from "../net/session";
 import type { RoomTextService } from "./roomText";
+import type { NpcTextService } from "./npcText";
 import type { UpgradeService } from "./upgrade";
 
 export interface SetFlagResult {
@@ -36,6 +38,8 @@ export interface SetFlagResult {
   changed: boolean;
   /** 재생성 큐에 들어간 방 수 (3·4번). */
   queued: number;
+  /** 재생성 큐에 들어간 NPC 대사 수 — charter 59줄의 "방·NPC" 다. */
+  queuedNpcLines: number;
   /** near 문장을 받은 세션 수, far 문장을 받은 세션 수. */
   near: number;
   far: number;
@@ -59,6 +63,7 @@ export function makeEvents(
   emit: Emit,
   moods: ReadonlyMap<string, Mood>,
   roomText: RoomTextService,
+  npcText: NpcTextService,
   upgrades: UpgradeService,
   clock: () => number,
 ): EventService {
@@ -81,7 +86,7 @@ export function makeEvents(
 
     const next = JSON.stringify(value); // 정규화는 여기 한 곳 (db/queries 의 setFlag 와 짝)
     const prev = world.getFlag(key);
-    if (prev === next) return { changed: false, queued: 0, near: 0, far: 0 };
+    if (prev === next) return { changed: false, queued: 0, queuedNpcLines: 0, near: 0, far: 0 };
 
     // ── 1. 엔진이 플래그를 켠다 ──────────────────────────────────────
     //    DB 커밋이 먼저, 메모리 갱신이 나중. 이동 경로와 같은 규칙이다 —
@@ -120,11 +125,20 @@ export function makeEvents(
     for (const roomId of affected) {
       if (pregenerate(roomId)) queued++;
     }
+    /* NPC 도 같은 규칙이다 (charter 59줄: "그 플래그를 sensitive_flags 에
+       선언한 방·NPC만 큐에 넣는다"). 지금 열려 있는 주제만 미리 만든다 —
+       아직 잠긴 주제는 열리는 순간이 곧 그 주제의 첫 방문이다. */
+    let queuedNpcLines = 0;
+    for (const npc of npcsSensitiveTo(key)) {
+      for (const topic of world.openTopics(npc.id)) {
+        if (pregenerateNpc(npc.id, topic.id)) queuedNpcLines++;
+      }
+    }
 
     // ── 5. 새 텍스트는 '다음 입장부터'. 여기서 하는 일은 없다. ────────
     //    log.replace 를 보내지 않는 것이 곧 5번의 이행이다.
 
-    return { changed: true, queued, near, far };
+    return { changed: true, queued, queuedNpcLines, near, far };
   }
 
   /** 그 방의 '지금 상태' 텍스트를 미리 만들어 둔다.
@@ -143,15 +157,32 @@ export function makeEvents(
     const existing = q.getRoomText.get(roomId, stateHash);
     if (existing && existing.source !== "fallback") return false; // 이미 확정본
 
-    if (existing) return upgrades.enqueue(roomId, stateHash);
+    if (existing) return upgrades.enqueue({ kind: "room", roomId, stateHash });
 
     void roomText
       .get(roomId)
-      .then(() => upgrades.enqueue(roomId, stateHash))
+      .then(() => upgrades.enqueue({ kind: "room", roomId, stateHash }))
       .catch((err: unknown) => {
         // 실패해도 이벤트 처리를 막지 않는다 — 그 방은 다음 입장 때
         // 평범한 캐시 미스로 처리된다.
         console.error(`[events] pregenerate ${roomId}`, err);
+      });
+    return true;
+  }
+
+  /** 방의 사전 생성과 같은 절차. 폴백 행이 먼저 생기고 그 '다음에' 승급을
+   *  건다 — 순서를 어기면 워커가 없는 행을 승급하려다 헛돈다. */
+  function pregenerateNpc(npcId: string, topic: string): boolean {
+    const stateHash = world.npcStateHash(npcId, topic);
+    const existing = q.getNpcLine.get(npcId, topic, stateHash);
+    if (existing && existing.source !== "fallback") return false;
+    if (existing) return upgrades.enqueue({ kind: "npc", npcId, topic, stateHash });
+
+    void npcText
+      .get(npcId, topic)
+      .then(() => upgrades.enqueue({ kind: "npc", npcId, topic, stateHash }))
+      .catch((err: unknown) => {
+        console.error(`[events] pregenerate npc ${npcId}/${topic}`, err);
       });
     return true;
   }

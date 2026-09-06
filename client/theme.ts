@@ -13,6 +13,7 @@ export const C = {
   red: "#c2483f",
   green: "#5fa85f",
   other: "#7fd0e8",
+  npc: "#d7bd8a",
 } as const;
 
 export const FONT =
@@ -28,6 +29,7 @@ const LOG_COLOR: Record<string, string> = {
   world: "#b98cd6",
   combat: "#9fb0d8",
   say: C.other,
+  npc: C.npc,
   good: C.green,
   bad: C.red,
 };

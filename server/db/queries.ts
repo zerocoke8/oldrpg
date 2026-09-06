@@ -33,6 +33,17 @@ export interface RoomTextFullRow extends RoomTextRow {
   updated_at: number;
 }
 
+export interface NpcLineFullRow extends RoomTextRow {
+  npc_id: string;
+  topic: string;
+  state_hash: string;
+  flags_json: string;
+  model: string | null;
+  prompt_version: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
 export interface PlayerRow {
   id: string;
   name: string;
@@ -71,6 +82,44 @@ export function makeQueries(db: Db) {
           OR rooms.tile <> excluded.tile`,
     ),
     allRooms: db.prepare<[], RoomRow>("SELECT * FROM rooms"),
+
+    // ── npcs / npc_lines ────────────────────────────────────────────────
+    upsertNpc: db.prepare(
+      `INSERT INTO npcs (id, room_id, name, persona_seed, sensitive_flags,
+                         flags_decl_hash, created_at, updated_at)
+       VALUES (@id, @room_id, @name, @persona_seed, @sensitive_flags,
+               @flags_decl_hash, @now, @now)
+       ON CONFLICT (id) DO UPDATE SET
+         room_id = excluded.room_id, name = excluded.name,
+         persona_seed = excluded.persona_seed,
+         sensitive_flags = excluded.sensitive_flags,
+         flags_decl_hash = excluded.flags_decl_hash, updated_at = excluded.updated_at
+       WHERE npcs.persona_seed <> excluded.persona_seed
+          OR npcs.sensitive_flags <> excluded.sensitive_flags
+          OR npcs.room_id <> excluded.room_id
+          OR npcs.name <> excluded.name`,
+    ),
+    getNpcLine: db.prepare<[string, string, string], RoomTextRow>(
+      "SELECT text, source FROM npc_lines WHERE npc_id = ? AND topic = ? AND state_hash = ?",
+    ),
+    getNpcLineRow: db.prepare<[string, string, string], NpcLineFullRow>(
+      "SELECT * FROM npc_lines WHERE npc_id = ? AND topic = ? AND state_hash = ?",
+    ),
+    /** room_text 와 글자 그대로 같은 규약: PK 충돌은 "남이 먼저 썼다" 이고
+     *  호출자는 무조건 재조회한다. */
+    insertNpcLineIfAbsent: db.prepare(
+      `INSERT INTO npc_lines (npc_id, topic, state_hash, text, source, flags_json,
+                              model, prompt_version, created_at, updated_at)
+       VALUES (@npc_id, @topic, @state_hash, @text, @source, @flags_json,
+               @model, @prompt_version, @now, @now)
+       ON CONFLICT (npc_id, topic, state_hash) DO NOTHING`,
+    ),
+    upgradeNpcLineFromFallback: db.prepare(
+      `UPDATE npc_lines SET text = @text, source = 'llm', model = @model,
+                            prompt_version = @prompt_version, updated_at = @now
+       WHERE npc_id = @npc_id AND topic = @topic AND state_hash = @state_hash
+         AND source = 'fallback'`,
+    ),
 
     // ── world_flags ─────────────────────────────────────────────────────
     /** 값 정규화(JSON.stringify)는 setFlag 한 곳에서만 일어난다.
