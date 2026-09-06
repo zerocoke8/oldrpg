@@ -3,7 +3,7 @@
    4단계에 전투가 붙어도 프로토콜도 이 컴포넌트도 바뀌지 않는다. */
 
 import type { Pos } from "../../shared/ids";
-import type { RegionView, RoomView, SelfState } from "../../shared/protocol";
+import type { RegionView, RoomView, SelfState, WorldFlagView } from "../../shared/protocol";
 import { C, win } from "../theme";
 
 export function Status(props: {
@@ -12,8 +12,12 @@ export function Status(props: {
   room: RoomView | null;
   at: Pos;
   connected: boolean;
+  world: WorldFlagView[];
 }) {
-  const { self, region, room, at, connected } = props;
+  const { self, region, room, at, connected, world } = props;
+  // label 이 있는 것만 — 문구는 서버가 만든다. 클라이언트는 key 로
+  // 문장을 조립하지 않는다 (프로토콜 불변식 1).
+  const marks = world.filter((f) => f.label);
   const ratio = self.maxHp > 0 ? self.hp / self.maxHp : 0;
 
   return (
@@ -53,6 +57,11 @@ export function Status(props: {
           ) : null}
         </span>
         <span>탐색한 방 {self.seen.length}</span>
+        {marks.map((f) => (
+          <span key={f.key} style={{ color: C.gold }}>
+            {f.label}
+          </span>
+        ))}
       </div>
     </div>
   );

@@ -117,6 +117,7 @@ export default function App() {
           room={st.room}
           at={at}
           connected={st.status === "live"}
+          world={[...st.world.values()]}
         />
       </div>
 

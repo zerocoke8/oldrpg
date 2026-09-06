@@ -28,6 +28,25 @@ export class World {
     for (const [k, v] of flags) this.flags.set(k, v);
   }
 
+  /** 메모리 상의 플래그 값을 갱신한다.
+   *
+   *  ★ 엔진은 영속화를 모른다. DB 쓰기는 호출자(world/events.ts)가 하고,
+   *    '커밋이 성공한 뒤에' 이걸 부른다 — 이동 경로에서 DB 커밋을 먼저 하는
+   *    것과 같은 규칙이다. 반대 순서면 DB 와 메모리가 어긋났을 때
+   *    보상할 경로가 없다.
+   *
+   *  값은 '저장된 문자열 그대로' 다. 정규화는 db/queries.ts 의 setFlag 한 곳에서만
+   *  일어나고, state_hash 는 이 문자열을 그대로 해시한다. */
+  applyFlag(key: string, value: string): void {
+    this.flags.set(key, value);
+  }
+
+  /** 그 플래그를 선언한 방들의 현재 값 (JSON 스칼라). */
+  flagValue(key: string): JsonScalar {
+    const raw = this.flags.get(key);
+    return raw === undefined ? null : (JSON.parse(raw) as JsonScalar);
+  }
+
   room(id: RoomId): RoomDef | undefined {
     return this.rooms.get(id);
   }

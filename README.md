@@ -8,10 +8,10 @@ LLM이 생성하지만, 게임 규칙과 상태는 전부 결정론적 코드가
 
 ---
 
-## 현재: 2단계 완료 (생성 파이프라인)
+## 현재: 3단계 완료 (이벤트 재렌더링)
 
-1단계(서버 권위 이동 + WebSocket 동기화)와 2단계(씨앗 → LLM → DB 고정,
-좌표 락, `state_hash` 캐시, 실패 시 폴백)가 끝났다.
+1단계(서버 권위 이동 + WebSocket 동기화), 2단계(씨앗 → LLM → DB 고정, 좌표 락,
+`state_hash` 캐시, 실패 시 폴백), 3단계(플래그, 영향 범위, 백그라운드 워커)가 끝났다.
 
 ```bash
 npm install
@@ -39,6 +39,16 @@ npm run dev            # 서버(8787) + 클라이언트(5173)
 - 처음 가는 방은 **폴백 문장이 즉시** 뜨고, 잠시 뒤 **그 줄이 조용히 교체**되며
   "새로 생성됨" 뱃지가 켜진다 (규칙 4). 두 번째 방문부터는 처음부터 확정본이다
 
+세계를 바꿔 보려면 (`MUD_DEV=1 npm run dev:server` 로 띄운 뒤 서버 콘솔에):
+
+```
+flag guardian_slain true
+```
+
+- 영향권에 서 있으면 **"주변의 공기가 달라졌다"**, 밖이면 **"멀리서 무언가 무너지는 소리"**
+- **서 있는 화면은 그대로다.** 새 묘사는 다시 들어가거나 살펴볼 때 나온다
+- 상태창에 "파수꾼 처치됨" 이 뜬다. 되돌리면 옛 묘사가 그대로 복구된다
+
 ### 검증
 
 ```bash
@@ -46,6 +56,7 @@ npm run typecheck     # tsc --strict
 npm run lint          # 규칙 1을 import 검사로 강제 (아래 참조)
 npm test              # 1단계: 진짜 서버 + WebSocket 2개 + SQLite (64개 검사)
 npm run test:pipeline # 2단계: 가짜 LLM(지연·실패·경합)으로 파이프라인 (56개 검사)
+npm run test:events   # 3단계: 플래그 -> 영향 범위 -> 재생성 (44개 검사)
 npm run test:browser  # 진짜 크로미움 창 2개. 스크린샷은 test/shots/
 npm run test:all      # 셋 다
 ```
@@ -60,7 +71,7 @@ server/
   engine/    맵·이동·플래그. 진실을 계산한다. narration/ db/ net/ 을 import 하지 않는다
   narration/ LLM 호출 · 프롬프트(파일) · 큐. DB 핸들을 잡지 않는다
   world/     engine + db + narration + net 을 조합하는 유일한 곳
-             roomText.ts(플레이어 경로) / upgrade.ts(백그라운드 승급)
+             roomText.ts(플레이어 경로) / upgrade.ts(승급) / events.ts(세계 변화)
   db/        모든 SQL 이 queries.ts 한 파일에 있다 (나중에 Postgres 로 옮기려고)
   net/       세션·유예·presence 팬아웃·핸들러
 client/
@@ -217,7 +228,7 @@ UPDATE room_text SET text=?, source='llm', ... WHERE room_id=? AND state_hash=? 
 | `npcs` / `npc_lines` | 4단계 | PK가 아직 추측이다. **SQLite는 PK를 ALTER 하지 못한다** — 지금 만들면 틀린 규약이 굳는다. `source`/`flags_json`/`prompt_version` 칼럼 규약과 `state_hash` 공식은 이미 고정됐으므로 그때 복사하면 된다 |
 | `player_items` | 4단계 | 옳은 모양은 `players` 의 JSON 블롭이 아니라 `player_items(player_id, item_id, qty)` 다. 형태는 지금 정했고 표만 안 만들었다. `hp`/`max_hp` 는 반대로 지금 만들었다 — UI가 이미 표시하므로 |
 | `player_seen_rooms` | 안개가 수천 칸이 될 때 | 지금은 `players.seen` JSON 배열. 통째로만 읽고 쓰며 조인이 없다. 와이어 타입은 그대로다 |
-| 서사 로그 영속화 | 3단계 | 1단계 로그는 휘발성이다. 세계가 플레이어 부재중에 변하기 시작할 때 값이 생긴다 |
+| 서사 로그 영속화 | 필요해지면 | 로그는 휘발성이다. 재접속하면 스냅샷이 `world` 로 세계의 '상태' 는 복원해 주므로, 놓친 '문장' 이 아쉬워질 때가 만들 신호다 |
 | `narration_queue` **표** | 워커가 프로세스를 넘을 때 | 큐 자체는 `narration/queue.ts` 에 있다(메모리). 영속화가 필요해지는 것은 워커가 별도 프로세스가 될 때뿐이고, 그 전까지는 `WHERE source='fallback'`(인덱스 있음)로 언제든 재구성된다 |
 | delta-since-seq 재개 | 3단계 | 재접속이 최초 접속과 **글자 그대로 같은 코드 경로**다. 7x7 스냅샷은 수백 바이트인 반면 재개는 링버퍼·보존 정책·오버런 폴백을 요구한다 |
 | 4단계 액션 동사 | 4단계 | 유니온 멤버 추가는 순수 가산이고, 구현 없는 멤버는 `not_implemented` 분기와 죽은 검증기를 만든다. 옛 서버는 `ack{unknown_action}` 으로 거절할 뿐 크래시하지 않는다 |
@@ -291,19 +302,70 @@ server/narration/prompts/
 
 ---
 
-## 다음 (3단계 — 이벤트 재렌더링)
+## 3단계 — 이벤트 재렌더링
+
+CLAUDE.md 의 다섯 단계를 그 순서 그대로 구현했다 (`world/events.ts`).
+
+```
+events.setFlag("guardian_slain", true)
+ ├─ 1. DB 커밋 -> 메모리 갱신        (이동 경로와 같은 순서)
+ ├─ 2. 미리 써둔 문장을 '즉시'       near = 영향권에 서 있는 사람
+ │                                   far  = 그 밖의 사람  (파일에서 읽는다)
+ │     + world.flag (구조화 상태만)
+ ├─ 3. 그 플래그를 '선언한' 방만 큐에  19개 중 7개
+ ├─ 4. 워커가 하나씩 재생성 -> DB     (2단계의 큐를 그대로 쓴다)
+ └─ 5. 새 텍스트는 '다음 입장부터'    ← 여기서 하는 일이 '없는' 것이 이행이다
+```
+
+### 5번이 이 단계에서 가장 중요하다
+
+CLAUDE.md 63줄: "지금 그 방에 서 있는 플레이어의 화면을 갈아치우지 않는다."
+
+**3단계는 `log.replace` 를 절대 보내지 않는다.** `log.replace` 는 2단계의
+provisional → 확정 전용이다. 플래그가 바뀌어도 서 있는 사람은 이벤트 문장
+한 줄만 받고, 새 묘사는 **다시 들어가거나 직접 살펴볼 때** 나타난다.
+(`look` 은 '요청' 이므로 새 텍스트를 준다 — 갈아치우지 말라는 것은
+*요청하지 않은* 교체를 말한다.)
+
+사전 생성 덕분에 그 '다음 입장' 은 폴백을 거치지 않고 **처음부터 확정본**이다.
+
+### 승급이 진행 중인 방에서 플래그가 바뀌면
+
+가장 미묘한 인터리브다. 그 줄은 **들어갔을 때의 상태** 묘사이므로 그 상태의
+확정본으로 교체되어야 한다. 그래서 승급 워커는 플래그를 '지금의 월드' 가 아니라
+**그 행의 `flags_json`(= `state_hash` 의 preimage)** 에서 읽는다.
+
+현재 월드에서 읽으면 두 가지가 한꺼번에 깨진다 — 서 있는 사람의 줄이 새 상태
+문장으로 갈아치워지고(63줄 위반), 더 조용하게는 옛 `state_hash` 로 키잉된 행에
+새 플래그로 만든 텍스트가 들어가 **캐시가 오염된다** (되돌리면 엉뚱한 문장이
+복구된다). 둘 다 회귀 테스트가 있다.
+
+### 플래그 공개는 옵트인
+
+`engine/map.ts` 의 `WORLD_FLAGS` 에서 `broadcast: true` 로 선언한 것만 와이어에
+나간다. 플래그는 쉽게 스포일러가 된다(`secret_door_found` 같은 것).
+표시 문구(`label`)도 **서버가** 만든다 — 클라이언트가 key 로 문장을 조립하기
+시작하면 불변식 (1)의 예외가 하나 더 생긴다.
+
+### 무엇이 플래그를 켜는가
+
+지금은 개발용 stdin 뿐이다 (`MUD_DEV=1`, 서버 콘솔에 `flag <key> <json>`).
+프로토콜 표면이 0 이라 액션 유니온에 디버그 동사가 들어가지 않았다.
+**4단계 전투가 부를 진입점이 `events.setFlag()` 이고, 그 시그니처는 이미 최종형이다.**
+
+---
+
+## 다음 (4단계 — NPC와 전투)
 
 배선은 대부분 이미 있다.
 
-- **플래그를 켜는 것**: `q.setFlag` + `world.load()`. 이미 있고 테스트도 있다.
-- **영향 범위**: `world.roomsSensitiveTo(flag)` 가 이미 있다.
-- **백그라운드 워커**: `narration/queue.ts` 를 그대로 쓴다.
-- **재생성**: 플래그가 바뀌면 `state_hash` 가 바뀌므로 그냥 캐시 미스다.
-  씨앗에서 **다시 렌더링**되고 옛 행은 살아남는다 (규칙 3).
-
-새로 필요한 것은 둘뿐이다:
-
-1. `world.flag` 같은 이벤트 메시지 — 클라이언트는 모르는 `t` 를 무시하므로 순수 가산.
-2. **새 텍스트는 다음 입장부터 적용한다** (CLAUDE.md 63줄). 지금 그 방에 서 있는
-   플레이어의 화면을 갈아치우지 않는다. `log.replace` 는 provisional→확정 전용이고
-   3단계에는 쓰지 않는다 — 이건 지금 코드 주석에도 못박혀 있다.
+- **전투가 세계를 바꾸는 입구**: `events.setFlag(key, value)`. 시그니처가 이미 최종형이다.
+- **엔진의 규약**: 순수 함수가 `{effects: [...]}` 를 반환하고, 영속화는 호출자가 한다.
+  `engine/move.ts` 주석에 `resolveAttack` 의 모양까지 적혀 있다.
+- **액션 동사**(`attack`/`guard`/`use_item`/`flee`): 유니온 멤버 추가는 순수 가산이고,
+  옛 서버는 `ack{unknown_action}` 으로 거절할 뿐 크래시하지 않는다.
+- **NPC 대사**: `room_text` 와 같은 (씨앗 + 플래그) 패턴. `source`/`flags_json`/
+  `prompt_version` 칼럼 규약과 `state_hash` 공식은 이미 고정됐으므로 복사하면 된다.
+  **PK 는 그때 결정한다** — SQLite 는 PK 를 ALTER 하지 못하므로 지금 추측하면
+  틀린 규약이 굳는다.
+- **`player_items`**: 모양은 이미 정했다 (`player_items(player_id, item_id, qty)`).

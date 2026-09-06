@@ -19,6 +19,7 @@ import type {
   ServerMsg,
   TextSource,
   LogKind,
+  WorldFlagView,
 } from "../../shared/protocol";
 
 /** 클라이언트 내부 이벤트. 와이어에는 존재하지 않지만 같은 리듀서를 지난다 —
@@ -44,6 +45,9 @@ export interface UiState {
   others: Map<string, { player: PlayerBrief; pos: Pos }>;
   log: LogLine[];
   limits: Limits | null;
+  /** 공개된 월드 플래그. 스냅샷이 전부 주고 world.flag 가 델타로 갱신한다.
+   *  label 은 서버가 만든다 — 클라이언트는 key 로 문구를 조립하지 않는다. */
+  world: Map<string, WorldFlagView>;
 }
 
 export const initialState = (): UiState => ({
@@ -55,6 +59,7 @@ export const initialState = (): UiState => ({
   others: new Map(),
   log: [],
   limits: null,
+  world: new Map(),
 });
 
 const MAX_LOG = 300;
@@ -77,7 +82,9 @@ export function reduce(st: UiState, m: ServerMsg | LocalMsg): UiState {
       const others = new Map(st.others);
       others.clear();
       for (const p of m.presence) others.set(p.player.id, p);
-      return { ...st, self: m.self, region: m.region, room: m.room, others };
+      // 접속 전에 일어난 세계의 변화도 여기서 복원된다.
+      const world = new Map((m.world ?? []).map((f) => [f.key, f]));
+      return { ...st, self: m.self, region: m.region, room: m.room, others, world };
     }
 
     case "ack":
@@ -153,6 +160,15 @@ export function reduce(st: UiState, m: ServerMsg | LocalMsg): UiState {
         ...st,
         log: st.log.map((l) => (l.id === m.id ? { ...l, text: m.text, source: m.source } : l)),
       };
+
+    case "world.flag": {
+      // 구조화 상태만. 이 메시지는 방 묘사를 갈아치우라는 뜻이 '아니다' —
+      // 새 묘사는 다음 입장부터다 (CLAUDE.md 63줄). 화면에 뜨는 문장은
+      // 뒤따르는 log{kind:"world"} 가 싣는다.
+      const world = new Map(st.world);
+      world.set(m.flag.key, m.flag);
+      return { ...st, world };
+    }
 
     case "ping":
       return st; // pong 은 소켓 계층이 답한다

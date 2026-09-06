@@ -19,6 +19,7 @@
 import type { RoomId } from "../../shared/ids";
 import type { TextSource } from "../../shared/protocol";
 import type { RoomTextRenderer } from "../../shared/narration";
+import type { JsonScalar } from "../../shared/json";
 import type { World } from "../engine/world";
 import type { Queries } from "../db/queries";
 import { makeQueue, type QueueOptions, type QueueStats } from "../narration/queue";
@@ -40,6 +41,11 @@ export interface UpgradeService {
   /** 방금 내보낸 서술 줄을 승급 대상으로 등록한다.
    *  이미 llm/authored 면 아무 일도 하지 않는다 (규칙 2: 생성은 딱 한 번). */
   watch(roomId: RoomId, stateHash: string, source: TextSource, s: Session, logId: string): void;
+  /** 지켜보는 사람 없이 생성만 예약한다 (3단계 사전 생성).
+   *  아무도 아직 그 문장을 화면에 갖고 있지 않으므로 교체할 대상이 없다 —
+   *  다음 입장이 '확정본 즉시' 가 되게 만드는 것이 목적이다.
+   *  반환값은 '이 호출로 새로 큐에 들어갔는가'. */
+  enqueue(roomId: RoomId, stateHash: string): boolean;
   /** 큐가 빌 때까지 — 테스트와 우아한 종료용. */
   idle(): Promise<void>;
   stop(): void;
@@ -72,21 +78,37 @@ export function makeUpgradeService(
     const room = world.room(roomId);
     if (!room) throw new Error(`unknown room ${roomId}`);
 
-    // 이미 승급됐는지 다시 본다 — 큐에 들어간 뒤 다른 경로가 기록했을 수 있다.
-    const before = q.getRoomText.get(roomId, stateHash);
-    if (before && before.source !== "fallback") {
+    const before = q.getRoomTextRow.get(roomId, stateHash);
+    // 행이 아직 없다 = 그 (방, 상태) 의 텍스트가 실체화된 적이 없다.
+    // 오류가 아니다: 첫 입장 때 평범한 경로가 만든다. 승급할 대상이 없을 뿐이라
+    // 여기서 렌더러를 부르면 UPDATE 가 0행을 맞추고 재조회도 비어 헛돈다.
+    if (!before) return;
+    // 이미 승급됐는지 본다 — 큐에 들어간 뒤 다른 경로가 기록했을 수 있다.
+    if (before.source !== "fallback") {
       publish(key, before.text, before.source as TextSource);
       return;
     }
+
+    /* ★ 플래그는 '지금의 월드' 가 아니라 '그 행의 preimage' 에서 읽는다.
+     *
+     * world.projectFlags(roomId) 를 쓰면 승급이 큐에 앉아 있는 동안 플래그가
+     * 바뀐 경우 (3단계 이벤트) 두 가지가 한꺼번에 깨진다:
+     *   1) 그 방에 서 있는 플레이어의 줄이 '새 상태' 문장으로 갈아치워진다
+     *      — charter 63줄 위반. 그 줄은 '들어갔을 때의 상태' 묘사여야 한다.
+     *   2) 더 나쁜 것: 옛 state_hash 로 키잉된 행에 '새 플래그로 만든' 텍스트가
+     *      들어간다. flags_json(= state_hash 의 preimage) 과 text 가 어긋나
+     *      캐시가 조용히 오염되고, 플래그를 되돌리면 엉뚱한 문장이 복구된다.
+     *
+     * room_text.flags_json 이 바로 그 행을 키잉한 preimage 다. 거기서 읽으면
+     * 시간이 얼마나 흘렀든 텍스트와 키가 구성상 일치한다. */
+    const flags = Object.entries(JSON.parse(before.flags_json) as Record<string, JsonScalar>);
 
     const result = await render({
       roomId,
       stateHash,
       seed: room.seed,
       seedId: room.seedId,
-      // 해시를 만든 그 투영을 그대로 넘긴다. 승급 시점의 플래그를 다시 읽으면
-      // 그 사이 플래그가 바뀐 경우 해시와 내용이 어긋난다.
-      flags: world.projectFlags(roomId),
+      flags,
     });
 
     // 렌더러가 도는 동안 서버가 내려갔을 수 있다. DB 를 만지기 전에 다시 본다.
@@ -130,6 +152,8 @@ export function makeUpgradeService(
   const queue = makeQueue(upgrade, opts);
 
   return {
+    enqueue: (roomId, stateHash) => queue.push(`${roomId}#${stateHash}`),
+
     watch(roomId, stateHash, source, s, logId) {
       // 이미 확정된 문장은 교체할 것이 없다.
       if (source !== "fallback") return;

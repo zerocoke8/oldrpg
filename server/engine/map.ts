@@ -66,13 +66,27 @@ export const SENSITIVE: Readonly<Record<string, readonly string[]>> = {
 
 export const MAX_SENSITIVE = 4;
 
-/** 1단계에 존재하는 모든 월드 플래그. 켜는 코드 경로는 4단계(전투)에 생긴다.
- *  지금 선언해 두는 이유: state_hash 경로가 LLM 없이 '진짜 데이터'로 돌아야
- *  2단계의 캐시 키와 3단계의 재렌더링 트리거가 '새 코드'가 아니라
- *  '이미 도는 코드'가 되기 때문이다. */
-export const WORLD_FLAG_DEFAULTS: Readonly<Record<string, string>> = {
-  guardian_slain: "false", // JSON 스칼라의 정규 표기
+export interface WorldFlagDef {
+  /** JSON 스칼라의 정규 표기. world_flags.value 에 이 문자열이 그대로 들어간다. */
+  readonly default: string;
+  /** 클라이언트에 값을 공개할 것인가.
+   *  플래그는 쉽게 스포일러가 된다(secret_door_found 같은 것). 공개는 옵트인이고,
+   *  꺼진 것은 snapshot.world 와 world.flag 에 아예 나가지 않는다. */
+  readonly broadcast: boolean;
+}
+
+/** 존재하는 모든 월드 플래그. 값을 바꾸는 것은 3단계의 이벤트 경로이고,
+ *  '무엇이 그 값을 바꾸는가' 는 4단계(전투)에서 채워진다. */
+export const WORLD_FLAGS: Readonly<Record<string, WorldFlagDef>> = {
+  guardian_slain: { default: "false", broadcast: true },
 };
+
+/** 시더가 쓰는 key -> default 사영. */
+export const WORLD_FLAG_DEFAULTS: Readonly<Record<string, string>> = Object.fromEntries(
+  Object.entries(WORLD_FLAGS).map(([k, v]) => [k, v.default]),
+);
+
+export const isBroadcastFlag = (key: string): boolean => WORLD_FLAGS[key]?.broadcast === true;
 
 export const tileAt = (x: number, y: number): string => {
   if (x < 0 || y < 0 || x >= W || y >= H) return "#";

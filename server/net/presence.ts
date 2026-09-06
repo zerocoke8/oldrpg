@@ -13,13 +13,20 @@
 
 import type { Dir, Pos, RoomId } from "../../shared/ids";
 import { OPPOSITE, roomIdOf } from "../../shared/ids";
-import type { PresenceEntry, RoomView, Snapshot } from "../../shared/protocol";
+import type { PresenceEntry, RoomView, Snapshot, WorldFlagView } from "../../shared/protocol";
 import { lines } from "../narration/lines";
 import { regionView } from "../engine/map";
 import type { Emit } from "./emit";
 import { canSee, type Registry, type Session } from "./session";
 
-export function makePresence(reg: Registry, emit: Emit) {
+export function makePresence(
+  reg: Registry,
+  emit: Emit,
+  /** 공개된 월드 플래그. 스냅샷이 실어야 재접속한 클라이언트가 접속 전에
+   *  일어난 일을 알 수 있다 — world.flag 델타만으로는 영영 모른다.
+   *  주입인 이유: presence 는 world/events 를 import 하지 않는다 (순환). */
+  publicFlags: () => WorldFlagView[] = () => [],
+) {
   const others = (self: Session): Session[] =>
     reg.all().filter((s) => s.playerId !== self.playerId);
 
@@ -56,6 +63,7 @@ export function makePresence(reg: Registry, emit: Emit) {
       region: regionView(),
       room: roomView(self.pos, self),
       presence: visiblePresence(self),
+      world: publicFlags(),
     };
   }
 

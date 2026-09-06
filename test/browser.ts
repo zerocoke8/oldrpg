@@ -59,8 +59,11 @@ async function main() {
   const server = boot(DB, WS_PORT, {
     llmRenderer: async (req: RoomTextRequest) => {
       await sleep(LLM_MS);
+      const calm = req.flags.some(([k, v]) => k === "guardian_slain" && v === true)
+        ? " 공기가 한결 가벼워졌다."
+        : "";
       return {
-        text: `${req.seed}. 어딘가에서 물방울이 떨어지는 소리가 길게 이어진다.`,
+        text: `${req.seed}. 어딘가에서 물방울이 떨어지는 소리가 길게 이어진다.${calm}`,
         source: "llm" as const,
         model: "fake-model",
         promptVersion: "room.v1.ko",
@@ -191,6 +194,45 @@ async function main() {
     JSON.stringify(late));
   check("'새로 생성됨' 뱃지가 켜졌다", (await badges()) > badgesBefore);
   await c.screenshot({ path: join(SHOTS, "7-교체-후.png") });
+
+  console.log("\n⑨ 3단계 — 세계가 바뀌어도 서 있는 화면을 갈아치우지 않는다");
+  // c 는 (4,3) 에 있다 — guardian_slain 을 선언하지 '않은' 방.
+  // a 를 영향권으로 보낸다: (3,3) -> (2,3) -> (1,3) -> (1,4)
+  for (const k of ["ArrowLeft", "ArrowLeft", "ArrowDown"]) {
+    await a.keyboard.press(k);
+    await sleep(250);
+  }
+  await sleep(LLM_MS + 600);
+  const aBefore = await logText(a);
+  const aBeforeLines = aBefore.length;
+  check("A 가 영향권(좁고 가파른 내리막)에 있다",
+    aBefore.some((t) => t.includes("좁고 가파른 내리막")), JSON.stringify(aBefore.slice(-2)));
+
+  server.events.setFlag("guardian_slain", true);
+  await sleep(600);
+
+  const aAfter = await logText(a);
+  const cAfter = await logText(c);
+  check("영향권의 A 는 '주변의 공기가 달라졌다'",
+    aAfter.some((t) => t.includes("주변의 공기가 달라졌다")), JSON.stringify(aAfter.slice(-2)));
+  check("비영향권의 C 는 '멀리서 무언가 무너지는 소리'",
+    cAfter.some((t) => t.includes("멀리서 무언가 무너지는")), JSON.stringify(cAfter.slice(-2)));
+  check("★ A 의 방 묘사는 그대로다 — 이벤트 한 줄만 늘었다",
+    aAfter.length === aBeforeLines + 1, `${aBeforeLines} -> ${aAfter.length}`);
+  check("상태창에 '파수꾼 처치됨' 이 떴다",
+    (await a.locator("text=파수꾼 처치됨").count()) > 0);
+  await a.screenshot({ path: join(SHOTS, "8-세계가-바뀌었다.png") });
+
+  // 다음 입장부터 새 묘사
+  await a.keyboard.press("ArrowUp");
+  await sleep(300);
+  await a.keyboard.press("ArrowDown");
+  await sleep(500);
+  const aReentry = await logText(a);
+  check("다시 들어가니 새 상태의 묘사가 나온다",
+    aReentry.some((t) => t.includes("좁고 가파른 내리막") && t.includes("가벼")),
+    JSON.stringify(aReentry.slice(-3)));
+  await a.screenshot({ path: join(SHOTS, "9-다음-입장부터.png") });
 
   await browser.close();
   await vite.close();

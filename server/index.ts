@@ -16,6 +16,7 @@ import { makeLlmRenderer } from "./narration/llm";
 import { loadMoods } from "./narration/prompts";
 import { makeRoomTextService } from "./world/roomText";
 import { makeUpgradeService } from "./world/upgrade";
+import { makeEvents } from "./world/events";
 import { makeEmit } from "./net/emit";
 import { makePresence } from "./net/presence";
 import { Registry } from "./net/session";
@@ -25,10 +26,12 @@ import type { ErrorEvent } from "../shared/protocol";
 import type { RoomTextRenderer } from "../shared/narration";
 import type { QueueOptions } from "./narration/queue";
 import type { UpgradeService } from "./world/upgrade";
+import type { EventService } from "./world/events";
 
 /** 승급 경로가 없을 때 (API 키 없음). 아무것도 하지 않는다. */
 const NO_UPGRADES: UpgradeService = {
   watch: () => {},
+  enqueue: () => false,
   idle: () => Promise.resolve(),
   stop: () => {},
   stats: () => ({ pending: 0, running: 0, done: 0, failed: 0, givenUp: 0, watching: 0 }),
@@ -71,7 +74,9 @@ export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
 
   const reg = new Registry();
   const emit = makeEmit(reg);
-  const presence = makePresence(reg, emit);
+  /* presence 는 world/events 를 import 하지 않는다 (순환). 늦게 바인딩한다. */
+  let events: EventService | null = null;
+  const presence = makePresence(reg, emit, () => events?.publicFlags() ?? []);
 
   /* ── 서술 레이어 ────────────────────────────────────────────────────
      폴백 렌더러는 '플레이어의 경로' 에 있고, LLM 렌더러는 '백그라운드 큐' 에만
@@ -89,6 +94,8 @@ export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
     ? makeUpgradeService(world, q, llmRenderer, emit, clock, () => shuttingDown, options.queue ?? {})
     : // 키가 없으면 승급 경로가 통째로 없다. 게임은 1단계와 똑같이 돈다.
       NO_UPGRADES;
+
+  events = makeEvents(world, q, reg, emit, moods, roomText, upgrades, clock);
 
   const ctx: Ctx = {
     reg,
@@ -114,10 +121,36 @@ export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
       : `[mud] 서술: 결정론 폴백만. ANTHROPIC_API_KEY 가 없다 — .env 를 만들면 LLM 이 켜진다.`,
   );
 
+  /* 3단계를 손으로 몰아 보는 개발용 입구.
+     4단계 전투가 events.setFlag() 를 부르게 되면 이건 그냥 편의 도구로 남는다.
+     프로토콜 표면이 0 이라 (액션 유니온에 디버그 동사를 넣지 않았다)
+     클라이언트에는 아무 영향이 없다.
+       서버 콘솔에:  flag guardian_slain true
+     MUD_DEV=1 일 때만 붙는다. */
+  if (process.env.MUD_DEV === "1" && process.stdin.isTTY) {
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (chunk) => {
+      for (const line of String(chunk).split("\n")) {
+        const m = /^\s*flag\s+(\S+)\s+(\S+)\s*$/.exec(line);
+        if (!m) continue;
+        try {
+          const value = JSON.parse(m[2]!) as Parameters<EventService["setFlag"]>[1];
+          const r = events!.setFlag(m[1]!, value);
+          console.log(`[dev] flag ${m[1]} = ${m[2]}`, JSON.stringify(r));
+        } catch (err) {
+          console.error("[dev]", err instanceof Error ? err.message : err);
+        }
+      }
+    });
+    process.stdin.unref();
+    console.log(`[dev] 콘솔에 "flag guardian_slain true" 로 세계를 바꿀 수 있다`);
+  }
+
   return {
     ctx,
     wss,
     upgrades,
+    events,
     close: () =>
       new Promise<void>((resolve) => {
         shuttingDown = true;

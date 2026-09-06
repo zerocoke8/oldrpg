@@ -56,14 +56,14 @@ export function makeRoomTextService(
     const hit = q.getRoomText.get(roomId, stateHash);
     if (hit) return { text: hit.text, source: hit.source as RoomTextResult["source"], stateHash };
 
+    /* 투영과 그 직렬화를 await '전에' 붙잡는다. 렌더러가 도는 동안 플래그가
+       바뀌면(3단계 이벤트) 아래에서 다시 읽은 flags_json 이 이 stateHash 의
+       preimage 가 아니게 되어, 행의 키와 내용이 어긋난다. */
+    const flags = world.projectFlags(roomId);
+    const flagsJson = JSON.stringify(Object.fromEntries(flags));
+
     // 2. 생성 (narration/ 은 DB 를 만질 수 없다 — 결과를 '반환'만 한다)
-    const result = await render({
-      roomId,
-      stateHash,
-      seed: room.seed,
-      seedId: room.seedId,
-      flags: world.projectFlags(roomId),
-    });
+    const result = await render({ roomId, stateHash, seed: room.seed, seedId: room.seedId, flags });
 
     // 3. 기록. PK 충돌은 오류가 아니라 "남이 먼저 썼다" 이므로 무조건 재조회한다.
     //    이 두 줄이 규칙 2("생성은 딱 한 번")의 정확성 부분이다.
@@ -73,7 +73,7 @@ export function makeRoomTextService(
       state_hash: stateHash,
       text: result.text,
       source: result.source,
-      flags_json: world.flagsJson(roomId),
+      flags_json: flagsJson,
       model: result.model,
       prompt_version: result.promptVersion,
       now,

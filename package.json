@@ -12,8 +12,9 @@
     "lint": "eslint . --ext .ts,.tsx",
     "test": "tsx test/acceptance.ts",
     "test:browser": "tsx test/browser.ts",
-    "test:all": "npm run test && npm run test:pipeline && npm run test:browser",
-    "test:pipeline": "tsx test/pipeline.ts"
+    "test:all": "npm run test && npm run test:pipeline && npm run test:events && npm run test:browser",
+    "test:pipeline": "tsx test/pipeline.ts",
+    "test:events": "tsx test/events.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.124.0",

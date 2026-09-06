@@ -24,6 +24,7 @@
  */
 
 import type { PlayerId, RegionId, RoomId, Dir, Pos } from "./ids";
+import type { JsonScalar } from "./json";
 
 /** 메시지 유니온에 '깨는 변경'이 있을 때만 올린다. 새 이벤트 타입 추가는
  *  불변식 (3) 덕분에 버전을 올리지 않는다.
@@ -166,6 +167,21 @@ export interface PresenceEntry {
   pos: Pos;
 }
 
+/** 클라이언트에 공개되는 월드 플래그 하나.
+ *
+ *  '모든' 플래그가 여기 오지는 않는다 — engine/map.ts 의 WORLD_FLAGS 에서
+ *  broadcast: true 로 선언한 것만이다. 플래그는 쉽게 스포일러가 된다
+ *  (secret_door_found 같은 것), 그래서 공개는 옵트인이다.
+ *
+ *  label 은 '서버' 가 만든다. 클라이언트가 key 로 문구를 조립하기 시작하면
+ *  불변식 (1)의 예외가 하나 더 생기고, 3·4단계가 클라이언트 배포를 요구하게 된다. */
+export interface WorldFlagView {
+  key: string;
+  value: JsonScalar;
+  /** 표시용 문구. 꺼진 상태처럼 표시할 것이 없으면 null. */
+  label: string | null;
+}
+
 /** 액션이 적용되지 않은 이유. 기계 판독용이고 프로즈를 싣지 않는다
  *  (프로즈는 log 로 온다).
  *
@@ -202,6 +218,7 @@ export type LogKind =
   | "sys" // 엔진 피드백: 벽 부딪힘, 안내 배너
   | "presence" // "○○ 님이 들어왔다"
   | "say" // 플레이어 발화 (speaker 필드가 반드시 있다)
+  | "world" // 세계가 바뀌었다 — "멀리서 무언가 무너지는 소리가 들린다"
   | "good" // 4단계 결과용. 프로토타입 색상표와 1:1로 맞춰 두어
   | "bad"; // 나중에 클라이언트 색상 테이블을 고칠 일이 없게 한다.
 
@@ -236,6 +253,10 @@ export interface Snapshot {
   /** 지금 나에게 보이는 다른 플레이어 전원(자기 제외).
    *  1단계에서 '보인다' = '세션이 살아 있고(유예 포함) 같은 region 에 있다'. */
   presence: PresenceEntry[];
+  /** 공개된 월드 플래그의 현재 값. 재접속한 클라이언트가 세계의 상태를
+   *  복원할 수 있어야 하므로 스냅샷이 실어야 한다 — world.flag 델타만
+   *  있으면 접속 전에 일어난 일을 영영 모른다. */
+  world: WorldFlagView[];
 }
 
 /** 액션 하나당 정확히 하나. 확인이자 거절이자 재조정 반송자다 —
@@ -349,6 +370,18 @@ export interface LogReplace {
   source: TextSource;
 }
 
+/** 세계가 바뀌었다. 구조화 데이터만 — 문장은 뒤따르는 log{kind:"world"} 가 싣는다.
+ *
+ *  ★ 이 이벤트는 '방 묘사를 갈아치우라' 는 뜻이 아니다. charter 63줄:
+ *    "지금 그 방에 서 있는 플레이어의 화면을 갈아치우지 않는다."
+ *    새 텍스트는 '다음 입장부터' 적용된다 (또는 플레이어가 직접 살펴볼 때).
+ *    그래서 3단계는 log.replace 를 절대 쓰지 않는다 —
+ *    log.replace 는 provisional -> 확정 전용이다. */
+export interface WorldFlagEvent {
+  t: "world.flag";
+  flag: WorldFlagView;
+}
+
 export interface ServerPing {
   t: "ping";
   nonce: number;
@@ -379,6 +412,10 @@ export type ServerMsg =
   | RoomLeave
   | LogEvent
   | LogReplace
+  | WorldFlagEvent
   | ServerPing
   | ErrorEvent;
-// 서버->클라이언트 14종, 클라이언트->서버 3종(액션 variant 5종). 이게 전부다.
+// 서버->클라이언트 15종, 클라이언트->서버 3종(액션 variant 5종). 이게 전부다.
+//
+// world.flag 를 추가하면서 PROTOCOL_VERSION 을 올리지 않았다: 불변식 (3)에
+// 따라 옛 클라이언트는 모르는 t 를 무시하고 계속 돈다. 깨는 변경이 아니다.

@@ -61,11 +61,18 @@ export function loadRoomPrompt(version = "room.v1.ko"): RoomPrompt {
   };
 }
 
+/** 플래그 하나가 프로즈에 하는 일 전부. prompts/moods/<flag>.md 한 파일. */
 export interface Mood {
-  /** LLM 에게 주는 톤 지시. */
+  /** LLM 에게 주는 톤 지시 (2단계). */
   readonly prompt: string;
-  /** LLM 없이(또는 실패 시) 문장 뒤에 붙는 결정론적 한 문장. */
+  /** LLM 없이(또는 실패 시) 방 묘사 뒤에 붙는 결정론적 한 문장. */
   readonly fallback: string;
+  /** 켜졌을 때 상태창에 뜨는 표시 문구. 없으면 상태창에 뜨지 않는다. */
+  readonly label: string | null;
+  /** 플래그가 켜지는 '순간' 영향받는 방에 서 있는 사람에게 (3단계). */
+  readonly near: string | null;
+  /** 같은 순간, 그 밖의 사람들에게 (3단계). */
+  readonly far: string | null;
 }
 
 /** prompts/moods/<flag>.md 를 전부 읽는다. 파일이 없는 플래그는 톤이 없는 것이고,
@@ -79,6 +86,9 @@ export function loadMoods(): Map<string, Mood> {
     out.set(f.replace(/\.md$/, ""), {
       prompt: s.prompt ?? "",
       fallback: s.fallback ?? "",
+      label: s.label || null,
+      near: s.near || null,
+      far: s.far || null,
     });
   }
   return out;

@@ -25,6 +25,7 @@ const LOG_COLOR: Record<string, string> = {
   narr: C.text,
   sys: C.dim,
   presence: C.gold,
+  world: "#b98cd6",
   say: C.other,
   good: C.green,
   bad: C.red,
