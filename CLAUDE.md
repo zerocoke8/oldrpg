@@ -102,18 +102,38 @@ player_items   player_id, item_id, qty                     -- 소지품. 0개는
 ## 디렉터리
 
 ```
+content/
+  balance/     적·스킬·아이템·플레이어 수치 (JSON). 사람이 고치는 곳
 server/
-  engine/      맵, 전투, 이동 — LLM을 import 하지 않는다
+  engine/      맵, 전투, 이동 — LLM도 DB도 파일도 import 하지 않는다
+  content/     content/balance/ 를 읽어 검증한다. engine 의 계약으로 바꿔서 넘긴다
   narration/   LLM 호출, 프롬프트, 큐
-  db/          스키마, 쿼리
-  net/         WebSocket 핸들러
+  db/          스키마, 쿼리, 마이그레이션
+  net/         WebSocket 핸들러, 정적 파일
+  world/       engine + db + narration + net 을 조합하는 곳
+  tools/       선생성 같은 운영 도구
 client/
   ui/          미니맵, 로그, 커맨드 윈도우
-  input/       키보드/터치 → 액션 객체
+  input/       키보드/터치/자유텍스트/메뉴 → 액션 객체
 shared/        액션 타입, 메시지 타입
 ```
 
 `engine/`이 `narration/`을 import 하는 코드가 생기면 규칙 1이 깨진 것이다.
+
+### 무엇이 코드고 무엇이 데이터인가
+
+수치는 바꿔도 공짜다 — 되돌릴 수 있고 LLM 재생성을 부르지 않는다. 그래서
+`content/balance/` 의 JSON 이고, 고치고 서버만 다시 띄우면 된다.
+
+씨앗·맵 구조·`sensitive_flags` 는 반대다. 씨앗을 고치면 `seed_id` 가 바뀌어
+**재생성 비용이 발생하고**, `sensitive_flags` 를 하나 늘리면 그 방의 상태 수가
+2배가 된다. 그건 리뷰를 거쳐야 하므로 코드에 남는다.
+
+규칙(치명타 계산, 어그로, 큐 한 자리)은 데이터로 표현할 수 없다. 표현하려
+들면 스크립트 언어가 된다.
+
+`engine/` 은 파일을 읽지 않는다. `server/content/` 가 읽어 검증하고, `index.ts`
+가 주입한다 — 난수·시계·렌더러와 똑같은 방식이다.
 
 ---
 

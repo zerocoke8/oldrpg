@@ -38,6 +38,7 @@ module.exports = {
           { group: ["**/net/**", "**/world/**"],        message: "engine/ 은 전송도 조합도 모른다." },
           { group: ["better-sqlite3", "ws"],            message: "engine/ 은 I/O 라이브러리를 import 하지 않는다." },
           { group: ["@anthropic-ai/*"],                 message: "규칙 1 위반: engine/ 이 LLM SDK 를 직접 부르면 모델 출력이 게임 상태를 바꾸는 경로가 생긴다. 모델 호출은 narration/ 에만 있다." },
+          { group: ["node:fs", "node:fs/*", "fs", "**/content/**"], message: "engine/ 은 I/O 를 모른다. 밸런스 같은 데이터는 server/content/ 가 읽어서 '주입' 한다 — 난수·시계와 같은 방식이다." },
         ]}],
       },
     },
@@ -50,6 +51,18 @@ module.exports = {
           { group: ["**/db/**", "*/db"],         message: "규칙 1 위반: narration/ 이 DB 핸들을 잡으면 LLM 출력이 상태를 바꾸는 경로가 생긴다." },
           { group: ["**/net/**", "**/world/**"],  message: "narration/ 은 텍스트를 반환할 뿐 방출하지 않는다." },
           { group: ["better-sqlite3", "ws"],      message: "narration/ 은 DB/소켓 라이브러리를 import 하지 않는다." },
+        ]}],
+      },
+    },
+    {
+      /* ── content/ 는 데이터를 읽어 engine/ 의 계약(Balance)으로 바꾸는 곳이다.
+         읽기만 한다 — DB 도 소켓도 모른다. 그래야 "밸런스가 게임 상태를 만지는"
+         경로가 생기지 않는다. */
+      files: ["server/content/**/*.ts"],
+      rules: {
+        "no-restricted-imports": ["error", { patterns: [
+          { group: ["**/db/**", "**/net/**", "**/world/**", "**/narration/**"], message: "content/ 는 데이터를 읽어 계약으로 바꾸기만 한다. 조합은 index.ts 가 한다." },
+          { group: ["better-sqlite3", "ws", "@anthropic-ai/*"],                  message: "content/ 는 I/O 라이브러리를 import 하지 않는다 (파일 읽기만 한다)." },
         ]}],
       },
     },

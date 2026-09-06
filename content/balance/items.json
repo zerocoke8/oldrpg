@@ -1,0 +1,4 @@
+{
+  "minor_potion": { "name": "낡은 물약",      "kind": "potion", "heal": 14 },
+  "warden_shard": { "name": "파수꾼의 파편",  "kind": "trophy", "heal": null }
+}

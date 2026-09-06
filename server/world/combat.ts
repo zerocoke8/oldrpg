@@ -25,7 +25,7 @@
 import type { PlayerId, RoomId } from "../../shared/ids";
 import { roomIdOf } from "../../shared/ids";
 import type { CombatView, EnemyView, SkillView } from "../../shared/protocol";
-import { ENEMIES, PLAYER_SWING_MS, SKILLS, SKILL_LIST, type EnemyDef } from "../engine/enemies";
+import type { Balance, EnemyDef } from "../engine/enemies";
 import {
   pickTarget,
   resolveEnemySwing,
@@ -34,8 +34,7 @@ import {
   type Effect,
 } from "../engine/combat";
 import { makeRng, type Rng } from "../engine/rng";
-import { SPAWN } from "../engine/map";
-import { itemDef } from "../engine/items";
+import { ENEMY_AT, SPAWN } from "../engine/map";
 import type { Queries } from "../db/queries";
 import { lines } from "../narration/lines";
 import type { Emit } from "../net/emit";
@@ -115,12 +114,14 @@ export function makeCombat(
   emit: Emit,
   events: EventService,
   inventory: InventoryService,
+  /** 수치는 데이터가 소유한다 (content/balance/). 시계·시드와 같은 주입이다. */
+  balance: Balance,
   clock: () => number,
   opts: CombatOptions = {},
 ): CombatService {
   const now = opts.now ?? (() => Number(process.hrtime.bigint() / 1_000_000n));
   const tickMs = opts.tickMs ?? TICK_MS;
-  const respawnMs = opts.respawnMs ?? RESPAWN_MS;
+  const respawnMs = opts.respawnMs ?? balance.player.respawnMs;
   let seedCounter = 1;
   const seedFor = opts.seedFor ?? (() => seedCounter++ * 2654435761);
 
@@ -146,7 +147,9 @@ export function makeCombat(
 
   function enemyIn(roomId: RoomId): EnemyDef | null {
     const coord = roomId.slice(roomId.indexOf(":") + 1);
-    const def = ENEMIES[coord];
+    // 배치(맵)와 정의(밸런스)가 두 단계로 갈라져 있다. 짝은 부팅에서 검증된다.
+    const id = ENEMY_AT[coord];
+    const def = id ? balance.enemies[id] : undefined;
     if (!def) return null;
     // 이미 죽은 적은 없는 것과 같다. 죽음의 '소유자' 가 둘로 나뉜다:
     //   보스        — 월드 플래그 (영속. 세계가 바뀐 사건이다)
@@ -183,7 +186,7 @@ export function makeCombat(
   });
 
   function skillViews(f: Fighter, t: number): SkillView[] {
-    return SKILL_LIST.map((sk) => ({
+    return balance.skillList.map((sk) => ({
       id: sk.id,
       name: sk.name,
       readyInMs: Math.max(0, (f.cooldowns.get(sk.id) ?? 0) - t),
@@ -308,8 +311,8 @@ export function makeCombat(
     const f: Fighter = {
       playerId: s.playerId,
       engaged: true,
-      nextActAt: now() + PLAYER_SWING_MS,
-      swingMs: PLAYER_SWING_MS,
+      nextActAt: now() + balance.player.swingMs,
+      swingMs: balance.player.swingMs,
       queued: null,
       cooldowns: new Map(),
       guardPercent: 0,
@@ -328,7 +331,7 @@ export function makeCombat(
   }
 
   function skill(s: Session, skillId: string): string | null {
-    const def = SKILLS[skillId];
+    const def = balance.skills[skillId];
     if (!def) return lines.unknownSkill;
     const roomId = inCombat.get(s.playerId);
     const c = roomId ? combats.get(roomId) : undefined;
@@ -370,7 +373,7 @@ export function makeCombat(
     if (s.hp <= 0) return lines.defeated;
 
     f.queued = { kind: "item", id: itemId };
-    emit.log(s, "sys", lines.itemQueued(itemDef(itemId)?.name ?? itemId));
+    emit.log(s, "sys", lines.itemQueued(balance.items[itemId]?.name ?? itemId));
     pushUpdate(c);
     return null;
   }
@@ -470,6 +473,7 @@ export function makeCombat(
           s.maxHp,
           skillId,
           c.rng,
+          balance,
         );
         if (skillId && res.skill) f.cooldowns.set(skillId, t + res.skill.cooldownMs);
 

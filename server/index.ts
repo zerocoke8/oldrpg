@@ -10,6 +10,7 @@ import { openDb } from "./db/open";
 import { migrate } from "./db/migrate";
 import { makeQueries } from "./db/queries";
 import { loadFlags, seed } from "./db/seed";
+import { loadBalance } from "./content/balance";
 import { World } from "./engine/world";
 import { makeStaticNpcRenderer, makeStaticRenderer } from "./narration/static";
 import { makeLlmNpcRenderer, makeLlmRenderer } from "./narration/llm";
@@ -32,6 +33,7 @@ import type { NpcBrief } from "../shared/protocol";
 import type { Session } from "./net/session";
 import type { ErrorEvent } from "../shared/protocol";
 import type { NpcLineRenderer, RoomTextRenderer } from "../shared/narration";
+import type { Balance } from "./engine/enemies";
 import type { QueueOptions } from "./narration/queue";
 import type { UpgradeService } from "./world/upgrade";
 import type { EventService } from "./world/events";
@@ -58,6 +60,9 @@ const DB_PATH = process.env.MUD_DB ?? "mud.db";
 const PORT = Number(process.env.MUD_PORT ?? 8787);
 
 export interface BootOptions {
+  /** 밸런스를 갈아끼운다. 테스트가 수치를 손에 쥐는 자리이고, 지정하지 않으면
+   *  content/balance/ 를 읽는다 (MUD_BALANCE 로도 갈아끼울 수 있다). */
+  balance?: Balance;
   /** 실물 모델 호출을 통째로 끈다 ("off"). 주입된 가짜 렌더러는 그대로 쓴다.
    *
    *  ★ 왜 필요한가: 렌더러를 '안 꽂은 것' 이 곧 '네트워크로 나가는 것' 이었다.
@@ -81,10 +86,14 @@ export interface BootOptions {
 export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
   const clock = () => Date.now();
 
+  /* ★ 밸런스를 가장 먼저 읽는다. 잘못된 값이면 DB 를 열기도 전에 죽는 편이
+     낫다 — 조용히 이상한 세계로 도는 것보다. */
+  const balance = options.balance ?? loadBalance();
+
   const db = openDb(dbPath);
   migrate(db, clock());
   const q = makeQueries(db);
-  const { seededRooms, reaped } = seed(db, q, clock());
+  const { seededRooms, reaped } = seed(db, q, balance, clock());
 
   const world = new World();
   world.load(loadFlags(q)); // DB -> 메모리. engine/ 이 db/ 를 import 하지 않는 이유.
@@ -102,7 +111,7 @@ export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
   let combat: CombatService | null = null;
   let npcsIn: ((roomId: RoomId) => NpcBrief[]) | null = null;
   /* 가방은 메모리 사본이 없어 DB 만 읽으면 되므로, 늦은 바인딩이 필요 없다. */
-  const inventory = makeInventory(q, reg, emit, clock, (fn) => db.transaction(fn)());
+  const inventory = makeInventory(q, reg, emit, balance, clock, (fn: () => void) => db.transaction(fn)());
   const presence = makePresence(
     reg,
     emit,
@@ -153,7 +162,7 @@ export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
      presence 보다 뒤에 만들어지므로 npcsIn 은 위에서 늦게 바인딩한다. */
   const dialogue = makeDialogue(world, npcText, upgrades, emit);
   npcsIn = dialogue.npcsIn;
-  const combatSvc = makeCombat(q, reg, emit, events, inventory, clock, options.combat ?? {});
+  const combatSvc = makeCombat(q, reg, emit, events, inventory, balance, clock, options.combat ?? {});
   combat = combatSvc;
 
   const ctx: Ctx = {
@@ -167,6 +176,7 @@ export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
     combat: combatSvc,
     dialogue,
     inventory,
+    balance,
     clock,
     isShuttingDown: () => shuttingDown,
   };
@@ -239,6 +249,7 @@ export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
     events,
     combat: combatSvc,
     npcText,
+    balance,
     close: () =>
       new Promise<void>((resolve) => {
         shuttingDown = true;

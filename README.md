@@ -67,6 +67,7 @@ npm run test:events   # 3단계: 플래그 -> 영향 범위 -> 재생성 (44개 
 npm run test:combat   # 4a단계: 실시간 전투 · 리스폰 · 사망/부활 회귀 (72개 검사)
 npm run test:npc      # 4b단계: 대사 생성·주제 권한·재렌더링 (46개 검사)
 npm run test:items    # 인벤토리: 마이그레이션·전리품·사용·영속 (50개 검사)
+npm run test:balance  # 밸런스 계약: 검증·주입 (17개 검사)
 npm run test:deploy   # 배포 배관: 정적 서빙·경로탈출·IP예산·선생성 (34개 검사)
 npm run test:browser  # 진짜 크로미움 — 데스크톱 창 3개 + 모바일(390x844) 1개
 npm run test:all      # lint + typecheck + 위 전부
@@ -784,6 +785,59 @@ rollDrops(enemy, contributions, rng): Award[]
 둘 다 무조건 돌렸더니 `qty=2` 에서 UPDATE 가 1로 줄이고 곧바로 DELETE 가
 '이제 1이니까' 지워서, **한 번 마셨는데 두 개가 사라졌다.** 지우기를 먼저 두고
 `||` 로 이어 둘 중 하나만 돌게 고쳤다.
+
+---
+
+## 밸런스는 데이터, 씨앗은 코드
+
+```
+content/balance/{player,enemies,skills,items}.json     ← 사람이 고치는 곳
+server/content/balance.ts                              ← 읽고 검증한다 (zod)
+server/engine/enemies.ts                               ← 타입(계약)만 있다
+```
+
+**나누는 기준은 "고치는 비용"이다.**
+
+| | 고치면 | 어디에 |
+|---|---|---|
+| 수치 (HP·피해·쿨다운·드랍 확률·회복량) | 공짜. 되돌릴 수 있다 | **JSON** |
+| 씨앗 (방 묘사 원본, 페르소나) | `seed_id` 가 바뀌어 **LLM 재생성** | 코드 |
+| 맵 구조, 적 배치 | 방이 생기거나 사라진다 | 코드 |
+| `sensitive_flags` | 그 방의 상태 수가 2배 (2^n) | 코드 |
+| 규칙 (치명타·어그로·큐) | — | 코드. 데이터로 쓰면 스크립트 언어가 된다 |
+
+### `engine/` 은 파일을 읽지 않는다
+
+`.eslintrc.cjs` 가 `engine/` → `node:fs` 와 `engine/` → `content/` 를 막는다
+(일부러 어겨서 확인했다). 엔진은 결정론이어야 하고 I/O 를 모른다 — 시드 PRNG·
+시계·렌더러와 똑같이 **주입**받는다.
+
+```ts
+resolvePlayerSwing(playerId, enemy, enemyHp, playerHp, playerMaxHp, skillId, rng, balance)
+makeCombat(q, reg, emit, events, inventory, balance, clock, opts)
+```
+
+`server/content/` 도 경계가 있다: 파일을 읽어 계약으로 바꾸기만 하고 `db/`·
+`net/`·`world/` 를 모른다. 조합은 언제나 `index.ts` 다.
+
+### 정의와 배치는 다른 것이다
+
+`enemies.json` 의 키가 곧 적 id 이고, **어느 방에 있는지는 거기 없다.**
+배치는 맵 구조라서 `engine/map.ts` 의 `ENEMY_AT` 이 소유하고, 같은 적을 여러
+방에 둘 수 있다. 지역이 스무 개가 되면 배치는 지역 데이터로 따라가고 수치는
+여기 그대로 남는다.
+
+부팅에서 양방향으로 검증한다: 맵의 `'E'` 타일마다 배치가 있는가, 배치된 적이
+정의에 있는가, 적이 켜는 플래그가 선언돼 있는가.
+
+### 틀린 값이면 서버가 뜨지 않는다
+
+zod 가 파일 안을 보고(`maxHp > 0`, `[최소, 최대]`, `chance ≤ 1`, 모르는 필드 거절),
+로더와 시더가 파일을 넘나드는 참조를 본다(없는 아이템 드랍, 보스인데 리스폰,
+배치된 적이 정의에 없음). **조용히 이상한 세계로 도는 것보다 부팅에서 죽는 편이
+낫다.** 열 가지를 일부러 어겨 실제로 죽는 것을 확인했다.
+
+`content/balance/README.md` 에 필드마다 무슨 뜻이고 왜 그 값인지 적어 두었다.
 
 ---
 

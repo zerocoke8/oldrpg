@@ -32,6 +32,7 @@ import type { UpgradeService } from "../world/upgrade";
 import type { CombatService } from "../world/combat";
 import type { DialogueService } from "../world/dialogue";
 import type { InventoryService } from "../world/inventory";
+import type { Balance } from "../engine/enemies";
 import type { Emit } from "./emit";
 import type { Presence } from "./presence";
 import { GRACE_MS, type Registry, type Session } from "./session";
@@ -63,6 +64,7 @@ export interface Ctx {
   combat: CombatService;
   dialogue: DialogueService;
   inventory: InventoryService;
+  balance: Balance;
   clock: () => number;
   /** 종료 중인가. true 면 handleClose 가 아무 일도 하지 않는다 —
    *  db.close() 뒤에 도착하는 소켓 close 이벤트가 닫힌 핸들에 쓰는 것을 막는다. */
@@ -210,8 +212,8 @@ export function handleHello(
     token = randomBytes(32).toString("hex");
     pos = SPAWN;
     seen = new Set([roomIdOf(SPAWN)]);
-    hp = 40;
-    maxHp = 40;
+    hp = ctx.balance.player.maxHp;
+    maxHp = ctx.balance.player.maxHp;
     ctx.q.insertPlayer.run({
       id: playerId,
       name,

@@ -19,8 +19,7 @@ import { PROTOCOL_VERSION, type ServerMsg } from "../shared/protocol";
 import type { Dir } from "../shared/ids";
 import { rollDrops } from "../server/engine/combat";
 import { makeRng } from "../server/engine/rng";
-import { ENEMIES } from "../server/engine/enemies";
-import { ITEMS } from "../server/engine/items";
+import { loadBalance } from "../server/content/balance";
 
 const PORT = 8908;
 const DB = join(tmpdir(), `mud-items-${process.pid}.db`);
@@ -190,8 +189,9 @@ async function main() {
 
   // ── ② 순수 판정 ─────────────────────────────────────────────────────
   section("② 전리품 판정은 순수하고 결정론이다 (규칙 1)");
-  const guard = ENEMIES["3,5"]!;
-  const watcher = ENEMIES["5,2"]!;
+  const BALANCE = loadBalance();
+  const guard = BALANCE.enemies["shadow_warden"]!;
+  const watcher = BALANCE.enemies["rusted_watcher"]!;
   const two = [
     { playerId: "a", damage: 150 },
     { playerId: "b", damage: 50 },
@@ -392,7 +392,7 @@ async function main() {
     JSON.stringify(again.bag()));
   check("전리품도 그대로", again.qty("warden_shard") === 1);
   check("이름은 서버가 붙인다 (클라이언트가 id 로 문구를 조립하지 않는다)",
-    again.bag().find((i) => i.id === "minor_potion")?.name === ITEMS["minor_potion"]!.name);
+    again.bag().find((i) => i.id === "minor_potion")?.name === BALANCE.items["minor_potion"]!.name);
   check("쓸 수 있는지도 서버가 말해 준다",
     again.bag().find((i) => i.id === "warden_shard")?.usable === false);
 

@@ -72,6 +72,15 @@ export const SENSITIVE: Readonly<Record<string, readonly string[]>> = {
   "5,5": ["guardian_slain"],
 };
 
+/** 좌표 -> 적 id. '무엇인가' 는 content/balance/enemies.json 이 소유하고,
+ *  '어디에 있는가' 는 맵 구조라서 여기 있다. 맵의 'E' 타일과 짝이 맞아야 한다
+ *  (부팅 때 양방향으로 검증한다 — db/seed.ts 의 assertWorldData). */
+export const ENEMY_AT: Readonly<Record<string, string>> = {
+  "3,5": "shadow_warden",
+  "4,1": "ashen_pages",
+  "5,2": "rusted_watcher",
+};
+
 export const MAX_SENSITIVE = 4;
 
 export interface WorldFlagDef {
@@ -184,7 +193,13 @@ export function contentHash(): string {
       ...n.topics.flatMap((t) => [t.id, t.label ?? "", t.seed, t.requires ?? ""]),
     ].join("\u0001"),
   ).sort();
-  return sha([...rows, flags, ...npcs].join(""), 16);
+  /* 적 배치도 맵의 일부다. 빠뜨리면 배치를 옮겨도 content_hash 가 그대로라
+     시더가 단축경로를 탄다. (적의 '수치' 는 여기 없다 — 그건 밸런스라
+     캐시와 무관하고, 바꿔도 방을 다시 만들 이유가 없다.) */
+  const placed = Object.entries(ENEMY_AT)
+    .map(([k, id]) => `${k}\u0001${id}`)
+    .sort();
+  return sha([...rows, flags, ...npcs, ...placed].join(""), 16);
 }
 
 export const regionView = () => ({

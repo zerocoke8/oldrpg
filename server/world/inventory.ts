@@ -11,7 +11,7 @@
 
 import type { ItemStack } from "../../shared/protocol";
 import type { Award } from "../engine/combat";
-import { ITEMS, itemDef } from "../engine/items";
+import type { Balance } from "../engine/enemies";
 import type { Queries } from "../db/queries";
 import { lines } from "../narration/lines";
 import type { Emit } from "../net/emit";
@@ -34,13 +34,14 @@ export function makeInventory(
   q: Queries,
   reg: Registry,
   emit: Emit,
+  balance: Balance,
   clock: () => number,
   /** 한 트랜잭션으로 묶기 위한 것. db.transaction 을 감싼 것이 들어온다. */
   tx: (fn: () => void) => void,
 ): InventoryService {
   function of(playerId: string): ItemStack[] {
     return q.itemsOf.all(playerId).map((r) => {
-      const def = itemDef(r.item_id);
+      const def = balance.items[r.item_id];
       return {
         id: r.item_id,
         // 정의가 사라진 아이템(코드에서 지웠다)도 행은 남는다. 조용히 숨기지
@@ -74,13 +75,13 @@ export function makeInventory(
     for (const a of awards) {
       const s = reg.get(a.playerId);
       if (!s) continue;
-      emit.log(s, "good", lines.looted(ITEMS[a.itemId]?.name ?? a.itemId, a.qty));
+      emit.log(s, "good", lines.looted(balance.items[a.itemId]?.name ?? a.itemId, a.qty));
       pushBag(s);
     }
   }
 
   function check(s: Session, itemId: string): string | null {
-    const def = itemDef(itemId);
+    const def = balance.items[itemId];
     // 없는 아이템과 안 가진 아이템의 답이 같다 — "무엇이 존재하는가" 를
     // 묻는 오라클을 만들지 않는다 (알 수 없는 토큰을 신규로 흡수하는 것과 같은 논거).
     const have = q.itemsOf.all(s.playerId).find((r) => r.item_id === itemId);
@@ -93,7 +94,7 @@ export function makeInventory(
   function use(s: Session, itemId: string): string | null {
     const refusal = check(s, itemId);
     if (refusal) return refusal;
-    const def = itemDef(itemId)!;
+    const def = balance.items[itemId]!;
     const now = clock();
     const healed = Math.min(def.heal ?? 0, s.maxHp - s.hp);
     const next = s.hp + healed;

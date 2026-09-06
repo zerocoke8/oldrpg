@@ -22,14 +22,16 @@ import { boot } from "../server/index";
 import { PROTOCOL_VERSION, type ServerMsg } from "../shared/protocol";
 import type { RoomTextRequest } from "../shared/narration";
 import type { Dir } from "../shared/ids";
-import { ENEMIES, SKILLS, PLAYER_SWING_MS } from "../server/engine/enemies";
+import { loadBalance } from "../server/content/balance";
 import { makeRng } from "../server/engine/rng";
 import { SPAWN } from "../server/engine/map";
 import { pickTarget } from "../server/engine/combat";
 
 const PORT = 8906;
 const DB = join(tmpdir(), `mud-combat-${process.pid}.db`);
-const GUARD = ENEMIES["3,5"]!;
+const BALANCE = loadBalance();
+const { skills: SKILLS, player: PLAYER } = BALANCE;
+const GUARD = BALANCE.enemies["shadow_warden"]!;
 
 let failures = 0;
 let checks = 0;
@@ -200,7 +202,7 @@ async function main() {
   check("queuedSkill 이 실린다", alice.lastCombat()?.queuedSkill === "heavy_strike");
   const hpBefore = alice.lastCombat()?.enemyHp ?? 0;
   alice.clear();
-  await advance(PLAYER_SWING_MS + 100);
+  await advance(PLAYER.swingMs + 100);
   check("다음 스윙에 발동했다", alice.texts("good").some((t) => t.includes("강타")),
     JSON.stringify(alice.texts()));
   const hpAfter = alice.lastCombat()?.enemyHp ?? 0;
@@ -219,7 +221,7 @@ async function main() {
   // 치유 스킬
   alice.clear();
   await alice.actAndWait({ type: "skill", skillId: "mend" });
-  await advance(PLAYER_SWING_MS + 100);
+  await advance(PLAYER.swingMs + 100);
   check("치유 스킬이 체력을 올린다", alice.texts("good").some((t) => t.includes("회복")),
     JSON.stringify(alice.texts()));
 

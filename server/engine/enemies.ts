@@ -1,15 +1,20 @@
-/* 적과 스킬의 '선언'. SEEDS 와 같은 방식으로 코드가 소유한다.
+/* 적과 스킬의 '타입'. 값은 여기 없다 — content/balance/*.json 이 소유하고
+ * server/content/balance.ts 가 읽어서 주입한다.
  *
- * ★ 적을 위한 표를 만들지 않는다. 세 조각으로 나뉘기 때문이다:
- *     정의(이 파일)     — 코드가 소유. 불변.
- *     사망(world_flags) — 이미 있다. guardian_slain 이 그것이고,
- *                         3단계가 이미 그 플래그에 반응해 방들을 재렌더링한다.
- *     전투 중 HP(메모리) — 살아 있는 전투에만 있는 사실이라 영속화하면
- *                         크래시마다 청소해야 할 거짓 행이 된다
- *                         (접속자 표를 안 만든 것과 같은 논거).
+ * ★ 왜 값이 빠졌나: 밸런스 수치는 바꿔도 공짜다 (되돌릴 수 있고 LLM 재생성을
+ *   부르지 않는다). 배포를 거치게 하면 사람은 튜닝을 안 하게 된다.
+ *   씨앗·맵 구조·sensitive_flags 는 반대라서 여전히 코드에 있다.
  *
- * 그래서 4a 는 스키마를 한 줄도 바꾸지 않는다. 적을 죽이면 3단계의
- * 이벤트 경로가 그대로 돌아 세계가 바뀐다 — 단계들이 고리로 닫힌다. */
+ * ★ 왜 engine/ 이 파일을 직접 읽지 않나: engine/ 은 결정론이어야 하고 I/O 를
+ *   모른다 (.eslintrc.cjs 가 db/·narration/ 과 함께 fs 도 막는다).
+ *   시드 PRNG·시계·렌더러와 똑같이 '주입' 받는다.
+ *
+ * ★ 적의 정의와 배치는 다른 것이다. 여기 있는 것은 '무엇인가' 이고,
+ *   '어느 방에 있는가' 는 맵 구조라서 engine/map.ts 의 ENEMY_AT 이 소유한다.
+ *   같은 적을 여러 방에 둘 수 있다. */
+
+import type { ItemDef } from "./items";
+export type { ItemDef };
 
 export interface EnemyDef {
   readonly id: string;
@@ -45,55 +50,6 @@ export interface DropDef {
 
 /** 방 좌표 -> 적. 맵의 'E' 타일과 짝이 맞아야 한다 (부팅 때 검증한다 —
  *  db/seed.ts 의 assertEnemies). */
-export const ENEMIES: Readonly<Record<string, EnemyDef>> = {
-  "3,5": {
-    id: "shadow_warden",
-    name: "그림자 파수꾼",
-    /* 실시간 수치 잡기 (프로토타입의 턴제 30HP 는 여기서 의미가 없다):
-         플레이어 DPS ≈ 6 x 1.15(치명타) / 0.5초 = 13.8/초
-         -> 200HP 는 혼자 약 15초. 스킬을 두 번 쓸 만큼 길고 지루하지 않을 만큼 짧다.
-         적 DPS ≈ 3.5 / 0.9초 = 3.9/초 -> 15초면 56 피해인데 플레이어는 40HP다.
-         즉 '치유 없이는 진다'. 그게 실시간에서 스킬을 쓰게 만드는 긴장이다.
-       둘이 붙으면 절반으로 줄어든다 — 협력에 값이 붙는다. */
-    maxHp: 200,
-    damage: [2, 5],
-    swingMs: 900, // 플레이어(500ms)보다 느리다
-    slainFlag: "guardian_slain",
-    respawnMs: null, // 보스는 돌아오지 않는다
-    // 한 번뿐인 적이므로 확률을 두지 않는다. 그 파편이 곧 '이걸 해냈다' 다.
-    drops: [{ itemId: "warden_shard", qty: 1, chance: 1 }],
-  },
-
-  /* 반복되는 적 둘. 파수꾼 하나뿐이면 '한 번 죽이면 끝' 인 세계라,
-     늦게 접속한 사람은 전투를 영영 보지 못했다 — guardian_slain 이 DB 영속이다.
-     동쪽 날개(4,1 / 5,2)에 둔다. 스폰에서 한 칸 떨어져 있지 않아 처음 몇 걸음이
-     안전하고, 파수꾼으로 가는 길과도 겹치지 않는다.
-
-     수치: 플레이어 DPS ≈ 13.8/초, HP 40.
-       잿빛 종잇장  70HP  -> 약 5초, 맞는 피해 ≈ 9   (연습용)
-       녹슨 감시자 110HP  -> 약 8초, 맞는 피해 ≈ 26  (치유를 쓰게 만든다) */
-  "4,1": {
-    id: "ashen_pages",
-    name: "잿빛 종잇장",
-    maxHp: 70,
-    damage: [1, 3],
-    swingMs: 1100,
-    slainFlag: null,
-    respawnMs: 45_000,
-    drops: [{ itemId: "minor_potion", qty: 1, chance: 0.5 }],
-  },
-  "5,2": {
-    id: "rusted_watcher",
-    name: "녹슨 감시자",
-    maxHp: 110,
-    damage: [2, 4],
-    swingMs: 950,
-    slainFlag: null,
-    respawnMs: 60_000,
-    drops: [{ itemId: "minor_potion", qty: 1, chance: 0.8 }],
-  },
-};
-
 export interface SkillDef {
   readonly id: string;
   readonly name: string;
@@ -106,35 +62,26 @@ export interface SkillDef {
 
 /** 1단계 스킬 셋. 셋이면 실시간의 리듬이 충분히 드러난다:
  *  때릴 것 하나, 살릴 것 하나, 버틸 것 하나. */
-export const SKILLS: Readonly<Record<string, SkillDef>> = {
-  heavy_strike: {
-    id: "heavy_strike",
-    name: "강타",
-    cooldownMs: 4000,
-    kind: "strike",
-    power: [14, 22],
-  },
-  mend: {
-    id: "mend",
-    name: "응급 치료",
-    cooldownMs: 8000,
-    kind: "heal",
-    power: [12, 18],
-  },
-  brace: {
-    id: "brace",
-    name: "방어 태세",
-    cooldownMs: 6000,
-    kind: "guard",
-    power: [50, 50], // 다음 피격 50% 경감
-  },
-};
+/** 플레이어의 기본치. content/balance/player.json 이 소유한다. */
+export interface PlayerBalance {
+  readonly maxHp: number;
+  readonly swingMs: number;
+  readonly damage: readonly [number, number];
+  /** 0~1. 기본 공격에만 붙는다 — 스킬은 이미 큰 숫자라 겹치면 스파이크가 과하다. */
+  readonly critChance: number;
+  readonly critMult: number;
+  /** 쓰러진 뒤 일어나기까지(ms). */
+  readonly respawnMs: number;
+}
 
-export const SKILL_LIST: readonly SkillDef[] = Object.values(SKILLS);
-
-/** 플레이어의 기본 공격. */
-export const PLAYER_SWING_MS = 500;
-export const PLAYER_DAMAGE: readonly [number, number] = [4, 8];
-/** 치명타 — 확률과 배수. 로그에서 눈에 띄는 사건이 있어야 접힌 로그가 살아난다. */
-export const CRIT_CHANCE = 0.15;
-export const CRIT_MULT = 2;
+/** 코드가 아니라 데이터가 소유하는 것 전부. engine/ 함수들이 이걸 주입받는다.
+ *
+ *  ★ 적은 id 로 키잉된다 (좌표가 아니라). 배치는 맵의 일이다. */
+export interface Balance {
+  readonly enemies: Readonly<Record<string, EnemyDef>>;
+  readonly skills: Readonly<Record<string, SkillDef>>;
+  /** 커맨드 창이 보여줄 순서. skills 의 값들을 선언 순서대로 편 것. */
+  readonly skillList: readonly SkillDef[];
+  readonly items: Readonly<Record<string, ItemDef>>;
+  readonly player: PlayerBalance;
+}

@@ -1,0 +1,5 @@
+{
+  "heavy_strike": { "name": "강타",      "cooldownMs": 4000, "kind": "strike", "power": [14, 22] },
+  "mend":         { "name": "응급 치료", "cooldownMs": 8000, "kind": "heal",   "power": [12, 18] },
+  "brace":        { "name": "방어 태세", "cooldownMs": 6000, "kind": "guard",  "power": [50, 50] }
+}

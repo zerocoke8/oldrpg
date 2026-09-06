@@ -9,14 +9,7 @@
  * (.eslintrc.cjs 가 engine/ 안의 Math.random 을 빌드 에러로 막는다.) */
 
 import type { PlayerId } from "../../shared/ids";
-import {
-  CRIT_CHANCE,
-  CRIT_MULT,
-  PLAYER_DAMAGE,
-  SKILLS,
-  type EnemyDef,
-  type SkillDef,
-} from "./enemies";
+import type { Balance, EnemyDef, SkillDef } from "./enemies";
 import type { Rng } from "./rng";
 
 /** 엔진이 낼 수 있는 상태 변경. 호출자가 이걸 보고 DB/월드를 만진다. */
@@ -46,8 +39,11 @@ export function resolvePlayerSwing(
   playerMaxHp: number,
   queuedSkillId: string | null,
   rng: Rng,
+  /** 수치는 코드가 아니라 데이터가 소유한다 (content/balance/). 난수·시계와
+   *  같은 이유로 주입받는다 — engine/ 은 파일도 DB 도 모른다. */
+  balance: Balance,
 ): SwingResult {
-  const skill = queuedSkillId ? (SKILLS[queuedSkillId] ?? null) : null;
+  const skill = queuedSkillId ? (balance.skills[queuedSkillId] ?? null) : null;
 
   if (skill?.kind === "heal") {
     // 잃은 만큼만 회복한다 — max_hp CHECK 제약이 DB 에 있다.
@@ -74,11 +70,11 @@ export function resolvePlayerSwing(
   }
 
   // 기본 공격 또는 strike 스킬
-  const range = skill ? skill.power : PLAYER_DAMAGE;
+  const range = skill ? skill.power : balance.player.damage;
   let amount = rng.int(range[0], range[1]);
   // 치명타는 기본 공격에만 — 스킬은 이미 큰 숫자라 겹치면 스파이크가 과하다.
-  const crit = !skill && rng.chance(CRIT_CHANCE);
-  if (crit) amount *= CRIT_MULT;
+  const crit = !skill && rng.chance(balance.player.critChance);
+  if (crit) amount *= balance.player.critMult;
 
   const dealt = Math.min(amount, enemyHp);
   const lethal = dealt >= enemyHp;

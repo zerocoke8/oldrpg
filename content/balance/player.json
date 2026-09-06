@@ -1,0 +1,8 @@
+{
+  "maxHp": 40,
+  "swingMs": 500,
+  "damage": [4, 8],
+  "critChance": 0.15,
+  "critMult": 2,
+  "respawnMs": 5000
+}
