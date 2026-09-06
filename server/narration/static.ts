@@ -18,7 +18,8 @@ import type {
   RoomTextResult,
 } from "../../shared/narration";
 import { createHash } from "node:crypto";
-import type { Mood, Tails } from "./prompts";
+import type { Mood, Tails, Tone } from "./prompts";
+import { regionOfRoomId } from "./prompts";
 
 /** 씨앗으로 꼬리를 고른다. 방마다 고정이고 같은 방은 언제나 같은 문장이다 —
  *  폴백도 room_text 에 기록되므로 굴릴 때마다 달라지면 캐시가 거짓말이 된다. */
@@ -43,11 +44,21 @@ export function moodTextFor(
     .join(" ");
 }
 
-export function makeStaticRenderer(moods: ReadonlyMap<string, Mood>, tails: Tails): RoomTextRenderer {
+export function makeStaticRenderer(
+  moods: ReadonlyMap<string, Mood>,
+  tails: Tails,
+  /** 지역별 꼬리. 없는 지역은 전역 꼬리로 떨어진다 — 톤은 덧칠이지
+   *  필수가 아니다 (그래서 픽스처 세계와 막 만든 지역이 톤 없이도 돈다). */
+  tones: ReadonlyMap<string, Tone> = new Map(),
+): RoomTextRenderer {
   return async (req: RoomTextRequest): Promise<RoomTextResult> => {
     const mood = moodTextFor(req, moods, (m) => m.fallback);
+    /* 지역은 이미 roomId 안에 있다 ("d6town:4,7"). 그래서 이 파일이 지역을
+       아는 데 계약(RoomTextRequest)을 한 글자도 바꿀 필요가 없다. */
+    const pool = tones.get(regionOfRoomId(req.roomId))?.room;
+    const tail = pickBySeed(req.seed, pool?.length ? pool : tails.room);
     return {
-      text: `${req.seed}. ${mood || pickBySeed(req.seed, tails.room)}`,
+      text: `${req.seed}. ${mood || tail}`,
       source: "fallback",
       model: null,
       promptVersion: null,

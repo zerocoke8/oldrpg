@@ -24,7 +24,7 @@ const FIXTURE = { world: FIXTURE_WORLD, balance: FIXTURE_BALANCE, moods: FIXTURE
 import { PROTOCOL_VERSION, type ServerMsg } from "../shared/protocol";
 import type { RoomTextRenderer, RoomTextRequest } from "../shared/narration";
 import type { Dir } from "../shared/ids";
-import { loadNpcPrompt, loadRoomPrompt, loadTails } from "../server/narration/prompts";
+import { loadNpcPrompt, loadRoomPrompt, loadTails, regionOfRoomId, type Tone } from "../server/narration/prompts";
 import { makeStaticNpcRenderer, makeStaticRenderer } from "../server/narration/static";
 import { makeLlmNpcRenderer, makeLlmRenderer, type AnthropicLike } from "../server/narration/llm";
 
@@ -291,15 +291,47 @@ async function main() {
   // ── ⑥ 프롬프트가 파일에 있는가 ─────────────────────────────────────
   section("⑥ 프롬프트는 파일로 분리되어 있다 (charter 139줄)");
   const p = loadRoomPrompt();
-  check("room.v1.ko.md 를 읽었다", p.version === "room.v1.ko" && p.system.length > 50);
+  check("room.v2.ko.md 를 읽었다", p.version === "room.v2.ko" && p.system.length > 50);
   check("system 절에 '새로운 출구를 만들지 말라' 규칙이 있다", p.system.includes("출구"));
-  const rendered = p.render({ seed: "테스트 씨앗", mood: "" });
+  const rendered = p.render({ seed: "테스트 씨앗", mood: "", tone: "" });
   check("{{seed}} 가 치환된다", rendered.includes("테스트 씨앗"));
   check("{{mood}} 는 비면 사라진다", !rendered.includes("{{mood}}"));
-  const withMood = p.render({ seed: "s", mood: "파수꾼이 쓰러졌다" });
+  const withMood = p.render({ seed: "s", mood: "파수꾼이 쓰러졌다", tone: "" });
   check("mood 가 있으면 절이 붙는다", withMood.includes("파수꾼이 쓰러졌다"));
+  /* ★ 톤이 프롬프트에 실제로 들어가는가. 이게 없으면 모델은 씨앗 한 줄과
+     무드만 받고, 지역이 무엇인지 모른 채 164방을 같은 목소리로 쓴다. */
+  const withTone = p.render({ seed: "s", mood: "", tone: "사람이 사는 곳이다" });
+  check("★ {{tone}} 이 치환된다 (지역이 프롬프트에 닿는다)", withTone.includes("사람이 사는 곳이다"));
+  check("{{tone}} 도 비면 사라진다", !rendered.includes("{{tone}}"));
   const moods = moodsForTest;
   check("moods/guardian_slain.md 를 읽었다", moods.has("guardian_slain"));
+
+  /* ── 지역의 톤 ──────────────────────────────────────────────────────
+     ★ 톤이 없을 때 무슨 일이 있었나: 방 프롬프트의 system 절이 "어둡고 축축한
+       지하 던전 톤" 을 164방 전부에 걸고 있었고, 그중 114방은 던전이 아니었다.
+       모델은 씨앗 한 줄과 무드만 받아 지역이 무엇인지 모른 채 썼다.
+     지역은 이미 roomId 안에 있으므로 계약(RoomTextRequest)은 안 바뀐다. */
+  check("roomId 에서 지역을 꺼낸다", regionOfRoomId("d6town:4,7") === "d6town");
+  check("':' 가 없어도 죽지 않는다", regionOfRoomId("b1") === "b1");
+
+  const TONES = new Map<string, Tone>([
+    ["b1", { prompt: "시험용 톤 지시", room: ["b1 전용 꼬리."] }],
+    ["b2", { prompt: "", room: [] }],
+  ]);
+  const toned = makeStaticRenderer(moodsForTest, loadTails(), TONES);
+  const ask = async (roomId: string) =>
+    (await toned({ roomId, stateHash: "h", seed: "씨앗", seedId: "s", flags: [] })).text;
+  check("★ 그 지역의 꼬리를 쓴다", (await ask("b1:1,1")).endsWith("b1 전용 꼬리."),
+    await ask("b1:1,1"));
+  /* 톤 파일이 없는 지역(과 꼬리가 빈 지역)은 전역 꼬리로 떨어져야 한다 —
+     톤은 덧칠이지 필수가 아니다. 아니면 새 지역이 톤 없이는 못 돈다. */
+  const globalTails = loadTails().room.map((t) => `씨앗. ${t}`);
+  const noTone = await ask("b3:1,1");
+  const emptyTone = await ask("b2:1,1");
+  check("★ 톤 파일이 없는 지역은 전역 꼬리로 떨어진다", globalTails.includes(noTone), noTone);
+  check("꼬리가 빈 톤도 전역으로 떨어진다", globalTails.includes(emptyTone), emptyTone);
+  check("같은 방은 늘 같은 꼬리다 (폴백도 캐시에 기록된다)",
+    (await ask("b1:1,1")) === (await ask("b1:1,1")));
   check("mood 에 prompt/fallback 두 절이 있다",
     Boolean(moods.get("guardian_slain")?.prompt) && Boolean(moods.get("guardian_slain")?.fallback));
 
@@ -355,12 +387,12 @@ async function main() {
   const fb = fallbackForTest;
 
   seen.length = 0;
-  const okRenderer = makeLlmRenderer(moodsForTest, fb, { client: stub(okReply), model: "m1" });
+  const okRenderer = makeLlmRenderer(moodsForTest, fb, new Map(), { client: stub(okReply), model: "m1" });
   const okRes = await okRenderer(req);
   check("성공하면 source='llm'", okRes.source === "llm");
   check("공백이 정리된 텍스트", okRes.text === "당신은 젖은 돌 위에 선다.");
   check("모델과 프롬프트 버전이 결과에 실린다",
-    okRes.model === "m1" && okRes.promptVersion === "room.v1.ko");
+    okRes.model === "m1" && okRes.promptVersion === "room.v2.ko");
   const body = seen[0]!;
   check("파일에서 읽은 system 프롬프트를 보냈다",
     JSON.stringify(body.system).includes("텍스트 머드 게임의 서술자"));
@@ -372,24 +404,24 @@ async function main() {
     body.output_config?.effort === "low");
   check("max_tokens 가 잘리지 않을 만큼 넉넉하다", (body.max_tokens ?? 0) >= 2000);
 
-  const refusal = makeLlmRenderer(moodsForTest, fb, {
+  const refusal = makeLlmRenderer(moodsForTest, fb, new Map(), {
     client: stub(() => ({ stop_reason: "refusal", stop_details: { category: "x" }, content: [] })),
   });
   check("거절(stop_reason='refusal')은 폴백으로 떨어진다",
     (await refusal(req)).source === "fallback");
 
-  const truncated = makeLlmRenderer(moodsForTest, fb, {
+  const truncated = makeLlmRenderer(moodsForTest, fb, new Map(), {
     client: stub(() => ({ stop_reason: "max_tokens", content: [{ type: "text", text: "반쯤 쓰다 만" }] })),
   });
   check("max_tokens 로 잘린 문장은 쓰지 않는다 (영구 고정되면 안 된다)",
     (await truncated(req)).source === "fallback");
 
-  const empty = makeLlmRenderer(moodsForTest, fb, {
+  const empty = makeLlmRenderer(moodsForTest, fb, new Map(), {
     client: stub(() => ({ stop_reason: "end_turn", content: [] })),
   });
   check("빈 응답도 폴백", (await empty(req)).source === "fallback");
 
-  const boom = makeLlmRenderer(moodsForTest, fb, {
+  const boom = makeLlmRenderer(moodsForTest, fb, new Map(), {
     client: stub(() => new Error("network down")),
   });
   const boomRes = await boom(req);

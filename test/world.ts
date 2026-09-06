@@ -16,6 +16,7 @@ import { join } from "node:path";
 import WebSocket from "ws";
 import { loadWorld } from "../server/content/world";
 import { makeMap, seedIdOf, type MapData } from "../server/engine/map";
+import { loadTones } from "../server/narration/prompts";
 import { npcSeedId } from "../server/engine/npcs";
 import { boot } from "../server/index";
 import { PROTOCOL_VERSION, type ServerMsg } from "../shared/protocol";
@@ -99,6 +100,26 @@ async function main() {
     String(map.rooms().length));
   check("지역 id 가 파일 이름에서 왔다 (JSON 안에 id 필드가 없다)",
     !("id" in (JSON.parse(readFileSync("content/world/regions/ue001.json", "utf8")) as object)));
+
+  /* ── 지역의 톤 ──────────────────────────────────────────────────────
+     톤 파일 이름이 곧 지역 id 다. 오타가 나면 그 지역은 조용히 전역 꼬리로
+     떨어지고 아무 데도 안 적힌다 — 부팅도 안 죽고 화면도 안 비어서, 톤을
+     써 놓고 안 쓰이는 것을 알 방법이 없다. */
+  section("①' 지역의 톤 — 파일 이름이 실재하는 지역인가");
+  const tones = loadTones();
+  const ids = new Set(map.regions().map((r) => r.id));
+  for (const rid of tones.keys()) {
+    check(`tones/${rid}.md 가 실재하는 지역을 가리킨다`, ids.has(rid),
+      `regions/ 에 ${rid} 가 없다 — 오타면 그 톤은 영영 안 쓰인다`);
+  }
+  /* 전부 갖출 필요는 없다 (톤은 덧칠이다). 다만 하나도 없으면 이 기능이
+     배선되지 않았다는 뜻이라, 그건 검사가 말해 줘야 한다. */
+  check("★ 톤이 실제로 배선돼 있다 (하나 이상)", tones.size > 0, String(tones.size));
+  for (const [rid, t] of tones) {
+    check(`  ${rid}: 톤 지시가 비어 있지 않다`, t.prompt.trim().length > 0);
+    check(`  ${rid}: 꼬리 후보가 둘 이상이다 (하나면 그 지역 방이 전부 같은 문장으로 끝난다)`,
+      t.room.length >= 2, String(t.room.length));
+  }
 
   section("② 씨앗은 한 글자도 바뀌지 않았다 (규칙 3)");
   /* seed_id 는 내용 파생이다. 아래 값들은 JSON 으로 옮기기 '전' 의 코드에서

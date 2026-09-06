@@ -16,7 +16,7 @@ import { makeMap, type MapData } from "./engine/map";
 import { World } from "./engine/world";
 import { makeStaticNpcRenderer, makeStaticRenderer } from "./narration/static";
 import { makeLlmNpcRenderer, makeLlmRenderer } from "./narration/llm";
-import { loadMoods, loadTails, type Mood } from "./narration/prompts";
+import { loadMoods, loadTails, loadTones, type Mood, type Tone } from "./narration/prompts";
 import { makeRoomTextService } from "./world/roomText";
 import { makeNpcTextService } from "./world/npcText";
 import { makeDialogue } from "./world/dialogue";
@@ -87,6 +87,9 @@ export interface BootOptions {
   /** 플래그별 톤·문장을 갈아끼운다. 지정하지 않으면 narration/prompts/moods/ 를 읽는다.
    *  세계·밸런스와 같은 이유의 주입이다 — 검사가 운영 문구에 매달리지 않게. */
   moods?: ReadonlyMap<string, Mood>;
+  /** 지역별 톤. 검사가 주입한다 — 픽스처 세계는 운영의 지역 id 를 쓰지 않으므로
+   *  기본값(빈 맵)이면 전역 꼬리로 떨어진다. */
+  tones?: ReadonlyMap<string, Tone>;
   /** 큐 옵션 (테스트에서 동시성/쿨다운을 조인다). */
   queue?: QueueOptions;
   /** 전투 옵션 (테스트가 시계와 시드를 손에 쥔다). */
@@ -157,7 +160,10 @@ export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
      호출이 아예 없으므로 실수로 기다리게 만들 방법이 없다. */
   const moods = options.moods ?? loadMoods();
   const tails = loadTails();
-  const fallbackRenderer = makeStaticRenderer(moods, tails);
+  /* 지역의 톤. moods 와 같은 층위이고 같은 이유로 데이터다 — 플래그가 '언제'
+     라면 지역은 '어디' 다. 파일이 없는 지역은 전역 꼬리로 떨어진다. */
+  const tones = options.tones ?? loadTones();
+  const fallbackRenderer = makeStaticRenderer(moods, tails, tones);
   const fallbackNpcRenderer = makeStaticNpcRenderer(moods, tails);
 
   /* 실물 호출은 '명시적으로 끄지 않았고' + '키가 있을 때' 만 켜진다.
@@ -166,7 +172,7 @@ export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
   const hasKey =
     !llmOff && Boolean(process.env.ANTHROPIC_API_KEY ?? process.env.ANTHROPIC_AUTH_TOKEN);
   const llmRenderer =
-    options.llmRenderer ?? (hasKey ? makeLlmRenderer(moods, fallbackRenderer) : null);
+    options.llmRenderer ?? (hasKey ? makeLlmRenderer(moods, fallbackRenderer, tones) : null);
   const llmNpcRenderer =
     options.llmNpcRenderer ?? (hasKey ? makeLlmNpcRenderer(moods, fallbackNpcRenderer) : null);
 

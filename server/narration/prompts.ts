@@ -41,8 +41,8 @@ export interface RoomPrompt {
   /** room_text.prompt_version 에 그대로 기록된다. 파일명이 곧 버전이다. */
   readonly version: string;
   readonly system: string;
-  /** {{seed}} / {{mood}} 를 치환해 user 메시지를 만든다. */
-  render(vars: { seed: string; mood: string }): string;
+  /** {{seed}} / {{mood}} / {{tone}} 를 치환해 user 메시지를 만든다. */
+  render(vars: { seed: string; mood: string; tone: string }): string;
 }
 
 export interface NpcPrompt {
@@ -72,7 +72,7 @@ export function loadNpcPrompt(version = "npc.v1.ko"): NpcPrompt {
   };
 }
 
-export function loadRoomPrompt(version = "room.v1.ko"): RoomPrompt {
+export function loadRoomPrompt(version = "room.v2.ko"): RoomPrompt {
   const raw = readFileSync(join(PROMPTS, `${version}.md`), "utf8");
   const s = sections(raw);
   if (!s.system || !s.user) {
@@ -83,8 +83,12 @@ export function loadRoomPrompt(version = "room.v1.ko"): RoomPrompt {
   return {
     version,
     system,
-    render: ({ seed, mood }) =>
-      user.replace("{{seed}}", seed).replace("{{mood}}", mood ? `현재 이 구역의 상태: ${mood}` : "").trim(),
+    render: ({ seed, mood, tone }) =>
+      user
+        .replace("{{seed}}", seed)
+        .replace("{{tone}}", tone ? `이곳의 톤: ${tone}` : "")
+        .replace("{{mood}}", mood ? `현재 이 구역의 상태: ${mood}` : "")
+        .trim(),
   };
 }
 
@@ -150,6 +154,57 @@ export function loadTails(version = "tails.ko"): Tails {
   }
   return { room, npc };
 }
+
+/** 지역 하나가 프로즈에 하는 일 전부. prompts/tones/<regionId>.md 한 파일.
+ *
+ *  ★ 왜 필요한가: 방 프롬프트의 system 절이 "어둡고 축축한 지하 던전 톤" 을
+ *    164방 전부에 걸고 있었다. 그중 114방(마을·기지·사무실)은 던전이 아니다.
+ *    씨앗은 "노점거리 한복판. 흥정 소리가 여러 언어로 섞인다" 라고 써 두고
+ *    꼬리가 "목 안쪽이 서늘하다" 로 끝나면, 읽는 사람은 세계가 아니라 템플릿을 본다.
+ *
+ *  ★ 왜 moods 와 같은 모양인가: 같은 종류의 것이기 때문이다. 플래그가 '언제'
+ *    라면 지역은 '어디' 다. 둘 다 씨앗에 붙는 프로즈이고, 둘 다 state_hash 의
+ *    preimage 에 들어가지 않아 고쳐도 seed_id 가 안 바뀐다.
+ *
+ *  ★ 파일이 없는 지역은 tails.ko.md 의 전역 꼬리로 떨어진다. 그래서 검사의
+ *    픽스처 세계(b1·b2·b3)나 새로 만든 지역이 톤 파일 없이도 돈다. */
+export interface Tone {
+  /** LLM 에게 주는 그 지역의 톤 지시. 방 프롬프트의 {{tone}} 에 들어간다. */
+  readonly prompt: string;
+  /** 그 지역의 폴백 꼬리 후보. 비면 전역 꼬리를 쓴다. */
+  readonly room: readonly string[];
+}
+
+export function loadTones(): Map<string, Tone> {
+  const dir = join(PROMPTS, "tones");
+  const out = new Map<string, Tone>();
+  let files: string[];
+  try {
+    files = readdirSync(dir);
+  } catch {
+    /* 톤 디렉터리가 없어도 된다 — 전부 전역 꼬리와 기본 톤으로 떨어진다. */
+    return out;
+  }
+  for (const f of files) {
+    if (!f.endsWith(".md")) continue;
+    /* 파일 이름이 곧 지역 id 다. 문서는 지역이 아니다 — 이걸 안 거르면
+       "README 라는 지역의 톤" 이 조용히 하나 생긴다 (검사가 잡았다). */
+    if (f === "README.md") continue;
+    const s = sections(readFileSync(join(dir, f), "utf8"));
+    out.set(f.replace(/\.md$/, ""), {
+      prompt: s.prompt ?? "",
+      room: (s.room ?? "").split("\n").map((l) => l.trim()).filter(Boolean),
+    });
+  }
+  return out;
+}
+
+/** "region:x,y" 에서 지역만. 지역은 이미 roomId 안에 있으므로 narration 이
+ *  이걸 꺼내 쓰는 데 계약 변경이 필요 없다 (RoomTextRequest 는 그대로다). */
+export const regionOfRoomId = (roomId: string): string => {
+  const i = roomId.indexOf(":");
+  return i < 0 ? roomId : roomId.slice(0, i);
+};
 
 /** 플래그 하나가 프로즈에 하는 일 전부. prompts/moods/<flag>.md 한 파일. */
 export interface Mood {

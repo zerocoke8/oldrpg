@@ -16,7 +16,7 @@ import type {
   RoomTextRequest,
   RoomTextResult,
 } from "../../shared/narration";
-import { loadNpcPrompt, loadRoomPrompt, type Mood } from "./prompts";
+import { loadNpcPrompt, loadRoomPrompt, regionOfRoomId, type Mood, type Tone } from "./prompts";
 import { moodTextFor } from "./static";
 
 /** 테스트가 스텁을 꽂을 수 있도록 클라이언트 표면을 좁힌 것.
@@ -47,6 +47,11 @@ export interface LlmOptions {
 export function makeLlmRenderer(
   moods: ReadonlyMap<string, Mood>,
   fallback: RoomTextRenderer,
+  /** 지역별 톤. 없는 지역은 프롬프트의 톤 줄이 통째로 빠진다 (기본 서술 규약만).
+   *  ★ 이게 없을 때 모델은 사람보다 적게 알았다 — 씨앗 한 줄과 무드뿐이고
+   *    지역 이름조차 없었다. 그 상태의 생성은 값을 더하는 게 아니라
+   *    각 방을 2~3문장으로 더 길게 어긋나게 한다. */
+  tones: ReadonlyMap<string, Tone> = new Map(),
   opts: LlmOptions = {},
 ): RoomTextRenderer {
   const model = opts.model ?? process.env.MUD_MODEL ?? "claude-opus-5";
@@ -82,6 +87,7 @@ export function makeLlmRenderer(
             role: "user",
             content: prompt.render({
               seed: req.seed,
+              tone: tones.get(regionOfRoomId(req.roomId))?.prompt ?? "",
               mood: moodTextFor(req, moods, (m) => m.prompt),
             }),
           },
