@@ -185,6 +185,30 @@ export function makeQueries(db: Db) {
     countPlayersCreatedSince: db.prepare<[number], { n: number }>(
       "SELECT count(*) AS n FROM players WHERE created_at >= ?",
     ),
+
+    // ── player_items ────────────────────────────────────────────────────
+    /** 그 사람의 전부. PK 의 앞자리가 player_id 라 이 질의가 PK 인덱스를 탄다.
+     *  item_id 로 정렬해 목록의 순서가 요청마다 흔들리지 않게 한다 —
+     *  커맨드 창의 커서가 같은 자리에 머물러야 한다. */
+    itemsOf: db.prepare<[string], { item_id: string; qty: number }>(
+      "SELECT item_id, qty FROM player_items WHERE player_id = ? ORDER BY item_id",
+    ),
+    /** 한 문장으로 원자적이다 — JSON 블롭 대신 표를 쓴 첫 번째 이유가 이것이다. */
+    addItem: db.prepare(
+      `INSERT INTO player_items (player_id, item_id, qty, updated_at)
+       VALUES (@player_id, @item_id, @qty, @now)
+       ON CONFLICT (player_id, item_id) DO UPDATE
+         SET qty = qty + excluded.qty, updated_at = excluded.updated_at`,
+    ),
+    /** 하나 쓴다. 없거나 0이면 0행 — 호출자가 그걸로 "가지고 있지 않다" 를 안다.
+     *  CHECK (qty > 0) 이 있으므로 마지막 하나는 UPDATE 가 아니라 DELETE 다. */
+    consumeItem: db.prepare(
+      `UPDATE player_items SET qty = qty - 1, updated_at = @now
+       WHERE player_id = @player_id AND item_id = @item_id AND qty > 1`,
+    ),
+    dropLastItem: db.prepare(
+      "DELETE FROM player_items WHERE player_id = @player_id AND item_id = @item_id AND qty = 1",
+    ),
   };
   return q;
 }

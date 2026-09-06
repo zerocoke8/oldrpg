@@ -31,6 +31,7 @@ import type { RoomTextService } from "../world/roomText";
 import type { UpgradeService } from "../world/upgrade";
 import type { CombatService } from "../world/combat";
 import type { DialogueService } from "../world/dialogue";
+import type { InventoryService } from "../world/inventory";
 import type { Emit } from "./emit";
 import type { Presence } from "./presence";
 import { GRACE_MS, type Registry, type Session } from "./session";
@@ -61,6 +62,7 @@ export interface Ctx {
   upgrades: UpgradeService;
   combat: CombatService;
   dialogue: DialogueService;
+  inventory: InventoryService;
   clock: () => number;
   /** 종료 중인가. true 면 handleClose 가 아무 일도 하지 않는다 —
    *  db.close() 뒤에 도착하는 소켓 close 이벤트가 닫힌 핸들에 쓰는 것을 막는다. */
@@ -412,6 +414,12 @@ export function handleAction(
       action = p.data;
       break;
     }
+    case "use_item": {
+      const p = SCHEMAS.use_item.safeParse(raw);
+      if (!p.success) return reject(ctx, s, seq, "bad_args");
+      action = p.data;
+      break;
+    }
     default:
       // 이 서버가 구현하지 않은 variant. 옛 서버가 새 클라이언트를 만나는
       // 경우가 정확히 이것이고, 크래시가 아니라 거절이어야 한다.
@@ -441,6 +449,10 @@ export function handleAction(
       return doWorldCommand(ctx, s, seq, () => ctx.dialogue.talk(s, action.npcId));
     case "ask":
       return doWorldCommand(ctx, s, seq, () => ctx.dialogue.ask(s, action.npcId, action.topic));
+    /* 전투 중이면 다음 스윙에 예약된다 — 그 판정은 combat 이 소유한다.
+       "가지고 있지 않다" 도 거절이 아니라 문장이다 (벽 부딪힘과 같은 부류). */
+    case "use_item":
+      return doWorldCommand(ctx, s, seq, () => ctx.combat.useItem(s, action.itemId));
   }
 }
 

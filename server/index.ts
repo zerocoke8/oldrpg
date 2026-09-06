@@ -17,6 +17,7 @@ import { loadMoods } from "./narration/prompts";
 import { makeRoomTextService } from "./world/roomText";
 import { makeNpcTextService } from "./world/npcText";
 import { makeDialogue } from "./world/dialogue";
+import { makeInventory } from "./world/inventory";
 import { makeUpgradeService } from "./world/upgrade";
 import { makeEvents } from "./world/events";
 import { makeCombat, type CombatOptions } from "./world/combat";
@@ -100,6 +101,8 @@ export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
   let events: EventService | null = null;
   let combat: CombatService | null = null;
   let npcsIn: ((roomId: RoomId) => NpcBrief[]) | null = null;
+  /* 가방은 메모리 사본이 없어 DB 만 읽으면 되므로, 늦은 바인딩이 필요 없다. */
+  const inventory = makeInventory(q, reg, emit, clock, (fn) => db.transaction(fn)());
   const presence = makePresence(
     reg,
     emit,
@@ -107,6 +110,7 @@ export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
     (id) => combat?.viewFor(id) ?? null,
     (roomId) => Boolean(combat?.enemyIn(roomId)),
     (roomId) => npcsIn?.(roomId) ?? [],
+    (playerId) => inventory.of(playerId),
   );
 
   /* ── 서술 레이어 ────────────────────────────────────────────────────
@@ -149,7 +153,7 @@ export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
      presence 보다 뒤에 만들어지므로 npcsIn 은 위에서 늦게 바인딩한다. */
   const dialogue = makeDialogue(world, npcText, upgrades, emit);
   npcsIn = dialogue.npcsIn;
-  const combatSvc = makeCombat(q, reg, emit, events, clock, options.combat ?? {});
+  const combatSvc = makeCombat(q, reg, emit, events, inventory, clock, options.combat ?? {});
   combat = combatSvc;
 
   const ctx: Ctx = {
@@ -162,6 +166,7 @@ export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
     upgrades,
     combat: combatSvc,
     dialogue,
+    inventory,
     clock,
     isShuttingDown: () => shuttingDown,
   };

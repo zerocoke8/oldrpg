@@ -87,6 +87,24 @@ export function rootItems(st: UiState): MenuItem[] {
     });
   }
 
+  /* 가방 — 가진 것이 있을 때만. 적·NPC 와 같은 규칙이다: 메뉴는 상태의
+     순수 함수이고, 다 쓰면 그 가지가 저절로 사라진다. */
+  if (st.items.length) {
+    items.push({
+      id: "bag",
+      label: "가방",
+      items: st.items.map((it) => ({
+        id: `item:${it.id}`,
+        label: it.name,
+        action: { type: "use_item", itemId: it.id } as Action,
+        ...(it.qty > 1 ? { note: `x${it.qty}` } : {}),
+        /* 쓸 수 없는 것(전리품)도 목록에는 둔다 — 가진 것을 숨기지 않는다.
+           비활성이라 커서가 건너뛰고, 눌러도 서버가 문장으로 답한다. */
+        disabled: !it.usable,
+      })),
+    });
+  }
+
   items.push({ id: "say", label: "말하기", focus: "말하기 " });
   return items;
 }

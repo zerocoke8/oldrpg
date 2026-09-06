@@ -20,6 +20,7 @@ import {
   walkable,
 } from "../engine/map";
 import { ENEMIES } from "../engine/enemies";
+import { ITEMS } from "../engine/items";
 import { NPCS } from "../engine/npcs";
 import type { Db } from "./open";
 import type { Queries } from "./queries";
@@ -72,6 +73,23 @@ export function assertWorldData(): void {
     }
     if (e.slainFlag !== null && !(e.slainFlag in WORLD_FLAGS)) {
       throw new Error(`${e.id}(${k}) 가 선언되지 않은 플래그 ${e.slainFlag} 를 켠다.`);
+    }
+    // ④ 드랍은 선언된 아이템만. 오타 하나가 '영영 나오지 않는 전리품' 이 된다.
+    for (const d of e.drops) {
+      if (!(d.itemId in ITEMS)) {
+        throw new Error(`${e.id}(${k}) 가 선언되지 않은 아이템 ${d.itemId} 를 떨어뜨린다.`);
+      }
+      if (d.qty < 1 || d.chance <= 0 || d.chance > 1) {
+        throw new Error(`${e.id}(${k}) 의 드랍 ${d.itemId} 가 이상하다 (qty ${d.qty}, chance ${d.chance}).`);
+      }
+    }
+  }
+
+  // ⑤ 아이템 정의 자체의 정합성.
+  for (const [id, it] of Object.entries(ITEMS)) {
+    if (it.id !== id) throw new Error(`ITEMS 의 키 ${id} 와 id ${it.id} 가 다르다.`);
+    if ((it.kind === "potion") !== (it.heal !== null)) {
+      throw new Error(`${id}: potion 은 heal 이 있어야 하고 그 밖에는 없어야 한다.`);
     }
   }
 }

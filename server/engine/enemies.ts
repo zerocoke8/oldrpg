@@ -31,6 +31,16 @@ export interface EnemyDef {
    *    이번엔 지금 그 방에 서 있는 사람들의 세계가 소리 없이 뒤집힌다.
    *    그래서 '세계를 바꾸는 적' 과 '반복되는 적' 은 다른 종류로 나눈다. */
   readonly respawnMs: number | null;
+  /** 쓰러뜨리면 나오는 것. 판정은 전투의 시드 PRNG 로 — 규칙 1 그대로,
+   *  무엇이 나올지는 결정론이고 LLM 은 관여하지 않는다. */
+  readonly drops: readonly DropDef[];
+}
+
+export interface DropDef {
+  readonly itemId: string; // engine/items.ts 의 id (부팅 때 검증한다)
+  readonly qty: number;
+  /** 0~1. 1 이면 반드시 나온다. */
+  readonly chance: number;
 }
 
 /** 방 좌표 -> 적. 맵의 'E' 타일과 짝이 맞아야 한다 (부팅 때 검증한다 —
@@ -50,6 +60,8 @@ export const ENEMIES: Readonly<Record<string, EnemyDef>> = {
     swingMs: 900, // 플레이어(500ms)보다 느리다
     slainFlag: "guardian_slain",
     respawnMs: null, // 보스는 돌아오지 않는다
+    // 한 번뿐인 적이므로 확률을 두지 않는다. 그 파편이 곧 '이걸 해냈다' 다.
+    drops: [{ itemId: "warden_shard", qty: 1, chance: 1 }],
   },
 
   /* 반복되는 적 둘. 파수꾼 하나뿐이면 '한 번 죽이면 끝' 인 세계라,
@@ -68,6 +80,7 @@ export const ENEMIES: Readonly<Record<string, EnemyDef>> = {
     swingMs: 1100,
     slainFlag: null,
     respawnMs: 45_000,
+    drops: [{ itemId: "minor_potion", qty: 1, chance: 0.5 }],
   },
   "5,2": {
     id: "rusted_watcher",
@@ -77,6 +90,7 @@ export const ENEMIES: Readonly<Record<string, EnemyDef>> = {
     swingMs: 950,
     slainFlag: null,
     respawnMs: 60_000,
+    drops: [{ itemId: "minor_potion", qty: 1, chance: 0.8 }],
   },
 };
 

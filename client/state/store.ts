@@ -22,6 +22,7 @@ import type {
   WorldFlagView,
   CombatView,
   DialogueView,
+  ItemStack,
 } from "../../shared/protocol";
 
 /** 클라이언트 내부 이벤트. 와이어에는 존재하지 않지만 같은 리듀서를 지난다 —
@@ -52,6 +53,8 @@ export interface UiState {
   world: Map<string, WorldFlagView>;
   /** 진행 중인 전투. 실시간이라 이 값이 초당 여러 번 바뀐다. */
   combat: CombatView | null;
+  /** 가방. 서버가 통째로 보내므로 델타를 합치지 않는다. */
+  items: ItemStack[];
   /** 열려 있는 대화창. 주제 '목록' 일 뿐 대사는 여기 없다 —
    *  대사는 log{kind:"npc"} 가 나른다 (불변식 1: 문장은 log 만 나른다). */
   dialogue: DialogueView | null;
@@ -69,6 +72,7 @@ export const initialState = (): UiState => ({
   world: new Map(),
   combat: null,
   dialogue: null,
+  items: [],
 });
 
 const MAX_LOG = 300;
@@ -107,6 +111,7 @@ export function reduce(st: UiState, m: ServerMsg | LocalMsg): UiState {
         world,
         combat: m.combat ?? null,
         dialogue: keepDialogue(st.dialogue, m.room),
+        items: m.self.items ?? [],
       };
     }
 
@@ -132,6 +137,9 @@ export function reduce(st: UiState, m: ServerMsg | LocalMsg): UiState {
           ...(m.maxHp !== undefined ? { maxHp: m.maxHp } : {}),
           ...(m.seen !== undefined ? { seen: m.seen } : {}),
         },
+        // 가방은 self 안이 아니라 UiState 최상단에 산다 — SelfState 를 통째로
+        // 갈아끼우는 스냅샷 경로와 델타 경로가 서로를 지우지 않게 한다.
+        ...(m.items !== undefined ? { items: m.items } : {}),
       };
 
     // presence 계열 — join 은 player.id 기준 '멱등 upsert', leave 는
@@ -204,6 +212,7 @@ export function reduce(st: UiState, m: ServerMsg | LocalMsg): UiState {
           enemy: { ...st.combat.enemy, hp: m.enemyHp },
           ...(m.targetId !== undefined ? { targetId: m.targetId } : {}),
           ...(m.queuedSkill !== undefined ? { queuedSkill: m.queuedSkill } : {}),
+          ...(m.queuedItem !== undefined ? { queuedItem: m.queuedItem } : {}),
           ...(m.skills !== undefined ? { skills: m.skills } : {}),
           ...(m.engaged !== undefined ? { engaged: m.engaged } : {}),
         },

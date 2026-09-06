@@ -110,7 +110,13 @@ export type Action =
   | { type: "talk"; npcId: string }
   /** 그 주제에 대해 묻는다. 잠긴 주제는 서버가 거절한다 —
    *  클라이언트의 목록은 안내일 뿐 권위가 아니다. */
-  | { type: "ask"; npcId: string; topic: string };
+  | { type: "ask"; npcId: string; topic: string }
+  /** 가방의 물건을 쓴다. CLAUDE.md 76줄이 처음부터 적어 두었던 그 모양이다.
+   *  ★ 전투 중이면 '다음 스윙에' 발동한다 — 스킬과 완전히 같은 규칙이고,
+   *    큐도 같은 한 자리를 쓴다(나중 입력이 이긴다). 전투 밖이면 즉시.
+   *  가지고 있는지, 쓸 수 있는 것인지는 서버가 다시 본다 — 클라이언트의
+   *  가방 목록은 안내일 뿐 권위가 아니다. */
+  | { type: "use_item"; itemId: string };
 
 export interface Hello {
   t: "hello";
@@ -153,6 +159,18 @@ export interface SelfState {
   maxHp: number;
   /** 밟아 본 방들. 미니맵 안개. 서버 소유이고 self.patch 로만 갱신된다. */
   seen: RoomId[];
+  /** 가방. 0개인 것은 실리지 않는다 (표에 행이 없다는 것과 같은 뜻이다). */
+  items: ItemStack[];
+}
+
+/** 가방의 한 칸. 이름은 서버가 붙인다 — 클라이언트가 id 로 문구를 조립하지
+ *  않는다 (프로토콜 불변식 1과 같은 이유). */
+export interface ItemStack {
+  id: string;
+  name: string;
+  qty: number;
+  /** 쓸 수 있는 것인가. 안내일 뿐이고 판정은 서버가 다시 한다. */
+  usable: boolean;
 }
 
 /** 미니맵이 그릴 격자. 1단계는 7x7 전체를 그대로 보낸다 — 클라이언트 예측을
@@ -233,6 +251,9 @@ export interface CombatView {
   engaged: boolean;
   /** 예약된 스킬 (다음 스윙에 발동). */
   queuedSkill: string | null;
+  /** 예약된 아이템. queuedSkill 과 '한 자리를 나눠 쓴다' — 둘 다 채워지는
+   *  일은 없다. 나중 입력이 앞의 것을 덮어쓴다. */
+  queuedItem: string | null;
   skills: SkillView[];
   /** 지금 적이 노리고 있는 사람. 누적 데미지가 가장 높은 사람이다. */
   targetId: PlayerId | null;
@@ -363,6 +384,9 @@ export interface SelfPatch {
   hp?: number;
   maxHp?: number;
   seen?: RoomId[];
+  /** 가방이 바뀌었다. 델타가 아니라 '전부' 다 — 칸이 열 개를 넘을 일이
+   *  없으므로 델타 프로토콜을 만들 이유가 없고, 통째로 보내면 어긋날 수 없다. */
+  items?: ItemStack[];
 }
 
 // --- presence 계열: 미니맵 피드. 수신자 = 나를 볼 수 있는 모두. ---
@@ -468,6 +492,7 @@ export interface CombatUpdate {
   targetId?: PlayerId | null;
   /** 예약된 스킬이 소모됐거나 새로 예약됐을 때. */
   queuedSkill?: string | null;
+  queuedItem?: string | null;
   /** 쿨다운이 바뀐 스킬들. */
   skills?: SkillView[];
   engaged?: boolean;
@@ -537,7 +562,7 @@ export type ServerMsg =
   | WorldFlagEvent
   | ServerPing
   | ErrorEvent;
-// 서버->클라이언트 19종, 클라이언트->서버 3종(액션 variant 10종). 이게 전부다.
+// 서버->클라이언트 19종, 클라이언트->서버 3종(액션 variant 11종). 이게 전부다.
 //
 // world.flag 를 추가하면서 PROTOCOL_VERSION 을 올리지 않았다: 불변식 (3)에
 // 따라 옛 클라이언트는 모르는 t 를 무시하고 계속 돈다. 깨는 변경이 아니다.

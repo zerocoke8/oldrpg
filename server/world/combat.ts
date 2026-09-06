@@ -26,14 +26,22 @@ import type { PlayerId, RoomId } from "../../shared/ids";
 import { roomIdOf } from "../../shared/ids";
 import type { CombatView, EnemyView, SkillView } from "../../shared/protocol";
 import { ENEMIES, PLAYER_SWING_MS, SKILLS, SKILL_LIST, type EnemyDef } from "../engine/enemies";
-import { pickTarget, resolveEnemySwing, resolvePlayerSwing, type Effect } from "../engine/combat";
+import {
+  pickTarget,
+  resolveEnemySwing,
+  resolvePlayerSwing,
+  rollDrops,
+  type Effect,
+} from "../engine/combat";
 import { makeRng, type Rng } from "../engine/rng";
 import { SPAWN } from "../engine/map";
+import { itemDef } from "../engine/items";
 import type { Queries } from "../db/queries";
 import { lines } from "../narration/lines";
 import type { Emit } from "../net/emit";
 import type { Registry, Session } from "../net/session";
 import type { EventService } from "./events";
+import type { InventoryService } from "./inventory";
 
 export const TICK_MS = 100;
 export const RESPAWN_MS = 5000;
@@ -46,7 +54,11 @@ interface Fighter {
   /** 다음 스윙 시각 (단조 ms). */
   nextActAt: number;
   swingMs: number;
-  queuedSkill: string | null;
+  /** 다음 스윙에 기본 공격을 '대신할' 것. 자리는 하나다 —
+   *  스킬이든 아이템이든 나중 입력이 앞의 것을 덮어쓴다.
+   *  와이어에는 queuedSkill / queuedItem 둘로 나뉘어 나가지만, 둘 다 채워지는
+   *  일은 없다 (한 자리에서 파생되기 때문이다). */
+  queued: { kind: "skill" | "item"; id: string } | null;
   /** skillId -> 쿨다운이 끝나는 시각 (단조 ms). */
   cooldowns: Map<string, number>;
   /** 다음 피격에 적용될 경감(%). 한 번 쓰면 0 으로 돌아간다. */
@@ -74,6 +86,8 @@ export interface CombatService {
   attack(s: Session): string | null;
   skill(s: Session, skillId: string): string | null;
   stop(s: Session): string | null;
+  /** 아이템을 쓴다. 전투 중이면 다음 스윙에 예약된다. */
+  useItem(s: Session, itemId: string): string | null;
   /** 이동·접속종료 등으로 전투에서 빠진다. */
   leave(playerId: PlayerId, reason: "left" | "gone"): void;
   /** 스냅샷용. 전투 중이 아니면 null. */
@@ -100,6 +114,7 @@ export function makeCombat(
   reg: Registry,
   emit: Emit,
   events: EventService,
+  inventory: InventoryService,
   clock: () => number,
   opts: CombatOptions = {},
 ): CombatService {
@@ -184,7 +199,8 @@ export function makeCombat(
     return {
       enemy: enemyView(c),
       engaged: f.engaged,
-      queuedSkill: f.queuedSkill,
+      queuedSkill: f.queued?.kind === "skill" ? f.queued.id : null,
+      queuedItem: f.queued?.kind === "item" ? f.queued.id : null,
       skills: skillViews(f, now()),
       targetId: c.targetId,
     };
@@ -207,7 +223,8 @@ export function makeCombat(
         // 항상 싣는다. 누가 맞고 있는지는 어그로 모델에서 화면의 핵심 정보이고,
         // 아낄 만한 바이트도 아니다.
         targetId: c.targetId,
-        queuedSkill: f.queuedSkill,
+        queuedSkill: f.queued?.kind === "skill" ? f.queued.id : null,
+      queuedItem: f.queued?.kind === "item" ? f.queued.id : null,
         skills: skillViews(f, t),
         engaged: f.engaged,
       });
@@ -293,7 +310,7 @@ export function makeCombat(
       engaged: true,
       nextActAt: now() + PLAYER_SWING_MS,
       swingMs: PLAYER_SWING_MS,
-      queuedSkill: null,
+      queued: null,
       cooldowns: new Map(),
       guardPercent: 0,
       joinedSeq: c.seq++,
@@ -324,7 +341,7 @@ export function makeCombat(
     if (ready > t) return lines.skillCooling(def.name, Math.ceil((ready - t) / 1000));
 
     // 나중 입력이 이긴다 — 큐는 하나뿐이다.
-    f.queuedSkill = skillId;
+    f.queued = { kind: "skill", id: skillId };
     // 교전을 껐더라도 스킬을 쓰면 다시 붙는다 (스킬만 쓰고 싶을 이유가 없다).
     if (!f.engaged) {
       f.engaged = true;
@@ -335,13 +352,36 @@ export function makeCombat(
     return null;
   }
 
+  /** 아이템을 쓴다. 전투 중이고 교전 중이면 '다음 스윙에', 아니면 즉시.
+   *
+   *  ★ 예약 '전에' 쓸 수 있는지 먼저 본다. 그러지 않으면 없는 물약을 예약해
+   *    두고 0.5초 뒤에야 "가지고 있지 않다" 를 듣는다 — 실시간에서 그건
+   *    거짓말에 가깝다. 물론 그 사이에 사정이 바뀌면 발동 시점에 다시
+   *    거절되고, 그때는 inventory 가 문장을 낸다. */
+  function useItem(s: Session, itemId: string): string | null {
+    const refusal = inventory.check(s, itemId);
+    if (refusal) return refusal;
+
+    const roomId = inCombat.get(s.playerId);
+    const c = roomId ? combats.get(roomId) : undefined;
+    const f = c?.fighters.get(s.playerId);
+    // 교전 중이 아니면 기다릴 '다음 호흡' 이 없다. 물러나 있는 사람도 마찬가지다.
+    if (!c || !f || !f.engaged) return inventory.use(s, itemId);
+    if (s.hp <= 0) return lines.defeated;
+
+    f.queued = { kind: "item", id: itemId };
+    emit.log(s, "sys", lines.itemQueued(itemDef(itemId)?.name ?? itemId));
+    pushUpdate(c);
+    return null;
+  }
+
   function stop(s: Session): string | null {
     const roomId = inCombat.get(s.playerId);
     const c = roomId ? combats.get(roomId) : undefined;
     const f = c?.fighters.get(s.playerId);
     if (!c || !f) return lines.notInCombat;
     f.engaged = false;
-    f.queuedSkill = null;
+    f.queued = null;
     emit.log(s, "sys", lines.disengage(c.def.name));
     pushUpdate(c);
     return null;
@@ -412,8 +452,16 @@ export function makeCombat(
         if (!s || s.hp <= 0) continue;
         f.nextActAt = t + f.swingMs;
 
-        const skillId = f.queuedSkill;
-        f.queuedSkill = null;
+        const queued = f.queued;
+        f.queued = null;
+        if (queued?.kind === "item") {
+          /* 아이템은 기본 공격을 '대신' 한다 — 스킬과 같은 규칙이다.
+             위협(어그로)도 올리지 않는다: 회복 스킬이 그러지 않는 것과 같다. */
+          inventory.use(s, queued.id);
+          pushUpdate(c);
+          continue;
+        }
+        const skillId = queued?.kind === "skill" ? queued.id : null;
         const res = resolvePlayerSwing(
           f.playerId,
           c.def,
@@ -537,6 +585,18 @@ export function makeCombat(
     /* 보스라면 applyEffects 가 이미 flag 를 켰다 (3단계 파이프라인이 돌고 있다).
        반복되는 적이라면 여기서 돌아올 시각을 적는다 — endCombat '전에' 적어야
        maybeStopTimer 가 틱을 끄지 않는다. */
+    /* 전리품. 피해를 준 사람 '전원' 이 각자 판정을 받는다 — 막타 경쟁도,
+       같이 잡으면 손해도 없다. 순서를 교전 순으로 고정한다: rng 를 쓰므로
+       순서가 곧 결과이고, 같은 전투는 같은 전리품을 내야 한다. */
+    const contributions = [...c.threat.entries()]
+      .filter(([, dmg]) => dmg > 0)
+      .sort(
+        (a, b) =>
+          (c.fighters.get(a[0])?.joinedSeq ?? 0) - (c.fighters.get(b[0])?.joinedSeq ?? 0),
+      )
+      .map(([playerId, damage]) => ({ playerId, damage }));
+    inventory.award(rollDrops(c.def, contributions, c.rng));
+
     if (c.def.respawnMs !== null) downed.set(c.roomId, now() + c.def.respawnMs);
     endCombat(c, "victory");
     /* 적이 사라진 것도 방의 구조화 상태 변화다 — 돌아온 것과 대칭이다.
@@ -616,6 +676,7 @@ export function makeCombat(
     attack,
     skill,
     stop,
+    useItem,
     leave: (playerId, reason) => leave(playerId, reason),
     viewFor,
     enemyIn,

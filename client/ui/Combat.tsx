@@ -41,6 +41,7 @@ export function Combat({ combat, selfId }: { combat: CombatView; selfId: string 
         ) : null}
         {!combat.engaged && <span style={{ color: C.gold }}> · 물러나 있음</span>}
         {combat.queuedSkill && <span style={{ color: C.gold }}> · 다음 호흡에 기술</span>}
+        {combat.queuedItem && <span style={{ color: C.gold }}> · 다음 호흡에 아이템</span>}
       </div>
     </div>
   );

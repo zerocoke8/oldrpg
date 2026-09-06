@@ -15,6 +15,7 @@ import type { Dir, Pos, RoomId } from "../../shared/ids";
 import { OPPOSITE, roomIdOf } from "../../shared/ids";
 import type {
   CombatView,
+  ItemStack,
   NpcBrief,
   PresenceEntry,
   RoomView,
@@ -40,6 +41,8 @@ export function makePresence(
   hasEnemy: (roomId: RoomId) => boolean = () => false,
   /** 그 방의 NPC 들. 역시 주입 — presence 는 engine/ 을 최소한만 안다. */
   npcsIn: (roomId: RoomId) => NpcBrief[] = () => [],
+  /** 그 사람의 가방. 역시 주입 — presence 는 db/ 를 import 하지 않는다. */
+  itemsOf: (playerId: string) => ItemStack[] = () => [],
 ) {
   const others = (self: Session): Session[] =>
     reg.all().filter((s) => s.playerId !== self.playerId);
@@ -73,6 +76,7 @@ export function makePresence(
         hp: self.hp,
         maxHp: self.maxHp,
         seen: [...self.seen],
+        items: itemsOf(self.playerId),
       },
       region: regionView(),
       room: roomView(self.pos, self),

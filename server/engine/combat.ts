@@ -94,6 +94,51 @@ export function resolvePlayerSwing(
   return { effects, crit, amount: dealt, skill, lethal };
 }
 
+/* ── 전리품 ──────────────────────────────────────────────────────────────
+ *
+ * ★ 순수 함수다. 난수는 주입된 시드 PRNG 이므로 같은 전투는 같은 전리품을
+ *   낸다 (engine/ 은 결정론이어야 한다 — .eslintrc.cjs 가 Math.random 을 막는다).
+ *   여기서 하는 일은 '무엇이 누구에게' 를 계산하는 것뿐이고, 기록은 호출자다. */
+
+/** 이 전투에서 한 사람이 낸 피해. 어그로(위협)와 같은 수치다. */
+export interface Contribution {
+  readonly playerId: PlayerId;
+  readonly damage: number;
+}
+
+export interface Award {
+  readonly playerId: PlayerId;
+  readonly itemId: string;
+  readonly qty: number;
+}
+
+/** 피해를 준 사람 '전원' 이 각자 따로 판정을 받는다.
+ *
+ *  같이 잡으면 손해가 되지 않는 것이 요점이다 — 막타 경쟁도 없다.
+ *  (실시간 0.5초 스윙에서 막타는 사실상 운이라, 그걸로 보상을 가르면
+ *   함께 싸울 이유가 줄어든다.)
+ *
+ *  ★ damage 를 지금은 쓰지 않는다. 그래도 인자로 받는 이유는, 나중에
+ *    '기여도에 비례한 차등 지급' 으로 가는 문을 여기 열어 두기 위해서다 —
+ *    그때 바뀌는 것은 이 함수의 몸통뿐이고 호출부도 표도 그대로다.
+ *    (호출자가 순서를 고정해서 넘긴다. rng 를 쓰므로 순서가 곧 결과다.) */
+export function rollDrops(
+  enemy: EnemyDef,
+  contributions: readonly Contribution[],
+  rng: Rng,
+): Award[] {
+  const out: Award[] = [];
+  for (const c of contributions) {
+    if (c.damage <= 0) continue;
+    for (const d of enemy.drops) {
+      if (d.chance >= 1 || rng.chance(d.chance)) {
+        out.push({ playerId: c.playerId, itemId: d.itemId, qty: d.qty });
+      }
+    }
+  }
+  return out;
+}
+
 export interface EnemySwingResult {
   readonly effects: readonly Effect[];
   readonly targetId: PlayerId;

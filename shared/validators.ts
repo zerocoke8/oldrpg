@@ -70,6 +70,8 @@ export function makeActionSchemas(limits: { sayMaxLen: number; unparsedMaxLen: n
     ask: z
       .object({ type: z.literal("ask"), npcId: z.string().max(64), topic: z.string().max(64) })
       .strict(),
+    // itemId 가 실제로 있는지, 가지고 있는지는 핸들러가 다시 본다.
+    use_item: z.object({ type: z.literal("use_item"), itemId: z.string().max(64) }).strict(),
     maxLen: { say: limits.sayMaxLen, unparsed: limits.unparsedMaxLen },
   };
 }

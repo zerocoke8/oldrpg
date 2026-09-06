@@ -38,8 +38,14 @@ world_flags    key, value                                  -- 엔진 소유
 room_text      room_id, state_hash, text, created_at       -- 생성 결과 캐시
 npcs           id, room_id, persona_seed, sensitive_flags[]
 npc_lines      npc_id, state_hash, text
-players        id, name, x, y, hp, inventory
+players        id, name, x, y, hp
+player_items   player_id, item_id, qty                     -- 소지품. 0개는 행이 없다
 ```
+
+소지품이 `players.inventory` 블롭이 아니라 별도 표인 이유: 수량 갱신이 한 문장으로
+원자적이어야 한다. 블롭이면 전부 읽고-고쳐-쓰기라, 두 명이 같은 적을 동시에 잡거나
+한 사람이 두 탭에서 물약을 마시면 그 사이에 낀 갱신이 사라진다.
+(`players.seen` 이 JSON 인 것은 괜찮다 — 통째로만 읽고 쓰며 경합이 없다.)
 
 `state_hash`는 **그 방이 선언한 플래그들의 값만** 해시한 것이다.
 전체 월드 플래그를 해시하면 플래그 하나 바뀔 때마다 모든 방의 캐시가 날아간다.

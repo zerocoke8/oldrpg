@@ -95,6 +95,21 @@ export const lines = {
   notInCombat: "지금은 싸우고 있지 않다.",
   unknownSkill: "그런 기술은 익히지 않았다.",
 
+  // ── 아이템 ────────────────────────────────────────────────────────────
+  /* 아이템 '이름' 은 engine/items.ts 가 소유한다 (세계의 사실이다).
+     여기 있는 것은 그 이름을 넣는 틀뿐이다. */
+  /** 전리품. 피해를 준 사람 각자가 자기 것만 듣는다. */
+  looted: (item: string, qty: number): string =>
+    qty > 1 ? `${item} ${qty}개를 챙겼다.` : `${item}을(를) 챙겼다.`,
+  /** 남이 무엇을 주웠는지는 알리지 않는다 — 각자 따로 판정하므로 비교가
+   *  생기고, 실시간 전투 로그는 이미 빽빽하다. */
+  drankPotion: (item: string, amount: number): string =>
+    amount > 0 ? `${item}을(를) 비웠다. 체력이 ${amount} 회복되었다.` : `${item}을(를) 비웠다.`,
+  itemQueued: (item: string): string => `${item} — 다음 호흡에 쓴다.`,
+  noSuchItem: "가지고 있지 않다.",
+  itemNotUsable: (item: string): string => `${item}은(는) 쓸 수 있는 것이 아니다.`,
+  itemAtFullHp: (item: string): string => `상처가 이미 아물어 있다. ${item}을(를) 아껴 둔다.`,
+
   // ── NPC 대화 (4b) ─────────────────────────────────────────────────────
   /* ★ 여기 있는 것은 전부 '틀' 이다. 대사 본문은 여기 없다 —
      씨앗에서 렌더링되어 npc_lines 에 고정된 문장이 text 로 들어온다.

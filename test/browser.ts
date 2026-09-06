@@ -483,7 +483,48 @@ async function main() {
     (await posOf(a)) !== posBeforeArrow, `${posBeforeArrow} -> ${await posOf(a)}`);
   await a.screenshot({ path: join(SHOTS, "18-자유-입력.png") });
 
-  console.log("\n⑮ 5단계 — 모바일: 세로 화면 · 스와이프 · 미니맵 탭");
+  console.log("\n⑮ 아이템 — 가방이 커맨드 창에 선다");
+  /* 전리품 판정 자체는 test/items.ts 가 검증한다. 여기서는 '화면에서
+     어떻게 보이고 눌리는가' 만 본다. 서버가 직접 넣는다. */
+  for (const sess of server.ctx.reg.all()) {
+    server.ctx.inventory.award([
+      { playerId: sess.playerId, itemId: "minor_potion", qty: 2 },
+      { playerId: sess.playerId, itemId: "warden_shard", qty: 1 },
+    ]);
+    server.ctx.q.setPlayerHp.run(22, Date.now(), sess.playerId); // 다치게 해 둔다
+    sess.hp = 22;
+  }
+  await sleep(300);
+  await a.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  check("가방 커맨드가 생겼다", (await a.locator("button:has-text('가방')").count()) > 0);
+
+  await a.locator("button:has-text('가방')").first().click();
+  await sleep(200);
+  check("가진 것이 이름으로 보인다 (클라이언트가 id 로 문구를 조립하지 않는다)",
+    (await a.locator("button:has-text('낡은 물약')").count()) > 0);
+  check("수량이 표시된다", (await a.locator("button:has-text('낡은 물약')").first().innerText()).includes("x2"),
+    await a.locator("button:has-text('낡은 물약')").first().innerText());
+  check("★ 쓸 수 없는 전리품은 비활성이다 (숨기지는 않는다)",
+    (await a.locator("button:has-text('파수꾼의 파편')").count()) > 0 &&
+      (await a.locator("button:has-text('파수꾼의 파편')").first().isDisabled()));
+  await a.screenshot({ path: join(SHOTS, "22-가방.png") });
+
+  const beforeDrink = await logText(a);
+  await a.locator("button:has-text('낡은 물약')").first().click();
+  await sleep(400);
+  const afterDrink = await logText(a);
+  check("마시면 문장이 온다",
+    afterDrink.some((t) => t.includes("낡은 물약") && t.includes("비웠다")),
+    JSON.stringify(afterDrink.slice(-2)));
+  check("로그가 늘었다 (교체가 아니라 새 줄)", afterDrink.length > beforeDrink.length);
+  check("수량이 하나 줄어 표시에서 사라진다 (x1 은 표시하지 않는다)",
+    !(await a.locator("button:has-text('낡은 물약')").first().innerText()).includes("x2"),
+    await a.locator("button:has-text('낡은 물약')").first().innerText());
+  check("상태창의 HP 가 올랐다", (await a.locator("body").innerText()).includes("36/40"),
+    (await a.locator("body").innerText()).match(/\d+\/40/)?.[0] ?? "?");
+  await a.screenshot({ path: join(SHOTS, "23-마신-뒤.png") });
+
+  console.log("\n⑯ 5단계 — 모바일: 세로 화면 · 스와이프 · 미니맵 탭");
   const phone = await browser.newContext({
     viewport: { width: 390, height: 844 },
     hasTouch: true,
