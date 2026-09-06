@@ -21,7 +21,8 @@ import { FIXTURE_WORLD, FIXTURE_BALANCE, FIXTURE_MOODS } from "./fixture";
 const FIXTURE = { world: FIXTURE_WORLD, balance: FIXTURE_BALANCE, moods: FIXTURE_MOODS } as const;
 import { PROTOCOL_VERSION, type ServerMsg } from "../shared/protocol";
 import type { Dir } from "../shared/ids";
-import { makeMap } from "../server/engine/map";
+import { makeMap, type MapData } from "../server/engine/map";
+import type { Balance } from "../server/engine/enemies";
 
 /** 실제 content/world/ 를 읽은 맵. 테스트는 서버가 부팅에서 쓰는 것과
  *  같은 데이터를 봐야 한다 — 별도의 테스트 세계를 만들면 검사는 통과하는데
@@ -210,6 +211,144 @@ async function main() {
   });
   throws("★ 없는 아이템을 보수로 두면 거절한다", () =>
     patchMission({ reward: [{ itemId: "없는아이템", qty: 1 }] }));
+
+  /* ── 도달 가능성 ────────────────────────────────────────────────────
+     여기까지의 조항은 '한 조각이 스스로 말이 되는가' 를 본다. 아래 넷은
+     세계를 스폰에서 뻗는 그래프로 본다 — 조각이 전부 멀쩡해도 갈 수 없으면
+     세계가 아니다. 증상이 전부 '조용함' 이라 지역이 늘면 눈으로 못 잡는다.
+
+     ★ 제자리 변형(throws)이 아니라 세계를 통째로 다시 만든다. 지역을 '더하는'
+       검사는 makeMap 이 한 번만 조립하므로 제자리로는 할 수 없고, 무엇보다
+       기존 문을 지우는 방식으로는 짝 검사가 먼저 걸려서 도달 가능성 조항이
+       실제로는 검사되지 않는다 — 처음에 그렇게 짰다가 검증기를 통째로 빼도
+       초록불이었다. */
+  const rebuilt = (patch: (d: MapData) => MapData, bal: Balance = balance): boolean => {
+    try {
+      assertWorldData(makeMap(patch(structuredClone(FIXTURE_WORLD) as MapData)), bal);
+      return false;
+    } catch {
+      return true;
+    }
+  };
+  check("★ 어디에서도 갈 수 없는 지역을 부팅이 거절한다 (지역 통째로 유령)",
+    rebuilt((d) => ({
+      ...d,
+      /* 스스로는 멀쩡하다 — 안이 이어져 있고 문이 없어 짝 검사에 걸릴 것도
+         없다. 오직 '아무도 가리키지 않는다' 는 이유로만 틀렸다. */
+      regions: [...d.regions, {
+        id: "orphan", name: "고아 지역",
+        tiles: ["#####", "#...#", "#####"],
+        seeds: { "1,1": "가", "2,1": "나", "3,1": "다" },
+        sensitive: {}, enemies: {}, npcs: {}, exits: [],
+      } as unknown as (typeof d.regions)[number]],
+    })));
+
+  /* ★ 위의 '고아 지역' 은 사실 방 연결성 조항도 함께 잡는다 (들어오는 자리가
+     없으니 모든 칸이 섬이다). 지역 그래프 조항만이 잡을 수 있는 모양은 이것 —
+     **서로는 이어져 있는데 세계와 안 이어진 지역 둘.** 각자 상대의 문을
+     들어오는 자리로 가지므로 방 연결성도, 짝 검사도 통과한다.
+     지역을 스무 개로 늘리면 이게 제일 흔한 실수다. */
+  check("★ 서로만 이어진 지역 둘을 거절한다 (짝도 맞고 안도 이어졌지만 섬이다)",
+    rebuilt((d) => ({
+      ...d,
+      regions: [...d.regions,
+        {
+          id: "isleA", name: "섬 A",
+          tiles: ["#####", "#...#", "#####"],
+          seeds: { "1,1": "가", "2,1": "나", "3,1": "다" },
+          sensitive: {}, enemies: {}, npcs: {},
+          exits: [{ at: "3,1", dir: "east", to: { region: "isleB", x: 1, y: 1 },
+                    requires: null, minRank: 0, oneWay: false }],
+        },
+        {
+          id: "isleB", name: "섬 B",
+          tiles: ["#####", "#...#", "#####"],
+          seeds: { "1,1": "라", "2,1": "마", "3,1": "바" },
+          sensitive: {}, enemies: {}, npcs: {},
+          exits: [{ at: "1,1", dir: "west", to: { region: "isleA", x: 3, y: 1 },
+                    requires: null, minRank: 0, oneWay: false }],
+        },
+      ] as unknown as typeof d.regions,
+    })));
+
+  check("★ 통로와 끊긴 방을 거절한다 (아무도 못 보는데 생성 비용은 나간다)",
+    rebuilt((d) => ({
+      ...d,
+      regions: d.regions.map((r) => {
+        if (r.id !== "b1") return r;
+        /* 격자에 열을 둘 붙이고 그중 한 칸만 뚫는다. 사방이 벽이라 섬이 된다.
+           기존 칸을 건드리지 않으므로 'E 타일에 적이 없다' 같은 다른 조항이
+           먼저 걸리지 않는다. */
+        const tiles = r.tiles.map((t) => `${t}##`);
+        tiles[1] = `${r.tiles[1]!}#.`;
+        return { ...r, tiles, seeds: { ...r.seeds, "8,1": "아무도 닿을 수 없는 칸" } };
+      }),
+    })));
+
+  check("★ 켤 방법이 없는 플래그로 잠긴 문을 거절한다 (영영 안 열린다)",
+    rebuilt((d) => ({
+      ...d,
+      /* 선언은 돼 있고 문이 읽기도 한다 — 다만 켜는 적이 세계에 없다.
+         '아무도 안 읽는다' 조항이 아니라 '켤 수 없다' 조항이 걸려야 한다. */
+      flags: { ...d.flags, sealed_forever: { default: "false", broadcast: false } },
+      regions: d.regions.map((r) =>
+        r.id === "b1"
+          ? { ...r, exits: r.exits.map((e) => ({ ...e, requires: "sealed_forever" })) }
+          : r,
+      ),
+    })));
+
+  /* ★ 위의 '잠긴 문' 은 사실 지역 그래프 조항도 함께 잡는다 (문 너머가 통째로
+     못 가는 곳이 되므로). 플래그 조항만이 잡을 수 있는 모양은 **문이 아닌 것**
+     을 잠그는 경우다 — 대사 주제·임무·방의 sensitive. 지역은 멀쩡히 다 갈 수
+     있고, 그저 그 이야기가 영영 안 열릴 뿐이라 아무 조항도 눈치채지 못한다. */
+  check("★ 켤 방법이 없는 플래그로 열리는 '주제' 를 거절한다 (지역은 멀쩡한데 이야기가 안 열린다)",
+    rebuilt((d) => ({
+      ...d,
+      flags: { ...d.flags, 영영_안_켜진다: { default: "false", broadcast: false } },
+      regions: d.regions.map((r) =>
+        r.id !== "b1"
+          ? r
+          : {
+              ...r,
+              npcs: {
+                ...r.npcs,
+                altar_keeper: {
+                  ...r.npcs.altar_keeper!,
+                  topics: [
+                    ...r.npcs.altar_keeper!.topics,
+                    { id: "never", label: "영영", seed: "영영 안 열리는 이야기", requires: "영영_안_켜진다" },
+                  ],
+                },
+              },
+            },
+      ),
+    })));
+
+  check("★ 읽지도 켜지도 않는 플래그 선언을 거절한다 (오타의 흔적)",
+    rebuilt((d) => ({
+      ...d,
+      flags: { ...d.flags, 아무도_안_쓴다: { default: "false", broadcast: false } },
+    })));
+  /* ★ 켜기만 하는 플래그는 멀쩡하다. 세계가 사건을 기록하되 아직 아무도
+     반응하지 않는 상태이고, 저작 중에 늘 지나가는 단계다 — 여기를 거절하면
+     'ashen_pages 가 죽으면 플래그를 켠다' 만 써 두고 반응할 방을 나중에 쓰는
+     순서가 불가능해진다. 한때 그렇게 짰다가 멀쩡한 세계가 거절당했다. */
+  const balWithSetter: Balance = {
+    ...balance,
+    enemies: {
+      ...balance.enemies,
+      ashen_pages: { ...balance.enemies.ashen_pages!, slainFlag: "기록만_된다" },
+    },
+  };
+  check("켜기만 하고 아무도 안 읽는 플래그는 통과한다 (저작 중에 늘 지나가는 단계)",
+    !rebuilt((d) => ({
+      ...d,
+      flags: { ...d.flags, 기록만_된다: { default: "false", broadcast: false } },
+    }), balWithSetter));
+
+  check("멀쩡한 세계는 그대로 통과한다 (위 넷이 거짓 양성이 아니다)",
+    !rebuilt((d) => d));
 
   throws("★ 사다리에 없는 등급을 요구하는 문을 부팅이 거절한다 (영영 안 열린다)", () => {
     const saved = { ...exits[0]! };

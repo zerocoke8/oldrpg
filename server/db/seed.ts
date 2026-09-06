@@ -12,7 +12,7 @@ import {
   type GameMap,
   type RegionDef,
 } from "../engine/map";
-import { DELTA, OPPOSITE } from "../../shared/ids";
+import { DELTA, OPPOSITE, type RegionId } from "../../shared/ids";
 import type { Balance } from "../engine/enemies";
 import type { Db } from "./open";
 import type { Queries } from "./queries";
@@ -32,6 +32,7 @@ export function assertWorldData(map: GameMap, balance: Balance): void {
   for (const r of map.regions()) assertRegion(map, r, balance);
   assertDoors(map, balance);
   assertMissions(map, balance);
+  assertReachable(map, balance);
 
   // ⑦ 적이 켜는 플래그는 선언돼 있어야 한다 (파일을 넘나드는 참조라 zod 가 못 본다).
   for (const [id, e] of Object.entries(balance.enemies)) {
@@ -214,6 +215,160 @@ function assertMissions(map: GameMap, balance: Balance): void {
       if (!(rw.itemId in balance.items)) {
         throw new Error(`${where}: 보수 ${rw.itemId} 가 items.json 에 없다.`);
       }
+    }
+  }
+}
+
+/* ⑪ "갈 수 있는가". 여기까지의 조항은 전부 '한 조각이 스스로 말이 되는가' 를
+   본다 — 문이 벽 자리인가, 짝이 있는가, 가리키는 것이 실재하는가. 그런데
+   세계는 조각들의 합이 아니라 **스폰에서 뻗어 나가는 그래프**다.
+
+   조각이 전부 멀쩡해도 세계가 틀릴 수 있다:
+     · 출구를 안 적은 지역은 통째로 유령이 된다 (짝 검사는 '있는 문' 만 본다)
+     · 손으로 격자를 고치다 통로와 끊긴 방이 생긴다
+     · 아무도 켜지 않는 플래그로 잠근 문은 영영 안 열린다
+
+   ★ 셋 다 증상이 '조용함' 이다. 지역이 여섯일 때는 걸어 보면 안다. 스물이면
+     안 걸리고, 그동안 pregen 은 못 가는 방의 문장에 돈을 낸다.
+
+   ★ 낙관적으로 걷는다: "지금 열려 있는가" 가 아니라 "언젠가 열릴 수 있는가".
+     잠긴 문도 그 플래그를 켤 방법이 세계 안에 있으면 지나간 것으로 친다.
+     아니면 진행이 있는 세계는 전부 거절당한다. */
+function assertReachable(map: GameMap, balance: Balance): void {
+  /* 무엇이 켜질 수 있는가. 지금 플래그를 켜는 것은 '배치된 적의 죽음' 뿐이다.
+     엔진이 플래그를 켜는 다른 경로가 생기면 여기에 더한다 — 그때 이 목록이
+     "세계를 여는 것들" 의 유일한 명세가 된다. */
+  const openable = new Set<string>();
+  const defaults = map.flagDefaults();
+  for (const key of map.flagKeys()) if (defaults[key] === "true") openable.add(key);
+  const placed = new Set(map.regions().flatMap((r) => Object.values(r.enemies)));
+  for (const id of placed) {
+    const f = balance.enemies[id]?.slainFlag;
+    if (f) openable.add(f);
+  }
+  /* ★ '켤 수 있는가' 와 '누군가 쓰기는 하는가' 는 다른 질문이라 집합이 둘이다.
+     배치되지 않은 적은 죽을 수 없으니 그 플래그로 잠긴 문은 영영 안 열린다
+     (openable 에 안 들어간다). 그런데 enemies.json 에 '정의' 만 있는 적의
+     slainFlag 도 world.json 에 선언은 돼 있어야 한다 (조항 ⑦). 그 선언을
+     '찌꺼기' 로 몰면, 적을 먼저 정의하고 배치를 나중에 하는 순서가 막힌다.
+     실제로 그렇게 짰다가 test/world.ts 의 두 방짜리 주입 세계가 거절당했다. */
+  const named = new Set(openable);
+  for (const e of Object.values(balance.enemies)) if (e.slainFlag) named.add(e.slainFlag);
+  const topRank = balance.ranks[balance.ranks.length - 1]?.level ?? 0;
+
+  /* ── 지역 그래프 ─────────────────────────────────────────────────── */
+  const reached = new Set<RegionId>([map.spawn.region]);
+  const queue: RegionId[] = [map.spawn.region];
+  while (queue.length) {
+    const r = map.region(queue.pop()!);
+    if (!r) continue;
+    for (const e of r.exits) {
+      if (e.requires !== null && !openable.has(e.requires)) continue;
+      if (e.minRank > topRank) continue;
+      if (reached.has(e.to.region)) continue;
+      reached.add(e.to.region);
+      queue.push(e.to.region);
+    }
+  }
+  for (const r of map.regions()) {
+    if (reached.has(r.id)) continue;
+    /* 왜 못 가는지까지 말해 준다. "닿지 않는다" 만으로는 출구를 안 적은
+       것인지 잠긴 문 너머인지 알 수 없고, 둘은 고치는 방법이 다르다. */
+    const inbound = map
+      .regions()
+      .flatMap((o) => o.exits.filter((e) => e.to.region === r.id).map((e) => ({ from: o.id, e })));
+    /* 문마다 '왜 못 지나가는가' 가 다르다. 잠긴 것과 '그 지역도 못 가는 것' 을
+       뭉뚱그리면 고칠 곳을 못 찾는다 — 앞은 플래그를 켤 적을 배치하는 일이고
+       뒤는 그 지역부터 이어야 하는 일이다. */
+    const why = inbound.length
+      ? inbound
+          .map(({ from, e }) => {
+            const at = `${from} 의 ${e.at}`;
+            if (!reached.has(from)) return `${at}: 그 지역에도 닿을 수 없다`;
+            if (e.requires !== null && !openable.has(e.requires)) {
+              return `${at}: 플래그 ${e.requires} 를 켤 방법이 없다`;
+            }
+            if (e.minRank > topRank) return `${at}: ${e.minRank}등급을 요구하는데 최고가 ${topRank}이다`;
+            return `${at}: ?`;
+          })
+          .join(" · ")
+      : "이 지역으로 들어오는 문이 하나도 없다";
+    throw new Error(`지역 ${r.id} 에 스폰에서 닿을 방법이 없다 — ${why}.`);
+  }
+
+  /* ── 지역 안의 방 ────────────────────────────────────────────────── */
+  for (const r of map.regions()) {
+    /* 들어오는 자리들. 다른 지역의 문이 가리키는 칸이고, 스폰 지역이면 스폰도. */
+    const entries: string[] = map
+      .regions()
+      .flatMap((o) => o.exits.filter((e) => e.to.region === r.id).map((e) => `${e.to.x},${e.to.y}`));
+    if (r.id === map.spawn.region) entries.push(`${map.spawn.x},${map.spawn.y}`);
+
+    const seen = new Set<string>();
+    const stack = entries.filter((k) => {
+      const [x, y] = k.split(",").map(Number);
+      return map.walkable(r.id, x!, y!);
+    });
+    for (const k of stack) seen.add(k);
+    while (stack.length) {
+      const [x, y] = stack.pop()!.split(",").map(Number);
+      for (const d of Object.values(DELTA)) {
+        const nx = x! + d.dx;
+        const ny = y! + d.dy;
+        const k = `${nx},${ny}`;
+        if (seen.has(k) || !map.walkable(r.id, nx, ny)) continue;
+        seen.add(k);
+        stack.push(k);
+      }
+    }
+    const stranded = Object.keys(r.seeds).filter((k) => !seen.has(k));
+    if (stranded.length) {
+      throw new Error(
+        `지역 ${r.id}: 들어오는 자리에서 걸어갈 수 없는 칸이 ${stranded.length}개 있다 ` +
+          `(${stranded.slice(0, 5).join(" ")}${stranded.length > 5 ? " …" : ""}). ` +
+          `아무도 보지 못하는데 생성 비용은 나간다.`,
+      );
+    }
+  }
+
+  /* ── 플래그 ──────────────────────────────────────────────────────── */
+  /* 무엇이 플래그를 '읽는가'. 읽는 데가 없으면 켜져도 세계가 반응하지 않고,
+     켜질 수 없는데 읽으면 그쪽은 영영 열리지 않는다. */
+  const readers = new Map<string, string[]>();
+  const note = (flag: string, where: string): void => {
+    const xs = readers.get(flag) ?? [];
+    xs.push(where);
+    readers.set(flag, xs);
+  };
+  for (const r of map.regions()) {
+    for (const e of r.exits) if (e.requires) note(e.requires, `지역 ${r.id} 의 문 ${e.at}`);
+    for (const [k, fs] of Object.entries(r.sensitive)) {
+      for (const f of fs) note(f, `${r.id} 의 방 ${k}`);
+    }
+  }
+  for (const n of map.npcs()) {
+    for (const f of n.sensitiveFlags) note(f, `NPC ${n.id}`);
+    for (const t of n.topics) if (t.requires) note(t.requires, `NPC ${n.id} 의 주제 ${t.id}`);
+  }
+  for (const m of map.missions()) if (m.requires) note(m.requires, `임무 ${m.id}`);
+
+  for (const key of map.flagKeys()) {
+    const who = readers.get(key);
+    /* ★ '읽지도 켜지도 않는' 것만 거절한다. 켜기만 하는 플래그는 멀쩡하다 —
+       세계가 그 사건을 기록하되 아직 아무도 반응하지 않는 상태이고, 그건
+       저작 중에 늘 지나가는 단계다. 반대로 어느 쪽도 아니면 오타뿐이다.
+       (한때 '읽는 곳이 없으면 거절' 로 짰다가, 적의 slainFlag 만 선언한
+        멀쩡한 세계가 부팅을 거절당했다.) */
+    if (!who && !named.has(key)) {
+      throw new Error(
+        `world.json 의 플래그 ${key} 를 읽는 곳도 켜는 곳도 없다 — 오타이거나 남은 찌꺼기다.`,
+      );
+    }
+    if (who && !openable.has(key)) {
+      throw new Error(
+        `플래그 ${key} 를 켤 방법이 세계 안에 없다 (기본값도 false 이고 켜는 적도 배치되지 않았다). ` +
+          `${who.slice(0, 3).join(", ")} 이(가) 영영 열리지 않는다.`,
+      );
     }
   }
 }

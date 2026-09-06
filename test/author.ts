@@ -167,6 +167,10 @@ async function main() {
     loopChance: 0.1,
     tiles: null,
     overview: null,
+    /* ★ 세계에 어떻게 붙는가. 한쪽만 적으면 도구가 짝을 만든다 — 새 지역은
+       문이 없으면 부팅 검증(도달 가능성)을 통과하지 못한다. 그게 옳다:
+       아무도 갈 수 없는 지역은 세계가 아니다. */
+    doors: [{ at: "5,2", dir: "east", to: { region: "d6town", x: 1, y: 6 } }],
   };
   const dir = workspace("bt", BRIEF);
   const fa = fakeAuthor(answerAll);
@@ -242,11 +246,18 @@ async function main() {
   check("답한 만큼만 채웠다", r4.filled === 2, String(r4.filled));
   check("★ 나머지는 '빠졌다' 고 보고한다 (조용히 메우지 않는다)",
     r4.missing.length === 10, JSON.stringify(r4.missing.length));
-  check("★ 사람이 붙인 구조를 건드리지 않았다",
+  check("★ 사람이 붙인 구조를 건드리지 않았다 (적·NPC·sensitive)",
     JSON.stringify(after.sensitive) === JSON.stringify(before.sensitive) &&
-      JSON.stringify(after.enemies) === "{}" && JSON.stringify(after.exits) === "[]" &&
+      JSON.stringify(after.enemies) === "{}" &&
       JSON.stringify(after.npcs) === JSON.stringify(before.npcs),
-    JSON.stringify([after.sensitive, after.enemies, after.exits, after.npcs]));
+    JSON.stringify([after.sensitive, after.enemies, after.npcs]));
+  /* ★ 문은 예외다 — 브리프가 소유한다. 위에서 exits 를 비워 놓았는데 도구가
+     되살린다. 이건 '덮어쓰지 않는다' 를 어기는 게 아니라, 문의 원본이
+     지역 파일이 아니라 브리프라는 뜻이다. 문을 없애려면 브리프에서 지운다. */
+  check("★ 문은 브리프에서 되살아난다 (지역 파일이 아니라 브리프가 원본이다)",
+    after.exits.length === 1 &&
+      JSON.stringify(after.exits[0]).includes("d6town"),
+    JSON.stringify(after.exits));
   check("배치도 그대로다", JSON.stringify(after.tiles) === firstTiles);
 
   // 끊긴 격자는 애초에 거절한다.
@@ -277,6 +288,44 @@ async function main() {
   check("★ assertWorldData 를 통과한다 (사람이 손볼 것 없이 그대로 돈다)", bootError === "", bootError);
   check("방 수가 맞다", map.rooms().filter((r) => r.region === "bt").length === 12,
     String(map.rooms().filter((r) => r.region === "bt").length));
+
+  /* ★ 짝은 저쪽 파일에 실제로 들어갔는가. 이게 이 기능의 전부다 — 사람이
+     한쪽만 적고, 어긋날 자리가 없어진다. */
+  const town = regionOf(dir, "d6town");
+  const pair = (town.exits as { at: string; dir: string; to: { region: string } }[]).find(
+    (e) => e.to.region === "bt",
+  );
+  check("★ 저쪽 지역 파일에 짝이 들어갔다", Boolean(pair), JSON.stringify(town.exits));
+  check("짝의 자리와 방향이 뒤집혀 있다", pair?.at === "1,6" && pair?.dir === "west",
+    JSON.stringify(pair));
+
+  // ── ④' 문을 잘못 적으면 모델을 부르기 전에 죽는다 ───────────────────
+  section("④' 문이 틀리면 돈이 나가기 전에 죽는다");
+  const doorFails = async (label: string, door: Record<string, unknown>, want: string): Promise<void> => {
+    const w = workspace("bz", { ...BRIEF, rooms: 12, doors: [door] });
+    const spy = fakeAuthor(answerAll);
+    let msg = "";
+    try {
+      await authorRegion("bz", { dir: w, author: spy }, quiet);
+    } catch (e) {
+      msg = e instanceof Error ? e.message : String(e);
+    }
+    check(`★ ${label}`, msg.includes(want), msg || "(안 죽었다)");
+    /* 돈이 안 나갔다는 것이 요점이다. 문 검사가 씨앗 생성보다 뒤에 있으면
+       열두 칸을 생성한 다음에 죽는다. */
+    check(`  그 전에 모델을 부르지 않았다`, spy.asked.length === 0, String(spy.asked.length));
+    rmSync(w, { recursive: true, force: true });
+  };
+  await doorFails("걸을 수 없는 칸에 문을 두면 거절한다",
+    { at: "0,0", dir: "east", to: { region: "d6town", x: 1, y: 6 } }, "걸을 수 있는 칸이 아니다");
+  await doorFails("그 방향이 벽이 아니면 거절한다 (한 칸 이동과 겹친다)",
+    { at: "3,2", dir: "east", to: { region: "d6town", x: 1, y: 6 } }, "벽이 아니다");
+  await doorFails("없는 지역에 붙이려 하면 거절한다",
+    { at: "5,2", dir: "east", to: { region: "없는곳", x: 1, y: 1 } }, "없다");
+  await doorFails("저쪽이 벽이면 거절한다",
+    { at: "5,2", dir: "east", to: { region: "d6town", x: 0, y: 0 } }, "벽이다");
+  await doorFails("저쪽에 짝을 놓을 벽이 없으면 거절한다",
+    { at: "5,2", dir: "east", to: { region: "d6town", x: 5, y: 7 } }, "짝을 놓을 자리가 없다");
 
   rmSync(dir, { recursive: true, force: true });
 

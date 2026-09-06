@@ -21,6 +21,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { DELTA, OPPOSITE, type Dir } from "../../shared/ids";
 import { fileURLToPath } from "node:url";
 import { generateLayout, connectedComponents, shapeOf } from "../engine/layout";
 import { makeRng } from "../engine/rng";
@@ -72,7 +73,79 @@ interface RegionFile {
   /* 도구는 NPC 를 만들지 않는다 — 누가 어디 서서 무엇을 아는가는 진행의
      결정이라 사람이 쓴다. 자리만 만들어 두고 그대로 실어 나른다. */
   npcs: Record<string, unknown>;
-  exits: unknown[];
+  exits: ExitRow[];
+}
+
+interface ExitRow {
+  at: string;
+  dir: Dir;
+  to: { region: string; x: number; y: number };
+  requires: string | null;
+  minRank: number;
+  oneWay: boolean;
+}
+
+/** 그 칸의 그 방향이 벽인가. 지역 간 문은 벽 자리에만 둔다 — 걸어갈 수 있는
+ *  칸을 가리키면 같은 키 입력에 두 가지 뜻이 생긴다. */
+const wallSide = (tiles: readonly string[], x: number, y: number, dir: Dir): boolean => {
+  const d = DELTA[dir];
+  return (tiles[y + d.dy]?.[x + d.dx] ?? "#") === "#";
+};
+const walkableAt = (tiles: readonly string[], x: number, y: number): boolean =>
+  (tiles[y]?.[x] ?? "#") !== "#";
+
+/** 브리프의 `doors` 를 양쪽 파일에 써 넣는다.
+ *
+ *  ★ 사람은 한쪽만 적는다. 짝을 손으로 적게 하면 좌표 하나가 어긋나고, 그건
+ *    부팅에서야 잡힌다 — 그때는 이미 두 파일을 열어 놓고 어느 쪽이 맞는지
+ *    되짚어야 한다. 여기서 한 번 만들면 어긋날 자리가 없다.
+ *
+ *  ★ 이미 있는 문은 건드리지 않는다 (도구는 덮어쓰지 않는다). 같은 자리에
+ *    다른 곳으로 가는 문을 적었다면 그건 사람이 지워야 하는 충돌이다. */
+function linkDoors(
+  id: string,
+  tiles: readonly string[],
+  doors: RegionBrief["doors"],
+  read: (rid: string) => RegionFile | null,
+  write: (rid: string, f: RegionFile) => void,
+  mine: ExitRow[],
+  log: (s: string) => void,
+): void {
+  for (const d of doors) {
+    const [ax, ay] = d.at.split(",").map(Number) as [number, number];
+    const where = `브리프의 문 ${d.at} ${d.dir}`;
+    if (!walkableAt(tiles, ax, ay)) throw new Error(`${where}: ${d.at} 은 걸을 수 있는 칸이 아니다.`);
+    if (!wallSide(tiles, ax, ay, d.dir)) {
+      throw new Error(`${where}: 그 방향이 벽이 아니다 — 한 칸 이동과 뜻이 겹친다.`);
+    }
+    const other = read(d.to.region);
+    if (!other) throw new Error(`${where}: 붙일 지역 ${d.to.region} 이 없다.`);
+    if (!walkableAt(other.tiles, d.to.x, d.to.y)) {
+      throw new Error(`${where}: 목적지 ${d.to.region} ${d.to.x},${d.to.y} 이 벽이다.`);
+    }
+    const back = OPPOSITE[d.dir];
+    if (!wallSide(other.tiles, d.to.x, d.to.y, back)) {
+      throw new Error(
+        `${where}: 저쪽 ${d.to.region} ${d.to.x},${d.to.y} 의 ${back} 이 벽이 아니다 — 짝을 놓을 자리가 없다.`,
+      );
+    }
+
+    const has = (xs: readonly ExitRow[], at: string, dir: Dir): boolean =>
+      xs.some((e) => e.at === at && e.dir === dir);
+    if (!has(mine, d.at, d.dir)) {
+      mine.push({ at: d.at, dir: d.dir, to: d.to, requires: d.requires, minRank: d.minRank, oneWay: false });
+      log(`문: ${id} ${d.at} ${d.dir} -> ${d.to.region} ${d.to.x},${d.to.y}`);
+    }
+    const backAt = `${d.to.x},${d.to.y}`;
+    if (!has(other.exits, backAt, back)) {
+      other.exits.push({
+        at: backAt, dir: back, to: { region: id, x: ax, y: ay },
+        requires: d.requires, minRank: d.minRank, oneWay: false,
+      });
+      write(d.to.region, other);
+      log(`문: ${d.to.region} ${backAt} ${back} -> ${id} ${d.at} (짝)`);
+    }
+  }
 }
 
 const readRegion = (path: string): RegionFile | null =>
@@ -173,6 +246,21 @@ export async function authorRegion(
   const todo = coords.filter((c) => !seeds[c]);
   log(`씨앗: ${coords.length}칸 중 ${todo.length}칸이 비어 있다.`);
 
+  /* ── 문 ──────────────────────────────────────────────────────────────
+     씨앗보다 먼저 한다. 여기서 던지면 모델을 부르기 전이라 돈이 안 나간다. */
+  const exits: ExitRow[] = [...(existing?.exits ?? [])];
+  if (!options.dryRun) {
+    linkDoors(
+      id,
+      tiles,
+      brief.doors,
+      (rid) => readRegion(regionPath(rid, options.dir)),
+      (rid, f) => writeJson(regionPath(rid, options.dir), f),
+      exits,
+      log,
+    );
+  }
+
   const save = (): void => {
     if (options.dryRun) return;
     const out: RegionFile = {
@@ -182,7 +270,7 @@ export async function authorRegion(
       sensitive: existing?.sensitive ?? {},
       enemies: existing?.enemies ?? {},
       npcs: existing?.npcs ?? {},
-      exits: existing?.exits ?? [],
+      exits,
     };
     writeJson(rPath, out);
   };

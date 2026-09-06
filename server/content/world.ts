@@ -173,6 +173,27 @@ const zBrief = z
     /** 도구가 한 번 만들어 적어 둔다. 있으면 다시 만들지 않는다 —
      *  방을 나중에 더 뚫어도 같은 장소로 이어져야 한다. */
     overview: z.string().nullable().default(null),
+    /** 세계의 어디에 붙는가. **한쪽만 적는다** — 반대편 짝은 도구가 만든다.
+     *
+     *  ★ 왜 브리프인가: 새 지역이 어디에 붙는지는 진행의 결정이라 사람의
+     *    입력이다. 그런데 그 '입력' 을 두 파일에 나눠 손으로 적게 하면
+     *    (이쪽 exits 와 저쪽 exits) 짝이 어긋나고, 그건 부팅에서만 잡힌다.
+     *    한 번 적고 도구가 양쪽에 써 내려가는 것이 맞다. */
+    doors: z
+      .array(
+        z
+          .object({
+            /** 새 지역 쪽의 칸. dir 방향은 벽이어야 한다. */
+            at: coord,
+            dir: z.enum(DIRECTIONS),
+            /** 붙일 곳. 그 칸의 반대 방향도 벽이어야 한다. */
+            to: zPos,
+            requires: z.string().min(1).nullable().default(null),
+            minRank: z.number().int().min(0).default(0),
+          })
+          .strict(),
+      )
+      .default([]),
   })
   .strict();
 
