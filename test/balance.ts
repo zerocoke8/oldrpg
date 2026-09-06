@@ -10,6 +10,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import WebSocket from "ws";
 import { loadBalance } from "../server/content/balance";
+import { loadWorld } from "../server/content/world";
+import { makeMap } from "../server/engine/map";
+import { simulate } from "../server/tools/balanceSim";
 import { boot } from "../server/index";
 import { PROTOCOL_VERSION, type ServerMsg } from "../shared/protocol";
 
@@ -64,6 +67,50 @@ async function main() {
   check("skillList 는 선언 순서를 지킨다 (커맨드 창의 순서다)",
     JSON.stringify(b.skillList.map((s) => s.id)) === JSON.stringify(Object.keys(b.skills)),
     JSON.stringify(b.skillList.map((s) => s.id)));
+
+  /* ── 난이도 불변식 ──────────────────────────────────────────────────
+     '올바른 수치' 는 설계 결정이라 검사가 정할 수 없다. 검사가 정할 수 있는
+     것은 두 가지다: 이길 수 없는 적이 없을 것, 그리고 아무 생각 없이 이기는
+     보스가 없을 것. 둘 다 실제 엔진 함수로 돌려서 본다 (server/tools/balanceSim.ts).
+
+     수치를 고치면 여기가 먼저 말해 준다 — 플레이해 보고 아는 것보다 낫다. */
+  section("①' 난이도 — 이길 수 없는 적도, 생각 없이 이기는 보스도 없다");
+  const sim = simulate(b, 120);
+  const skilled = sim.filter((r) => r.style === "skilled");
+  const basic = sim.filter((r) => r.style === "basic");
+  for (const r of skilled) {
+    check(`${r.name}: 스킬을 쓰면 이길 수 있다 (${Math.round(r.winRate * 100)}%)`,
+      r.winRate >= 0.6, `${Math.round(r.winRate * 100)}% · ${r.medianSec}s`);
+  }
+  const bosses = Object.values(b.enemies).filter((e) => e.slainFlag !== null).map((e) => e.id);
+  for (const id of bosses) {
+    const bs = basic.find((r) => r.id === id)!;
+    check(`★ ${bs.name}: 기본 공격만으로는 이기기 어렵다 (스킬이 의미를 갖는다)`,
+      bs.winRate <= 0.35, `${Math.round(bs.winRate * 100)}%`);
+  }
+  const trash = sim.filter((r) => r.style === "basic" && !bosses.includes(r.id));
+  check("★ 잡몹 중 적어도 하나는 기본 공격만으로도 편하게 잡힌다 (첫 전투)",
+    trash.some((r) => r.winRate === 1 && r.medianHpPct >= 80),
+    JSON.stringify(trash.map((r) => [r.name, r.medianHpPct])));
+
+  section("①'' 배치 — 마을은 안전하고, 깊을수록 세진다");
+  const map = makeMap(loadWorld());
+  const spawnRegion = map.region(map.spawn.region)!;
+  check("★ 스폰 지역에는 적이 없다 (돌아올 곳이 있어야 한다)",
+    Object.keys(spawnRegion.enemies).length === 0,
+    JSON.stringify(Object.keys(spawnRegion.enemies)));
+  /* 배치된 적이 전부 같은 놈이면 곡선이 아니다. */
+  const placed = new Set(map.regions().flatMap((r) => Object.values(r.enemies)));
+  check("적이 여러 종류로 배치돼 있다", placed.size >= 4, JSON.stringify([...placed]));
+  check("정의만 있고 어디에도 없는 적이 없다",
+    Object.keys(b.enemies).every((id) => placed.has(id)),
+    JSON.stringify(Object.keys(b.enemies).filter((id) => !placed.has(id))));
+  /* 보스는 하나의 지역에 하나. 둘이면 어느 쪽을 잡아도 같은 플래그가 켜져
+     다른 하나가 영영 안 나오는 적이 된다. */
+  for (const r of map.regions()) {
+    const bossHere = Object.values(r.enemies).filter((id) => bosses.includes(id));
+    check(`${r.id}: 보스가 둘 이상 겹치지 않는다`, bossHere.length <= 1, JSON.stringify(bossHere));
+  }
 
   section("② 틀린 값이면 '부팅에서' 죽는다 — 조용히 도는 것보다 낫다");
   const cases: [string, string, (d: Record<string, unknown>) => void, string][] = [

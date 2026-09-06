@@ -21,6 +21,7 @@
     "test:items": "tsx test/items.ts",
     "pregen": "tsx server/tools/pregen.ts",
     "author": "tsx server/tools/authorRegion.ts",
+    "sim": "tsx server/tools/balanceSim.ts",
     "start": "node --import tsx server/index.ts",
     "test:deploy": "tsx test/deploy.ts",
     "test:balance": "tsx test/balance.ts",
