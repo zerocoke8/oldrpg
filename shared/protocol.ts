@@ -125,7 +125,10 @@ export type Action =
   /* 임무. 받는 것과 내는 것을 나눈 이유: 하나로 두면 "받자마자 낸다" 를
      서버가 구별할 수 없고, 오조작이 조용히 성공한다. */
   | { type: "accept_mission"; npcId: string; missionId: string }
-  | { type: "turn_in"; npcId: string; missionId: string };
+  | { type: "turn_in"; npcId: string; missionId: string }
+  /* 돌려주기. NPC 를 받지 않는다 — 못 끝낼 임무를 들고 게시한 사람에게
+     돌아가야 한다면, 그 사람이 사라진 경우 탈출구가 없다. */
+  | { type: "abandon_mission"; missionId: string };
 
 export interface Hello {
   t: "hello";

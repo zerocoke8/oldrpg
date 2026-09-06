@@ -112,6 +112,33 @@ async function main() {
     JSON.stringify(runs.filter((r) => r.style === "basic" && r.potions === 0)
       .map((r) => [r.name, Math.round(r.clearRate * 100)])));
 
+  /* ★ 사다리의 모든 칸이 무언가를 열어야 한다. 열지 않는 등급은 이름만
+     바꾸면서 시간을 먹는다 — 실제로 3·4·5 등급(어둠 결정 19개, 50~90분)이
+     아무 문도 안 열고 있었다. 지역 문 10개 중 minRank 를 요구하는 것이
+     하나뿐이었고 그 1등급은 무료였다. */
+  section("①° 사다리 — 오른 등급이 무언가를 연다");
+  const gated = new Map<number, string[]>();
+  for (const r of makeMap(loadWorld()).regions()) {
+    for (const e of r.exits) {
+      if (e.minRank <= 0) continue;
+      gated.set(e.minRank, [...(gated.get(e.minRank) ?? []), `${r.id}->${e.to.region}`]);
+    }
+  }
+  for (const m of makeMap(loadWorld()).missions()) {
+    if (m.minRank <= 0) continue;
+    gated.set(m.minRank, [...(gated.get(m.minRank) ?? []), `임무 ${m.id}`]);
+  }
+  for (const rank of b.ranks) {
+    /* 1등급은 예외다 — 등록 자체이고, 그것이 여는 것은 '사다리에 오르는 것' 이다.
+       다만 1등급도 무언가를 열지 않으면 등록할 이유가 없으므로 함께 본다. */
+    check(`${rank.level}등급(${rank.name})이 무언가를 연다`,
+      (gated.get(rank.level)?.length ?? 0) > 0,
+      `사다리에 있는데 이 등급을 요구하는 문·임무가 없다. 지역이 늘 때까지 사다리를 줄이거나, 걸 곳을 만들 것`);
+  }
+  check("★ 사다리가 콘텐츠보다 길지 않다",
+    Math.max(...[...gated.keys()], 0) >= b.ranks[b.ranks.length - 1]!.level,
+    `최고 등급 ${b.ranks[b.ranks.length - 1]!.level} · 실제로 걸린 최고 ${Math.max(...[...gated.keys()], 0)}`);
+
   section("①'' 배치 — 마을은 안전하고, 깊을수록 세진다");
   const map = makeMap(loadWorld());
   const spawnRegion = map.region(map.spawn.region)!;

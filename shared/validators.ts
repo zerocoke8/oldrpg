@@ -80,6 +80,9 @@ export function makeActionSchemas(limits: { sayMaxLen: number; unparsedMaxLen: n
     turn_in: z
       .object({ type: z.literal("turn_in"), npcId: z.string().max(64), missionId: z.string().max(64) })
       .strict(),
+    abandon_mission: z
+      .object({ type: z.literal("abandon_mission"), missionId: z.string().max(64) })
+      .strict(),
     maxLen: { say: limits.sayMaxLen, unparsed: limits.unparsedMaxLen },
   };
 }

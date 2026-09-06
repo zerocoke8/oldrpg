@@ -31,6 +31,7 @@ import {
   resolveEnemySwing,
   resolvePlayerSwing,
   rollDrops,
+  sharers,
   type Effect,
 } from "../engine/combat";
 import { makeRng, type Rng } from "../engine/rng";
@@ -60,7 +61,8 @@ interface Fighter {
    *  일은 없다 (한 자리에서 파생되기 때문이다). */
   queued: { kind: "skill" | "item"; id: string } | null;
   /** skillId -> 쿨다운이 끝나는 시각 (단조 ms). */
-  cooldowns: Map<string, number>;
+  /** 스킬 쿨다운은 Fighter 가 아니라 플레이어에 산다 (아래 cooldownsOf).
+   *  여기 두면 전투에서 빠지는 것만으로 전부 리셋된다. */
   /** 다음 피격에 적용될 경감(%). 한 번 쓰면 0 으로 돌아간다. */
   guardPercent: number;
   /** 교전 순서. pickTarget 의 동점 처리에 쓰인다. */
@@ -195,7 +197,7 @@ export function makeCombat(
     return balance.skillList.map((sk) => ({
       id: sk.id,
       name: sk.name,
-      readyInMs: Math.max(0, (f.cooldowns.get(sk.id) ?? 0) - t),
+      readyInMs: Math.max(0, (cooldownsOf(f.playerId).get(sk.id) ?? 0) - t),
     }));
   }
 
@@ -216,6 +218,43 @@ export function makeCombat(
   }
 
   /** 그 방의 전투원들에게. 전투는 방 단위라 room 계열과 수신자가 같다. */
+  /* ★ 쿨다운은 플레이어에 산다. Fighter 에 두면 전투가 사라질 때 함께 사라지고,
+     전투는 마지막 사람이 방을 나가는 순간 통째로 삭제된다(leave) — 즉 "붙었다
+     떨어졌다" 만으로 쿨다운이 리셋됐다.
+
+     그게 무료 무한 회복을 만들었다: 응급 처치는 8초에 12~18(1.88/초)이고 제일
+     약한 적은 1.2초에 1~2(1.25/초)다. 가장 약한 적에게 붙어 회복만 돌리면
+     순 +0.63/초로 체력이 무한히 찬다. 전투 밖 회복이 없으므로(charter 의
+     "회복은 전투 중에만") 그게 이 게임에서 가장 싼 회복 수단이었다.
+
+     세션이 사라져도 이 맵은 남는다 — 재접속으로 쿨다운을 리셋하지 못하게.
+     플레이어가 정리되는 곳(reapStalePlayers)에서 함께 지운다. */
+  const cooldowns = new Map<PlayerId, Map<string, number>>();
+  function cooldownsOf(playerId: PlayerId): Map<string, number> {
+    let m = cooldowns.get(playerId);
+    if (!m) {
+      m = new Map();
+      cooldowns.set(playerId, m);
+    }
+    return m;
+  }
+
+  /** 같은 방에 서 있는데 싸우지는 않는 사람들.
+   *
+   *  ★ 왜 필요한가: 전투 서술이 c.fighters 로 잠겨 있어서, 같은 방의 구경꾼은
+   *    적이 죽은 것조차 문장으로 못 들었다. 그러면 남이 싸우는 것을 보고
+   *    합류할 계기가 화면에 아예 없다 — 이 게임에서 둘이 함께하는 유일한
+   *    행위가 '같은 적을 친다' 인데 그 시작을 볼 방법이 없었다.
+   *
+   *  ★ 스윙마다 보내지 않는다. 구경꾼에게 필요한 것은 '시작' 과 '끝' 뿐이고,
+   *    한 대 한 대를 흘리면 방에 둘만 있어도 로그가 두 배가 된다. */
+  function toBystanders(c: Combat, fn: (s: Session) => void): void {
+    emit.toRoom(c.roomId, null, (s) => {
+      if (c.fighters.has(s.playerId)) return;
+      fn(s);
+    });
+  }
+
   function toCombat(c: Combat, fn: (s: Session, f: Fighter) => void): void {
     for (const f of c.fighters.values()) {
       const s = sessionOf(f.playerId);
@@ -320,7 +359,6 @@ export function makeCombat(
       nextActAt: now() + balance.player.swingMs,
       swingMs: balance.player.swingMs,
       queued: null,
-      cooldowns: new Map(),
       guardPercent: 0,
       joinedSeq: c.seq++,
     };
@@ -330,6 +368,11 @@ export function makeCombat(
 
     emit.send(s, { t: "combat.start", combat: viewFor(s.playerId)! });
     emit.log(s, "bad", lines.engage(def.name));
+    /* 구경꾼에게 '누가 붙었다' 를 알린다 — 합류할 계기는 이 한 줄뿐이다.
+       먼저 붙은 사람이 있으면 그 사람이 시작한 것이 아니므로 보내지 않는다. */
+    if (c.fighters.size === 1) {
+      toBystanders(c, (o) => emit.log(o, "bad", lines.engagedBy(nameOf(s.playerId), def.name)));
+    }
     // 같은 방의 다른 전투원에게도 알린다 (구조화 + 문장)
     pushUpdate(c);
     ensureTimer();
@@ -346,7 +389,7 @@ export function makeCombat(
     if (s.hp <= 0) return lines.defeated;
 
     const t = now();
-    const ready = f.cooldowns.get(skillId) ?? 0;
+    const ready = cooldownsOf(s.playerId).get(skillId) ?? 0;
     if (ready > t) return lines.skillCooling(def.name, Math.ceil((ready - t) / 1000));
 
     // 나중 입력이 이긴다 — 큐는 하나뿐이다.
@@ -405,6 +448,15 @@ export function makeCombat(
     if (!c) return;
     c.fighters.delete(playerId);
     c.threat.delete(playerId);
+    /* 다 식은 쿨다운은 버린다. 아직 안 식은 것은 남아야 한다 — 그게 이 맵이
+       Fighter 밖에 사는 이유다. 그래서 맵은 '지금 쿨다운 중인 사람' 만큼만 
+       자란다. */
+    const cd = cooldowns.get(playerId);
+    if (cd) {
+      const t = now();
+      for (const [id, at] of cd) if (at <= t) cd.delete(id);
+      if (cd.size === 0) cooldowns.delete(playerId);
+    }
     const s = sessionOf(playerId);
     if (s) emit.send(s, { t: "combat.end", reason: reason === "defeat" ? "defeat" : reason });
     if (c.fighters.size === 0) {
@@ -481,7 +533,7 @@ export function makeCombat(
           c.rng,
           balance,
         );
-        if (skillId && res.skill) f.cooldowns.set(skillId, t + res.skill.cooldownMs);
+        if (skillId && res.skill) cooldownsOf(f.playerId).set(skillId, t + res.skill.cooldownMs);
 
         applyEffects(res.effects, c);
         if (res.skill?.kind !== "heal" && res.skill?.kind !== "guard") {
@@ -592,6 +644,9 @@ export function makeCombat(
         s.playerId === killerId ? lines.slain(c.def.name) : lines.slainByOther(killer, c.def.name),
       );
     });
+    /* 끝난 것도 구경꾼에게 간다. 안 그러면 그 방의 hasEnemy 가 조용히 꺼지고,
+       서 있던 사람은 '싸우기' 가 사라진 이유를 모른다. */
+    toBystanders(c, (o) => emit.log(o, "good", lines.slainByOther(killer, c.def.name)));
     /* 보스라면 applyEffects 가 이미 flag 를 켰다 (3단계 파이프라인이 돌고 있다).
        반복되는 적이라면 여기서 돌아올 시각을 적는다 — endCombat '전에' 적어야
        maybeStopTimer 가 틱을 끄지 않는다. */
@@ -605,10 +660,12 @@ export function makeCombat(
           (c.fighters.get(a[0])?.joinedSeq ?? 0) - (c.fighters.get(b[0])?.joinedSeq ?? 0),
       )
       .map(([playerId, damage]) => ({ playerId, damage }));
-    inventory.award(rollDrops(c.def, contributions, c.rng));
-    /* ★ 임무 진행도 '같은 목록' 으로 오른다. 막타 기준으로 두면 같이 잡았을 때
-       전리품은 나오는데 임무는 안 오르고, 그건 함께 싸울 이유를 깎는다. */
-    missions.onSlain(c.def.id, contributions.map((x) => x.playerId));
+    /* ★ 몫을 받는 사람을 '한 번' 고르고 둘 다에 넘긴다. 두 곳에서 따로 거르면
+       언젠가 한쪽만 고쳐져 "전리품은 나오는데 임무는 안 오른다" 가 된다.
+       문턱은 기여가 없는 사람만 거른다 — 함께 잡은 사람들끼리는 여전히 동등하다. */
+    const paid = sharers(c.def, contributions, balance.player.minLootShare);
+    inventory.award(rollDrops(c.def, paid, c.rng));
+    missions.onSlain(c.def.id, paid.map((x) => x.playerId));
 
     if (c.def.respawnMs !== null) downed.set(c.roomId, now() + c.def.respawnMs);
     endCombat(c, "victory");
@@ -625,6 +682,7 @@ export function makeCombat(
       if (o.playerId === playerId) emit.log(o, "bad", lines.defeated);
       else emit.log(o, "bad", lines.defeatedOther(who));
     });
+    toBystanders(c, (o) => emit.log(o, "bad", lines.defeatedOther(who)));
     leave(playerId, "defeat");
     if (!s) return;
     /* 부활: 스폰으로 이송하고 절반의 체력으로 일으킨다.

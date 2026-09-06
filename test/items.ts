@@ -21,7 +21,7 @@ const FIXTURE = { world: FIXTURE_WORLD, balance: FIXTURE_BALANCE, moods: FIXTURE
 import { migrate, SCHEMA_VERSION } from "../server/db/migrate";
 import { PROTOCOL_VERSION, type ServerMsg } from "../shared/protocol";
 import type { Dir } from "../shared/ids";
-import { rollDrops } from "../server/engine/combat";
+import { rollDrops, sharers } from "../server/engine/combat";
 import { makeRng } from "../server/engine/rng";
 
 const PORT = 8908;
@@ -225,6 +225,35 @@ const BALANCE = FIXTURE_BALANCE;
   check("★ 지금은 기여도가 보상을 가르지 않는다 (차등 지급의 문만 열려 있다)",
     Math.abs(manyA - manyB) < 40, `a=${manyA} b=${manyB} (400회)`);
   check("확률이 대략 지켜진다 (0.8)", manyA > 280 && manyA < 360, String(manyA));
+
+  /* ── 몫을 받는 사람 ─────────────────────────────────────────────────
+     ★ 문턱이 없을 때 실제로 무슨 일이 있었나: 한 대(약 6피해) 치고 stop 하면
+       — stop 은 engaged 만 끄고 threat 에서 빼지 않는다 — 다 잡은 사람과
+       전리품·임무 공로가 **똑같이** 나왔다. 등급 사다리 전체가 전리품
+       수량이라, "강한 사람 옆에서 한 대 치기" 가 사다리를 도는 최적 전략이었다. */
+  section("②' 몫은 기여가 있는 사람에게만 — 그래도 막타 경쟁은 없다");
+  const leech = [
+    { playerId: "a", damage: 200 },
+    { playerId: "b", damage: 6 }, // 한 대 치고 물러난 사람
+  ];
+  const need = Math.ceil(guard.maxHp * 0.1);
+  check("★ 한 대만 친 사람은 몫에서 빠진다",
+    sharers(guard, leech, 0.1).map((c) => c.playerId).join() === "a",
+    `${guard.maxHp}체력의 10% = ${need}피해 필요`);
+  check("문턱을 넘은 사람들끼리는 완전히 동등하다 (막타 경쟁 없음)",
+    sharers(guard, two, 0.1).length === 2, JSON.stringify(sharers(guard, two, 0.1)));
+  check("문턱이 0 이면 옛 동작 그대로다", sharers(guard, leech, 0).length === 2);
+  /* ★ 문턱은 '적의 최대 체력' 기준이지 '총 피해' 기준이 아니다. 총 피해
+     기준이면 사람이 늘수록 각자의 몫이 작아져 자격을 잃는다 — 함께 싸울
+     이유를 깎지 않는 것이 이 목록의 존재 이유인데 정반대가 된다. */
+  const four = Array.from({ length: 4 }, (_, i) => ({
+    playerId: `p${i}`,
+    damage: Math.ceil(guard.maxHp / 4),
+  }));
+  check("★ 넷이 똑같이 나눠 때려도 전원이 몫을 받는다 (총 피해 기준이 아니다)",
+    sharers(guard, four, 0.1).length === 4, JSON.stringify(sharers(guard, four, 0.1).length));
+  check("피해가 0 이면 문턱이 0 이어도 rollDrops 가 거른다",
+    rollDrops(guard, [{ playerId: "z", damage: 0 }], makeRng(1)).length === 0);
 
   // ── 서버 ────────────────────────────────────────────────────────────
   for (const f of [DB, `${DB}-wal`, `${DB}-shm`]) rmSync(f, { force: true });

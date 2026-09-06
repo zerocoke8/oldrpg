@@ -452,6 +452,12 @@ export function handleAction(
       action = p.data;
       break;
     }
+    case "abandon_mission": {
+      const p = SCHEMAS.abandon_mission.safeParse(raw);
+      if (!p.success) return reject(ctx, s, seq, "bad_args");
+      action = p.data;
+      break;
+    }
     default:
       // 이 서버가 구현하지 않은 variant. 옛 서버가 새 클라이언트를 만나는
       // 경우가 정확히 이것이고, 크래시가 아니라 거절이어야 한다.
@@ -495,6 +501,8 @@ export function handleAction(
       return doWorldCommand(ctx, s, seq, () =>
         ctx.missions.turnIn(s, action.npcId, action.missionId),
       );
+    case "abandon_mission":
+      return doWorldCommand(ctx, s, seq, () => ctx.missions.abandon(s, action.missionId));
   }
 }
 

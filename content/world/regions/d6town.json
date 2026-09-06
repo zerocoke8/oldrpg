@@ -349,7 +349,8 @@
         "y": 1
       },
       "requires": null,
-      "oneWay": false
+      "oneWay": false,
+      "minRank": 3
     },
     {
       "at": "2,5",
@@ -360,7 +361,8 @@
         "y": 4
       },
       "requires": null,
-      "oneWay": false
+      "oneWay": false,
+      "minRank": 2
     }
   ]
 }

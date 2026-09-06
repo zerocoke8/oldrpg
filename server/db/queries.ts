@@ -280,6 +280,12 @@ export function makeQueries(db: Db) {
       `UPDATE player_missions SET progress = MIN(progress + @by, @cap)
        WHERE player_id = @player_id AND mission_id = @mission_id AND done_at IS NULL`,
     ),
+    /** 돌려준다. done_at IS NULL 이라 이미 낸 것은 지워지지 않는다 —
+     *  냈다는 사실은 세계의 기록이고 되돌릴 것이 아니다. 지워지면 보수를
+     *  받고도 다시 맡아 또 받을 수 있다. */
+    dropMission: db.prepare(
+      "DELETE FROM player_missions WHERE player_id = ? AND mission_id = ? AND done_at IS NULL",
+    ),
     /** 제출. ★ done_at IS NULL 이 조건이라 두 번 제출하면 두 번째는 0행이다.
      *  보수 지급이 이 0행 검사 뒤에 오므로, 두 탭에서 동시에 눌러도 보수는
      *  한 번만 나간다 (같은 트랜잭션 안이다). */

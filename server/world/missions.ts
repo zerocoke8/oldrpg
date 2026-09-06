@@ -9,7 +9,7 @@
  *   피해를 준 사람 전원이다. 막타 기준으로 두면 "같이 잡으면 전리품은
  *   나오는데 임무는 안 오른다" 가 되고, 그건 함께 싸울 이유를 깎는다. */
 
-import { resolveAccept, resolveTurnIn, isPosted, isComplete, slayCredit } from "../engine/missions";
+import { resolveAccept, resolveTurnIn, isPosted, isComplete, slayCredit, goalGone } from "../engine/missions";
 import type { MissionDef, MissionState } from "../engine/missions";
 import type { Balance } from "../engine/enemies";
 import type { GameMap } from "../engine/map";
@@ -28,6 +28,8 @@ export interface MissionService {
   /** 그 NPC 가 지금 이 사람에게 내보일 것. 대화에 실린다. */
   offers(s: Session, npcId: string): MissionOffer[];
   accept(s: Session, npcId: string, missionId: string): string | null;
+  /** 맡은 것을 돌려준다. 못 끝낼 임무가 일지에 영영 남는 것을 막는 유일한 길이다. */
+  abandon(s: Session, missionId: string): string | null;
   turnIn(s: Session, npcId: string, missionId: string): string | null;
   /** 적 하나가 쓰러졌다. 공로자 전원의 진행을 올린다.
    *  ★ 전투의 핫패스에서 불린다. 임무를 하나도 안 받은 사람은 SELECT 한 번에
@@ -108,6 +110,9 @@ export function makeMissions(
       /* 아직 게시되지 않은 임무는 아예 나가지 않는다 — 잠긴 대화 주제와 같은
          이유다. "무엇을 하게 될 것인가" 자체가 스포일러가 된다. */
       if (!isPosted(m, isFlagOn)) continue;
+      /* ★ 목표가 영영 사라진 임무는 게시하지 않는다. 첫 플레이어가 보스를
+         잡고 나면 그 임무는 누구도 끝낼 수 없는데, 게시는 그 사실을 안 봤다. */
+      if (goalGone(m, balance.enemies[m.goal.enemyId], isFlagOn)) continue;
       const row = rows.get(m.id);
       /* 끝낸 것은 목록에서 사라진다. 반복 임무가 없으므로 남겨 두면
          영영 누를 수 없는 항목이 쌓인다. */
@@ -139,9 +144,11 @@ export function makeMissions(
     if (!def || def.npcId !== npcId) return lines.noSuchMission;
 
     const row = q.missionOf.get(s.playerId, missionId);
-    const r = resolveAccept(def, s.rank, row ? stateOf(row) : null, isFlagOn);
+    const gone = goalGone(def, balance.enemies[def.goal.enemyId], isFlagOn);
+    const r = resolveAccept(def, s.rank, row ? stateOf(row) : null, isFlagOn, gone);
     if (!r.ok) {
       if (r.reason === "unposted") return lines.noSuchMission;
+      if (r.reason === "gone") return lines.missionGone(def.name);
       if (r.reason === "rank") {
         return lines.missionRank(def.name, rankName(r.need, balance) ?? `${r.need}등급`);
       }
@@ -156,6 +163,11 @@ export function makeMissions(
     }
     push(s);
     emit.log(s, "sys", lines.missionAccepted(def.name, def.goal.count));
+    /* ★ 지시문을 한 번 읽어 준다. 이 문장은 와이어까지 오고 있었는데 화면에
+       닿는 경로가 없었다 — "첫 하강" 네 글자만으로는 어디로 가는지, 무엇을
+       몇 마리 잡는지 알 수 없다. 프로즈는 여전히 데이터가 소유한다
+       (content/world/missions.json 의 brief). */
+    emit.log(s, "narr", def.brief);
     return null;
   }
 
@@ -201,6 +213,19 @@ export function makeMissions(
     return null;
   }
 
+  /** 맡은 것을 돌려준다. 게시한 사람 앞에 있을 필요는 없다 — 못 끝낼 임무를
+   *  들고 그 사람에게 돌아가야 한다면, 그 사람이 사라진 경우 탈출구가 없다. */
+  function abandon(s: Session, missionId: string): string | null {
+    const def = map.mission(missionId);
+    const row = q.missionOf.get(s.playerId, missionId);
+    if (!row) return lines.missionNotTaken(def?.name ?? missionId);
+    if (row.done_at !== null) return lines.missionDone(def?.name ?? missionId);
+    q.dropMission.run(s.playerId, missionId);
+    push(s);
+    emit.log(s, "sys", lines.missionAbandoned(def?.name ?? missionId));
+    return null;
+  }
+
   function onSlain(enemyId: string, playerIds: readonly PlayerId[]): void {
     for (const playerId of playerIds) {
       const rows = rowsOf(playerId);
@@ -237,5 +262,5 @@ export function makeMissions(
     }
   }
 
-  return { of, offers, accept, turnIn, onSlain, push };
+  return { of, offers, accept, abandon, turnIn, onSlain, push };
 }

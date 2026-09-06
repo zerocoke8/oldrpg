@@ -50,9 +50,32 @@ export function isPosted(m: MissionDef, isFlagOn: (key: string) => boolean): boo
   return m.requires === null || isFlagOn(m.requires);
 }
 
+/** 이 목표를 이제 영영 못 잡는가.
+ *
+ *  ★ 왜 필요한가: 세계를 바꾸는 적(slainFlag 가 있고 respawnMs 가 없는 적)은
+ *    서버 수명 동안 딱 한 번뿐이다. 그런데 게시는 그 사실을 안 봤다 — 첫
+ *    플레이어가 잡고 나면 접수원은 **이미 죽어 없는 보스의 임무를 영원히
+ *    계속 게시**했고, 받은 사람의 일지에는 영영 0/1 이 박혔다.
+ *    임무 5개 중 2개가 그런 임무였다.
+ *
+ *  ★ 판정 자체는 world/combat.ts 의 enemyIn 과 같은 규칙이다: 보스는 플래그로
+ *    사라지고 반복되는 적은 타이머로 돌아온다. 여기서는 '영영' 만 본다 —
+ *    리스폰 대기 중인 적은 곧 돌아오므로 임무는 여전히 유효하다. */
+export function goalGone(
+  m: MissionDef,
+  enemy: { slainFlag: string | null; respawnMs: number | null } | undefined,
+  isFlagOn: (key: string) => boolean,
+): boolean {
+  if (m.goal.kind !== "slay" || !enemy) return false;
+  if (enemy.respawnMs !== null) return false;
+  return enemy.slainFlag !== null && isFlagOn(enemy.slainFlag);
+}
+
 export type AcceptResult =
   | { ok: true }
   | { ok: false; reason: "unposted" }
+  /** 목표가 세계에서 영영 사라졌다. */
+  | { ok: false; reason: "gone" }
   | { ok: false; reason: "rank"; need: number }
   | { ok: false; reason: "taken" }
   | { ok: false; reason: "done" };
@@ -63,11 +86,17 @@ export function resolveAccept(
   rank: number,
   have: MissionState | null,
   isFlagOn: (key: string) => boolean,
+  /** 목표가 영영 사라졌는가 (goalGone). 호출자가 밸런스를 보고 넘긴다 —
+   *  engine 은 적의 정의를 들고 있지 않다. */
+  gone = false,
 ): AcceptResult {
   /* ★ 게시를 자격보다 먼저 본다. 아직 안 걸린 임무 앞에서 "등급이 모자라다"
      고 답하면 그 임무의 존재를 자백하는 셈이다 — 문의 requires/minRank 순서와
      같은 판단이다. */
   if (!isPosted(m, isFlagOn)) return { ok: false, reason: "unposted" };
+  /* 게시 바로 다음이다. 자격보다 먼저 보는 이유는 unposted 와 같다 — 못 끝낼
+     일에 "등급이 모자란다" 고 답하면 등급을 올리러 가게 만든다. */
+  if (gone) return { ok: false, reason: "gone" };
   if (m.minRank > rank) return { ok: false, reason: "rank", need: m.minRank };
   /* 끝낸 것을 먼저 본다. 둘 다 참인 행("받았고 끝냈다")에서 '진행 중' 이라고
      답하면 이미 낸 임무를 다시 진행하는 것처럼 보인다. */

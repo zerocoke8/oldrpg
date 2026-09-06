@@ -102,10 +102,23 @@ export function rootItems(st: UiState): MenuItem[] {
                         : m.state === "locked"
                           ? "자격 부족"
                           : m.reward,
-                  disabled: m.state === "locked" || m.state === "taken",
+                  /* ★ locked 를 비활성으로 두지 않는다. 서버는 "첫 하강은(는)
+                     견습 이상에게만 맡긴다" 를 이미 준비해 두는데, 비활성이면
+                     커서가 건너뛰고 클릭도 막혀서 그 문장이 발화될 방법이
+                     없었다 — 신규 플레이어가 회색 항목 셋을 보고 탭을 닫는
+                     지점이 거기다. 자격 판정은 어차피 서버가 다시 한다. */
+                  disabled: m.state === "taken",
                 })),
                 ...(n.guild
-                  ? [{ id: "promote", label: "승급 신청", action: { type: "promote", npcId: n.id } as Action }]
+                  ? [{
+                      id: "promote",
+                      /* rank 0 에서 이 버튼의 실제 효과는 '무료 등록' 이다
+                         (ranks.json 의 1등급은 requires: []). "승급 신청" 은
+                         뭔가 자격을 쌓아야 눌리는 것처럼 들린다. 라벨은
+                         클라이언트 크롬이라 불변식 (1)을 어기지 않는다. */
+                      label: (st.self?.rank.level ?? 0) === 0 ? "길드에 등록" : "승급 신청",
+                      action: { type: "promote", npcId: n.id } as Action,
+                    }]
                   : []),
               ]
             : [],
@@ -139,11 +152,21 @@ export function rootItems(st: UiState): MenuItem[] {
     items.push({
       id: "journal",
       label: "일지",
+      /* 항목을 열면 지시문이 나온다. brief 는 서버가 만들어 보낸 문자열을
+         그대로 세우는 것이라 클라이언트가 문장을 조립하는 게 아니다 —
+         log.text 를 그리는 것과 같다 (불변식 1). 지시문이 없으면 "첫 하강"
+         네 글자만으로 어디로 가는지 알 수 없다. */
       items: journal.map((m) => ({
         id: `j:${m.id}`,
         label: m.name,
         note: m.done ? "보고" : `${m.progress}/${m.goal}`,
-        disabled: true,
+        items: [
+          ...(m.brief ? [{ id: `jb:${m.id}`, label: m.brief, disabled: true }] : []),
+          /* 돌려주기. 목표가 영영 사라진 임무(누군가 먼저 보스를 잡았다)를
+             들고 있으면 이게 유일한 탈출구다. */
+          { id: `jd:${m.id}`, label: "돌려주기", action: { type: "abandon_mission", missionId: m.id } as Action },
+        ],
+        empty: "…",
       })),
     });
   }

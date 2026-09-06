@@ -372,7 +372,11 @@ const raw: {
     ],
     "critChance": 0.15,
     "critMult": 2,
-    "respawnMs": 5000
+    "respawnMs": 5000,
+    /* 픽스처는 문턱을 0 으로 둔다 — 전투·인벤토리 검사는 '몫을 나눈다' 를
+       보지, '누가 자격이 있나' 를 보지 않는다. 문턱은 test/combat.ts 가
+       따로 세운다. */
+    "minLootShare": 0
   },
   "enemies": {
     "shadow_warden": {

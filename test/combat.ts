@@ -400,6 +400,95 @@ async function main() {
     server.combat.enemyIn("b1:5,2") !== null);
   erin.close();
 
+  /* ── ⑩'' 쿨다운은 전투가 아니라 사람에게 붙어 있다 ──────────────────
+     ★ 무엇을 막는가: 전투는 마지막 사람이 방을 나가는 순간 통째로 삭제된다.
+       쿨다운이 Fighter 에 살면 "붙었다 떨어졌다" 만으로 전부 리셋됐다.
+
+       그게 무료 무한 회복을 만들었다 — 응급 처치는 8초에 12~18(1.88/초),
+       가장 약한 적은 1.2초에 1~2(1.25/초)다. 그 적에게 붙어 회복만 돌리면
+       순 +0.63/초로 체력이 무한히 찬다. 전투 밖 회복이 없으므로 그게 이
+       게임에서 가장 싼 회복 수단이었다.
+
+     여기서는 '리셋되지 않는다' 만 본다 — 회복량 자체는 밸런스라 sim 이 잰다. */
+  section("⑩'' 스킬 쿨다운은 방을 나갔다 와도 리셋되지 않는다");
+  const fay = new Client("fay");
+  await fay.connect(null);
+  /* 스폰(3,3) -> 녹슨 감시자 (5,2). 동·동·북 */
+  await fay.walk(["east", "east", "north"]);
+  fay.clear();
+  await fay.actAndWait({ type: "attack" });
+  await advance(600);
+  await fay.actAndWait({ type: "skill", skillId: "mend" });
+  await advance(600);
+  /* 픽스처의 이름은 "응급 치료" 다 (운영은 "응급 처치"). 검사가 운영
+     콘텐츠의 문구를 알면 그건 결합이라, 밸런스에서 읽어 쓴다. */
+  const mendName = SKILLS["mend"]!.name;
+  const usedIt = fay.texts().some((t) => t.includes(mendName));
+  check("응급 처치를 썼다", usedIt, JSON.stringify(fay.texts().slice(-3)));
+
+  /* 방을 나갔다 온다 — 마지막 사람이므로 전투가 통째로 삭제된다. */
+  await fay.actAndWait({ type: "move", dir: "south" });
+  await advance(200);
+  await fay.actAndWait({ type: "move", dir: "north" });
+  fay.clear();
+  await fay.actAndWait({ type: "attack" });
+  await advance(200);
+  await fay.actAndWait({ type: "skill", skillId: "mend" });
+  await advance(200);
+  check("★ 돌아와도 여전히 식는 중이다 (붙었다 떨어지는 것으로 리셋되지 않는다)",
+    fay.texts("sys").some((t) => t.includes("남았다")), JSON.stringify(fay.texts("sys")));
+  /* 그리고 다 식으면 당연히 다시 쓸 수 있어야 한다 — 위가 '영영 못 쓴다' 로
+     통과해 버리면 검사가 거짓말이다. */
+  await advance(9000);
+  fay.clear();
+  await fay.actAndWait({ type: "skill", skillId: "mend" });
+  await advance(600);
+  check("다 식으면 다시 쓸 수 있다",
+    !fay.texts("sys").some((t) => t.includes("남았다")), JSON.stringify(fay.texts("sys")));
+
+  /* ── ⑪ 구경꾼 ───────────────────────────────────────────────────────
+     ★ 전투 서술이 c.fighters 로 잠겨 있어서, 같은 방에 서 있는 사람은 적이
+       죽은 것조차 문장으로 못 들었다. 합류할 계기가 화면에 없었다는 뜻이고,
+       이 게임에서 둘이 함께하는 유일한 행위가 '같은 적을 친다' 인데 그 시작을
+       볼 방법이 없었다. */
+  section("⑪ 같은 방의 구경꾼은 시작과 끝을 본다 (스윙마다는 아니다)");
+  /* ★ 새 캐릭터는 IP 당 10분에 5개다 (실제 방어책이라 무르지 않는다).
+     싸우는 쪽만 새로 만들고, 구경꾼은 fay 를 그대로 쓴다. */
+  const hana = new Client("hana");
+  await hana.connect(null);
+  await hana.walk(["east", "east", "north"]); // 녹슨 감시자 (5,2)
+
+  /* fay 를 확실히 '구경꾼' 으로 만든다. stop 은 engaged 만 끄고 fighters 에서
+     빼지 않으므로(그게 옳다 — 피해는 이미 들어갔다), 방을 나갔다 와야 한다. */
+  await fay.actAndWait({ type: "move", dir: "south" });
+  await advance(200);
+  await fay.actAndWait({ type: "move", dir: "north" });
+  /* 적이 살아 있을 때까지 기다린다 — 시간으로 재면 respawnMs 를 건드리는 순간
+     이 검사가 조용히 무의미해진다. */
+  for (let i = 0; i < 200 && server.combat.enemyIn("b1:5,2") === null; i++) await advance(500);
+  fay.clear();
+
+  await hana.actAndWait({ type: "attack" });
+  await advance(300);
+  check("★ 구경꾼이 '누가 붙었다' 를 듣는다 (합류할 계기)",
+    fay.texts().some((t) => t.includes("달려든다")), JSON.stringify(fay.texts()));
+  const before = fay.texts().length;
+  await advance(4000);
+  /* 스윙마다 흘리면 방에 둘만 있어도 로그가 두 배가 된다. 구경꾼에게 필요한
+     것은 시작과 끝뿐이다. */
+  check("★ 스윙은 구경꾼에게 흐르지 않는다", fay.texts().length === before,
+    JSON.stringify(fay.texts().slice(before)));
+  check("구경꾼은 combat.* 를 받지 않는다 (전투원이 아니다)",
+    fay.of("combat.update").length === 0, JSON.stringify(fay.of("combat.update").length));
+  fay.clear();
+  for (let i = 0; i < 300 && !fay.texts().some((t) => t.includes("쓰러뜨렸다")); i++) {
+    await advance(500);
+  }
+  check("★ 끝난 것도 듣는다 (아니면 '싸우기' 가 사라진 이유를 모른다)",
+    fay.texts().some((t) => t.includes("쓰러뜨렸다")), JSON.stringify(fay.texts()));
+  fay.close();
+  hana.close();
+
   /* ── ⑨ 부활 타이머를 잃어도 캐릭터가 굳지 않는다 ────────────────────
    *
    * 부활은 world/combat.ts 의 메모리 setTimeout 하나뿐이라 두 경로로 유실된다:

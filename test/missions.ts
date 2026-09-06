@@ -22,6 +22,7 @@ import {
   slayCredit,
   isPosted,
   isComplete,
+  goalGone,
   type MissionDef,
   type MissionState,
 } from "../server/engine/missions";
@@ -381,6 +382,62 @@ async function main() {
   a.clear();
   await a.actAndWait({ type: "accept_mission", npcId: "clerk", missionId: "m_after" });
   check("이제 받을 수 있다", a.log("m_after")?.goal === 1, JSON.stringify(a.curLog));
+
+  // ── ⑥' 못 끝낼 임무는 게시되지 않고, 이미 맡은 것은 돌려줄 수 있다 ──
+  /* ★ 무엇을 막는가: 세계를 바꾸는 적(slainFlag 가 있고 respawnMs 가 없는 적)은
+     서버 수명 동안 딱 한 번뿐인데, 게시는 그 사실을 안 봤다. 첫 플레이어가
+     잡고 나면 접수원은 이미 죽어 없는 보스의 임무를 영원히 계속 게시했고,
+     받은 사람의 일지에는 영영 0/1 이 박혔다 — 포기할 경로도 없었다.
+     운영 세계의 임무 5개 중 2개가 그런 임무였다. */
+  section("⑥' 목표가 영영 사라진 임무");
+  const boss = { slainFlag: "guardian_slain" as string | null, respawnMs: null as number | null };
+  const mob = { slainFlag: null as string | null, respawnMs: 45000 as number | null };
+  const anyM = def("m_pages");
+  check("플래그가 꺼져 있으면 아직 잡을 수 있다", !goalGone(anyM, boss, off));
+  check("★ 플래그가 켜지고 리스폰이 없으면 영영 사라진 것이다", goalGone(anyM, boss, on));
+  check("리스폰하는 적은 사라지지 않는다 (곧 돌아온다)", !goalGone(anyM, { ...boss, respawnMs: 1000 }, on));
+  check("플래그를 안 켜는 적도 사라지지 않는다", !goalGone(anyM, mob, on));
+  check("정의가 없는 적이면 판정하지 않는다", !goalGone(anyM, undefined, on));
+  const goneR = resolveAccept(anyM, 9, null, off, true);
+  check("★ 사라진 목표는 등급이 넘쳐도 거절된다 (자격보다 먼저 본다)",
+    !goneR.ok && goneR.reason === "gone", JSON.stringify(goneR));
+
+  /* 서버에서. 픽스처의 shadow_warden 은 guardian_slain 을 켜고 리스폰하지 않는다.
+     그 적을 목표로 하는 m_sealed 는 플래그가 켜진 뒤 영영 못 끝낸다. */
+  a.clear();
+  await a.actAndWait({ type: "talk", npcId: "clerk" });
+  check("★ 사라진 목표의 임무는 게시 목록에서 빠진다",
+    !a.offers().some((o) => o.id === "m_sealed"), JSON.stringify(a.offers().map((o) => o.id)));
+  a.clear();
+  await a.actAndWait({ type: "accept_mission", npcId: "clerk", missionId: "m_sealed" });
+  check("★ id 로 찔러도 거절된다", a.sys().includes("이미 누군가 끝낸"), a.sys());
+
+  section("⑥'' 돌려주기 — 못 끝낼 임무가 일지에 영영 남지 않는다");
+  a.clear();
+  await a.actAndWait({ type: "accept_mission", npcId: "clerk", missionId: "m_after" });
+  check("맡았다 (이미 ⑥ 에서 맡았으면 그대로다)", a.log("m_after") !== undefined,
+    JSON.stringify(a.curLog));
+  a.clear();
+  await a.actAndWait({ type: "abandon_mission", missionId: "m_after" });
+  check("★ 일지에서 사라진다", a.log("m_after") === undefined, JSON.stringify(a.curLog));
+  check("문장으로 알려 준다", a.sys().includes("돌려주었다"), a.sys());
+  check("DB 에서도 행이 지워졌다", server.ctx.q.missionOf.get(a.id, "m_after") === undefined);
+  a.clear();
+  await a.actAndWait({ type: "abandon_mission", missionId: "m_after" });
+  check("맡은 적 없는 것은 돌려줄 수 없다", a.sys().includes("맡은 적이 없다"), a.sys());
+  /* ★ 이미 낸 것은 지워지지 않는다 — 냈다는 사실은 세계의 기록이다.
+     지워지면 보수를 받고도 다시 받을 수 있다. */
+  a.clear();
+  await a.actAndWait({ type: "abandon_mission", missionId: "m_pages" });
+  check("★ 이미 낸 임무는 돌려줄 수 없다 (보수를 두 번 받는 길이 된다)",
+    a.sys().includes("이미 끝낸"), a.sys());
+  check("완료 기록이 그대로다",
+    server.ctx.q.missionOf.get(a.id, "m_pages")?.done_at !== null &&
+      server.ctx.q.missionOf.get(a.id, "m_pages") !== undefined);
+  /* 돌려준 임무는 다시 맡을 수 있어야 한다 — 아니면 '돌려주기' 가 삭제다. */
+  a.clear();
+  await a.actAndWait({ type: "accept_mission", npcId: "clerk", missionId: "m_after" });
+  check("돌려준 것은 다시 맡을 수 있다", a.log("m_after")?.progress === 0, JSON.stringify(a.curLog));
 
   // ── ⑦ 경합은 SQL 이 막는다 ──────────────────────────────────────────
   section("⑦ 두 번째 방어선 — 판정을 우회해도 표가 막는다");

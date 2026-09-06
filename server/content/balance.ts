@@ -32,6 +32,9 @@ const zPlayer = z
     critChance: z.number().min(0).max(1),
     critMult: z.number().min(1),
     respawnMs: z.number().int().nonnegative(),
+    /** 전리품·임무 공로를 받으려면 적 최대 체력의 몇 할을 깎아야 하는가.
+     *  적지 않으면 0 — 옛 동작(피해 1이라도 넣으면 전액) 그대로다. */
+    minLootShare: z.number().min(0).max(1).default(0),
   })
   .strict();
 

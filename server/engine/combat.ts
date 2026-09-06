@@ -118,6 +118,26 @@ export interface Award {
  *    '기여도에 비례한 차등 지급' 으로 가는 문을 여기 열어 두기 위해서다 —
  *    그때 바뀌는 것은 이 함수의 몸통뿐이고 호출부도 표도 그대로다.
  *    (호출자가 순서를 고정해서 넘긴다. rng 를 쓰므로 순서가 곧 결과다.) */
+/** 이 전투의 '몫을 받는 사람들'. 전리품과 임무 공로가 **같은 목록**이어야
+ *  하므로 호출자가 이걸 한 번 계산해 둘 다에 넘긴다.
+ *
+ *  ★ 막타 경쟁은 여전히 없다 — 넘긴 사람들끼리는 완전히 동등하다.
+ *    거르는 것은 '기여가 없는데 받는' 쪽뿐이다. 문턱이 없으면 피해 1을 넣은
+ *    사람과 229를 넣은 사람의 기대 전리품이 같고, 등급 사다리 전체가 전리품
+ *    수량이므로 "강한 사람 옆에서 한 대 치기" 가 최적 전략이 된다.
+ *
+ *  ★ 문턱은 적의 최대 체력 기준이다. 총 피해 기준으로 하면 여럿이 붙을수록
+ *    각자의 몫이 작아져, 사람이 늘면 늘수록 자격을 잃는다 — 함께 싸울 이유를
+ *    깎지 않는 것이 이 목록의 존재 이유인데 그러면 정반대가 된다. */
+export function sharers(
+  enemy: EnemyDef,
+  contributions: readonly Contribution[],
+  minShare: number,
+): Contribution[] {
+  const need = Math.max(1, Math.ceil(enemy.maxHp * minShare));
+  return contributions.filter((c) => c.damage >= need);
+}
+
 export function rollDrops(
   enemy: EnemyDef,
   contributions: readonly Contribution[],

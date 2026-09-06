@@ -71,6 +71,8 @@ export const lines = {
    *  이 한 줄과 구조화 상태(hasEnemy)만 나간다. */
   enemyReturns: (enemy: string): string => `${enemy}이(가) 어둠 속에서 다시 모습을 갖춘다.`,
   engage: (enemy: string): string => `${enemy}이(가) 이쪽을 노려본다. 교전이 시작됐다.`,
+  /** 같은 방에 서 있는데 싸우지는 않는 사람에게. 합류할 계기는 이 한 줄뿐이다. */
+  engagedBy: (who: string, enemy: string): string => `${who}이(가) ${enemy}에게 달려든다.`,
   /** 평범한 타격. kind:"combat" 으로 나가고 클라이언트가 연속된 것을 접는다. */
   hit: (enemy: string, dmg: number): string => `${enemy}에게 ${dmg}의 피해를 주었다.`,
   crit: (enemy: string, dmg: number): string =>
@@ -161,6 +163,10 @@ export const lines = {
     `${name}은(는) 아직 끝나지 않았다. (${have}/${need})`,
   missionCleared: (name: string, reward: string) => `${name} 완료. ${reward}를 받았다.`,
   missionFailed: "임무 처리 중 무언가 잘못됐다.",
+  /** 목표가 세계에서 영영 사라졌다. 게시에서도 빠지지만, 이미 맡은 사람은
+   *  돌려주기 전까지 일지에 남아 있으므로 문장이 필요하다. */
+  missionGone: (name: string) => `${name}은(는) 이미 누군가 끝낸 일이다. 더 맡길 것이 없다.`,
+  missionAbandoned: (name: string) => `${name}을(를) 돌려주었다.`,
 
   // ── 복구 ──────────────────────────────────────────────────────────────
   /** resume 시 저장된 좌표가 벽 안이면(맵이 바뀌었으면) 스폰으로 이송한다. */
