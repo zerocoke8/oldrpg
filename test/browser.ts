@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { chromium, type Page } from "playwright";
 import { createServer as createVite } from "vite";
 import { boot } from "../server/index";
+import type { RoomTextRequest } from "../shared/narration";
 
 const WS_PORT = 8901;
 const WEB_PORT = 5199;
@@ -52,7 +53,21 @@ async function main() {
   rmSync(`${DB}-shm`, { force: true });
   mkdirSync(SHOTS, { recursive: true });
 
-  const server = boot(DB, WS_PORT);
+  /* 가짜 LLM 을 700ms 지연으로 꽂는다. 규칙 4가 화면에서 어떻게 보이는지를
+     확인하려는 것이다: 폴백이 먼저 뜨고, 그 '줄이' 조용히 교체된다. */
+  const LLM_MS = 700;
+  const server = boot(DB, WS_PORT, {
+    llmRenderer: async (req: RoomTextRequest) => {
+      await sleep(LLM_MS);
+      return {
+        text: `${req.seed}. 어딘가에서 물방울이 떨어지는 소리가 길게 이어진다.`,
+        source: "llm" as const,
+        model: "fake-model",
+        promptVersion: "room.v1.ko",
+      };
+    },
+    queue: { concurrency: 2 },
+  });
   const vite = await createVite({
     root: "client",
     server: { port: WEB_PORT, strictPort: true },
@@ -145,6 +160,37 @@ async function main() {
   check("B 는 새로고침 후 자기 안개를 서버에서 복원받았다",
     bLogR.some((t) => t.includes("서 있다")), JSON.stringify(bLogR));
   await a.screenshot({ path: join(SHOTS, "5-새로고침후-A.png") });
+
+  console.log("\n⑧ 규칙 4 — 폴백이 먼저 뜨고 그 '줄이' 조용히 교체된다");
+  const c = await ctx.newPage();
+  await c.goto(`http://127.0.0.1:${WEB_PORT}/?as=c`);
+  await c.waitForSelector("text=석조 교차로", { timeout: 15_000 });
+  await sleep(300);
+
+  // 아무도 가 본 적 없는 방으로 간다 — (4,3). 앞 절들이 (3,3)/(2,3) 만 밟았다.
+  // 이미 확정된 방으로 가면 처음부터 생성본이 오므로 (그것도 정상이다)
+  // '폴백 -> 교체' 를 볼 수 없다.
+  const badges = () => c.locator("text=새로 생성됨").count();
+  const badgesBefore = await badges();
+  await c.keyboard.press("ArrowRight");
+  await c.waitForSelector("text=부서진 갑옷 조각", { timeout: 5000 });
+  const early = await logText(c);
+  const earlyLines = early.length;
+  check("모델을 기다리지 않고 새 방 묘사가 먼저 떴다",
+    early.some((t) => t.includes("부서진 갑옷 조각")));
+  check("그 줄에는 아직 '새로 생성됨' 뱃지가 없다 (폴백이다)",
+    (await badges()) === badgesBefore, `${badgesBefore} -> ${await badges()}`);
+  await c.screenshot({ path: join(SHOTS, "6-폴백-먼저.png") });
+
+  await sleep(LLM_MS + 900);
+  const late = await logText(c);
+  check("교체 후에도 로그 '줄 수' 가 늘지 않았다 (append 가 아니라 replace)",
+    late.length === earlyLines, `${earlyLines} -> ${late.length}`);
+  check("그 줄의 내용이 생성본으로 바뀌었다",
+    late.some((t) => t.includes("갑옷") && t.includes("물방울이 떨어지는 소리가 길게 이어진다")),
+    JSON.stringify(late));
+  check("'새로 생성됨' 뱃지가 켜졌다", (await badges()) > badgesBefore);
+  await c.screenshot({ path: join(SHOTS, "7-교체-후.png") });
 
   await browser.close();
   await vite.close();

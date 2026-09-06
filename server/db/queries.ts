@@ -21,6 +21,18 @@ export interface RoomTextRow {
   source: string;
 }
 
+/** 진단용 전체 행. flags_json 이 state_hash 의 preimage 라
+ *  "이 방이 왜 저 문장을 말하나" 가 SELECT 하나로 끝난다. */
+export interface RoomTextFullRow extends RoomTextRow {
+  room_id: string;
+  state_hash: string;
+  flags_json: string;
+  model: string | null;
+  prompt_version: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
 export interface PlayerRow {
   id: string;
   name: string;
@@ -85,6 +97,9 @@ export function makeQueries(db: Db) {
        VALUES (@room_id, @state_hash, @text, @source, @flags_json,
                @model, @prompt_version, @now, @now)
        ON CONFLICT (room_id, state_hash) DO NOTHING`,
+    ),
+    getRoomTextRow: db.prepare<[string, string], RoomTextFullRow>(
+      "SELECT * FROM room_text WHERE room_id = ? AND state_hash = ?",
     ),
     /** 2단계에서 폴백을 LLM 확정본으로 승급시킨다. WHERE source='fallback' 이
      *  "딱 한 번" 을 표현하는 절이다 — 0행 매치는 오류가 아니다. */

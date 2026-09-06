@@ -11,10 +11,24 @@ import type { RoomTextRenderer, RoomTextResult } from "../../shared/narration";
 import type { World } from "../engine/world";
 import type { Queries } from "../db/queries";
 
-export interface RoomTextService {
-  get(roomId: RoomId): Promise<{ text: string; source: RoomTextResult["source"] }>;
+export interface RoomText {
+  text: string;
+  source: RoomTextResult["source"];
+  /** 호출자가 '이 줄' 을 승급 대상으로 등록할 때 쓰는 키.
+   *  와이어에는 절대 나가지 않는다 (프로토콜 불변식 2). */
+  stateHash: string;
 }
 
+export interface RoomTextService {
+  get(roomId: RoomId): Promise<RoomText>;
+}
+
+/** ★ 여기 넘어오는 render 는 '항상' 결정론적 폴백 렌더러다. LLM 이 아니다.
+ *
+ *  규칙 4("플레이어를 LLM 앞에 세워두지 않는다")를 코드 구조로 만든 것이다:
+ *  플레이어의 요청 경로에는 모델 호출이 아예 존재하지 않으므로, 실수로
+ *  기다리게 만들 방법이 없다. LLM 은 world/upgrade.ts 의 백그라운드 큐에만
+ *  있고, 결과는 준비되면 log.replace 로 조용히 교체된다. */
 export function makeRoomTextService(
   world: World,
   q: Queries,
@@ -28,8 +42,11 @@ export function makeRoomTextService(
    *  정확성 보증이 아니라 '비용' 보증이라는 점이 중요하다. 정확성은
    *  PRIMARY KEY + INSERT ... ON CONFLICT DO NOTHING + 재조회가 이미 쥐고
    *  있고, 그건 프로세스를 넘어서도 성립한다. 단일 프로세스로 가기로 했으므로
-   *  room_gen_lock 표는 만들지 않는다. */
-  const inflight = new Map<string, Promise<{ text: string; source: RoomTextResult["source"] }>>();
+   *  room_gen_lock 표는 만들지 않는다.
+   *
+   *  2단계에도 여기 도는 것은 폴백 렌더러라 사실상 즉시 해소된다.
+   *  LLM 쪽의 중복 제거는 narration/queue.ts 가 같은 키로 따로 한다. */
+  const inflight = new Map<string, Promise<RoomText>>();
 
   async function load(roomId: RoomId, stateHash: string) {
     const room = world.room(roomId);
@@ -37,7 +54,7 @@ export function makeRoomTextService(
 
     // 1. 조회
     const hit = q.getRoomText.get(roomId, stateHash);
-    if (hit) return { text: hit.text, source: hit.source as RoomTextResult["source"] };
+    if (hit) return { text: hit.text, source: hit.source as RoomTextResult["source"], stateHash };
 
     // 2. 생성 (narration/ 은 DB 를 만질 수 없다 — 결과를 '반환'만 한다)
     const result = await render({
@@ -63,7 +80,7 @@ export function makeRoomTextService(
     });
     const settled = q.getRoomText.get(roomId, stateHash);
     if (!settled) throw new Error(`room_text 기록 직후 재조회 실패: ${roomId} ${stateHash}`);
-    return { text: settled.text, source: settled.source as RoomTextResult["source"] };
+    return { text: settled.text, source: settled.source as RoomTextResult["source"], stateHash };
   }
 
   return {

@@ -11,19 +11,48 @@ import { migrate } from "./db/migrate";
 import { makeQueries } from "./db/queries";
 import { loadFlags, seed } from "./db/seed";
 import { World } from "./engine/world";
-import { staticRenderer } from "./narration/static";
+import { makeStaticRenderer } from "./narration/static";
+import { makeLlmRenderer } from "./narration/llm";
+import { loadMoods } from "./narration/prompts";
 import { makeRoomTextService } from "./world/roomText";
+import { makeUpgradeService } from "./world/upgrade";
 import { makeEmit } from "./net/emit";
 import { makePresence } from "./net/presence";
 import { Registry } from "./net/session";
 import { startServer } from "./net/server";
 import type { Ctx } from "./net/handlers";
 import type { ErrorEvent } from "../shared/protocol";
+import type { RoomTextRenderer } from "../shared/narration";
+import type { QueueOptions } from "./narration/queue";
+import type { UpgradeService } from "./world/upgrade";
+
+/** 승급 경로가 없을 때 (API 키 없음). 아무것도 하지 않는다. */
+const NO_UPGRADES: UpgradeService = {
+  watch: () => {},
+  idle: () => Promise.resolve(),
+  stop: () => {},
+  stats: () => ({ pending: 0, running: 0, done: 0, failed: 0, givenUp: 0, watching: 0 }),
+};
+
+/* .env 를 읽는다 (charter: 키는 .env). Node 22 의 내장 기능이라 의존성이 없다.
+   파일이 없어도 정상이다 — 그때는 LLM 없이 1단계와 똑같이 돈다. */
+try {
+  process.loadEnvFile(".env");
+} catch {
+  /* .env 없음 */
+}
 
 const DB_PATH = process.env.MUD_DB ?? "mud.db";
 const PORT = Number(process.env.MUD_PORT ?? 8787);
 
-export function boot(dbPath = DB_PATH, port = PORT) {
+export interface BootOptions {
+  /** 테스트가 가짜 렌더러를 꽂는 자리. 지정하면 API 키 여부와 무관하게 이걸 쓴다. */
+  llmRenderer?: RoomTextRenderer;
+  /** 큐 옵션 (테스트에서 동시성/쿨다운을 조인다). */
+  queue?: QueueOptions;
+}
+
+export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
   const clock = () => Date.now();
 
   const db = openDb(dbPath);
@@ -34,19 +63,44 @@ export function boot(dbPath = DB_PATH, port = PORT) {
   const world = new World();
   world.load(loadFlags(q)); // DB -> 메모리. engine/ 이 db/ 를 import 하지 않는 이유.
 
+  /* 종료 플래그. 두 곳이 본다:
+       - handleClose: db.close() 뒤에 도착하는 소켓 close 이벤트가 닫힌 핸들에
+         쓰면 ws 의 이벤트 핸들러 안에서 던져 uncaughtException 이 된다.
+       - upgrade(): 렌더러가 해소되는 사이 서버가 내려갔을 수 있다. */
+  let shuttingDown = false;
+
   const reg = new Registry();
   const emit = makeEmit(reg);
   const presence = makePresence(reg, emit);
 
-  // 1단계 렌더러는 결정론적 정적 렌더러. 2단계는 이 인자 하나만 바뀐다.
-  const roomText = makeRoomTextService(world, q, staticRenderer, clock);
+  /* ── 서술 레이어 ────────────────────────────────────────────────────
+     폴백 렌더러는 '플레이어의 경로' 에 있고, LLM 렌더러는 '백그라운드 큐' 에만
+     있다. 이 분리가 규칙 4를 코드 구조로 만든 것이다 — 요청 경로에 모델
+     호출이 아예 없으므로 실수로 기다리게 만들 방법이 없다. */
+  const moods = loadMoods();
+  const fallbackRenderer = makeStaticRenderer(moods);
 
-  /* 종료 플래그. handleClose 가 이걸 보고 아무 일도 하지 않는다 —
-     db.close() 뒤에 도착하는 소켓 close 이벤트가 닫힌 핸들에 쓰면
-     ws 의 이벤트 핸들러 안에서 던져 uncaughtException 이 된다. */
-  let shuttingDown = false;
+  const hasKey = Boolean(process.env.ANTHROPIC_API_KEY ?? process.env.ANTHROPIC_AUTH_TOKEN);
+  const llmRenderer =
+    options.llmRenderer ?? (hasKey ? makeLlmRenderer(moods, fallbackRenderer) : null);
 
-  const ctx: Ctx = { reg, emit, presence, world, q, roomText, clock, isShuttingDown: () => shuttingDown };
+  const roomText = makeRoomTextService(world, q, fallbackRenderer, clock);
+  const upgrades = llmRenderer
+    ? makeUpgradeService(world, q, llmRenderer, emit, clock, () => shuttingDown, options.queue ?? {})
+    : // 키가 없으면 승급 경로가 통째로 없다. 게임은 1단계와 똑같이 돈다.
+      NO_UPGRADES;
+
+  const ctx: Ctx = {
+    reg,
+    emit,
+    presence,
+    world,
+    q,
+    roomText,
+    upgrades,
+    clock,
+    isShuttingDown: () => shuttingDown,
+  };
   const wss = startServer(ctx, port);
 
   console.log(
@@ -54,13 +108,20 @@ export function boot(dbPath = DB_PATH, port = PORT) {
       (seededRooms ? ` (시드 ${seededRooms}행)` : "") +
       (reaped ? ` · 유령 플레이어 ${reaped}행 정리` : ""),
   );
+  console.log(
+    llmRenderer
+      ? `[mud] 서술: ${options.llmRenderer ? "주입된 렌더러" : (process.env.MUD_MODEL ?? "claude-opus-5")} (백그라운드 승급)`
+      : `[mud] 서술: 결정론 폴백만. ANTHROPIC_API_KEY 가 없다 — .env 를 만들면 LLM 이 켜진다.`,
+  );
 
   return {
     ctx,
     wss,
+    upgrades,
     close: () =>
       new Promise<void>((resolve) => {
         shuttingDown = true;
+        upgrades.stop();
         // 유예 타이머를 먼저 끈다. 안 그러면 종료 후에 깨어나 없어진
         // 레지스트리에 대고 방출을 시도한다.
         for (const s of reg.all()) {

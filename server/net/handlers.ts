@@ -28,6 +28,7 @@ import type { World } from "../engine/world";
 import type { Queries } from "../db/queries";
 import { defaultName, lines } from "../narration/lines";
 import type { RoomTextService } from "../world/roomText";
+import type { UpgradeService } from "../world/upgrade";
 import type { Emit } from "./emit";
 import type { Presence } from "./presence";
 import { GRACE_MS, type Registry, type Session } from "./session";
@@ -55,6 +56,7 @@ export interface Ctx {
   world: World;
   q: Queries;
   roomText: RoomTextService;
+  upgrades: UpgradeService;
   clock: () => number;
   /** 종료 중인가. true 면 handleClose 가 아무 일도 하지 않는다 —
    *  db.close() 뒤에 도착하는 소켓 close 이벤트가 닫힌 핸들에 쓰는 것을 막는다. */
@@ -71,13 +73,17 @@ export function enqueueRoomText(ctx: Ctx, s: Session, roomId: RoomId): void {
   s.chain = s.chain
     .then(async () => {
       if (s.connId !== epoch || !ctx.reg.isCurrent(s)) return;
-      const { text, source } = await ctx.roomText.get(roomId);
+      const { text, source, stateHash } = await ctx.roomText.get(roomId);
       // 해소 시점 재확인: 같은 에폭이고 '여전히 그 방'일 때만 방출한다.
-      // 1단계는 동기 렌더러라 무해하지만, 2단계에 가서야 넣으면
-      // 그때는 이미 낡은 줄이 화면에 찍힌 뒤다.
+      // 여기 도는 렌더러는 결정론적 폴백이라 사실상 즉시 해소되지만,
+      // 이 가드가 없으면 낡은 줄이 화면에 찍힐 수 있다.
       if (s.connId !== epoch || !ctx.reg.isCurrent(s)) return;
       if (roomIdOf(s.pos) !== roomId) return;
-      ctx.emit.log(s, "narr", text, { roomId, source });
+      const logId = ctx.emit.log(s, "narr", text, { roomId, source });
+      // ★ 규칙 4: 플레이어는 방금 문장을 받았다. 그게 아직 폴백이면
+      //   여기서 백그라운드 승급을 걸고, 준비되면 log.replace 로 조용히
+      //   갈아끼운다. 플레이어는 한 순간도 모델을 기다리지 않는다.
+      ctx.upgrades.watch(roomId, stateHash, source, s, logId);
     })
     .catch((err: unknown) => {
       // 반드시 삼킨다 — 거부가 체인을 오염시키면 그 세션은 다시는

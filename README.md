@@ -8,15 +8,19 @@ LLM이 생성하지만, 게임 규칙과 상태는 전부 결정론적 코드가
 
 ---
 
-## 현재: 1단계 완료 (LLM 없음)
+## 현재: 2단계 완료 (생성 파이프라인)
 
-로드맵 1단계 — "하드코딩된 방 설명으로 서버 권위 이동, WebSocket 동기화,
-두 브라우저에서 서로 보이는 것까지" — 가 끝났다. **LLM 호출은 한 줄도 없다.**
+1단계(서버 권위 이동 + WebSocket 동기화)와 2단계(씨앗 → LLM → DB 고정,
+좌표 락, `state_hash` 캐시, 실패 시 폴백)가 끝났다.
 
 ```bash
 npm install
-npm run dev          # 서버(8787) + 클라이언트(5173) 동시 실행
+cp .env.example .env   # ANTHROPIC_API_KEY 를 채운다 (없어도 돌아간다)
+npm run dev            # 서버(8787) + 클라이언트(5173)
 ```
+
+**키가 없으면** 서버는 결정론적 폴백 문장만 쓰고 나머지는 똑같이 돈다.
+부팅 로그가 어느 쪽인지 알려준다.
 
 브라우저 탭 두 개를 연다:
 
@@ -32,14 +36,18 @@ npm run dev          # 서버(8787) + 클라이언트(5173) 동시 실행
 - 같은 방에 들어가면 **"○○ 님이 서쪽에서 들어왔다."** 가 뜬다
 - 벽에 부딪히면 문장만 뜨고 위치는 그대로다 (서버가 판정한다)
 - **새로고침해도 상대 화면은 조용하다** (유예 8초). 좌표·안개도 복원된다
+- 처음 가는 방은 **폴백 문장이 즉시** 뜨고, 잠시 뒤 **그 줄이 조용히 교체**되며
+  "새로 생성됨" 뱃지가 켜진다 (규칙 4). 두 번째 방문부터는 처음부터 확정본이다
 
 ### 검증
 
 ```bash
 npm run typecheck     # tsc --strict
 npm run lint          # 규칙 1을 import 검사로 강제 (아래 참조)
-npm test              # 진짜 서버 + WebSocket 2개 + SQLite, 59개 검사
+npm test              # 1단계: 진짜 서버 + WebSocket 2개 + SQLite (64개 검사)
+npm run test:pipeline # 2단계: 가짜 LLM(지연·실패·경합)으로 파이프라인 (56개 검사)
 npm run test:browser  # 진짜 크로미움 창 2개. 스크린샷은 test/shots/
+npm run test:all      # 셋 다
 ```
 
 ---
@@ -50,8 +58,9 @@ npm run test:browser  # 진짜 크로미움 창 2개. 스크린샷은 test/shots
 shared/      두 쪽이 함께 import 하는 계약. 타입과 '런타임 검증기'가 같이 산다
 server/
   engine/    맵·이동·플래그. 진실을 계산한다. narration/ db/ net/ 을 import 하지 않는다
-  narration/ 모든 한국어 문장. DB 핸들을 잡지 않고 텍스트를 '반환'만 한다
-  world/     ★ 2단계 이음매. engine + db + narration 을 조합하는 유일한 곳
+  narration/ LLM 호출 · 프롬프트(파일) · 큐. DB 핸들을 잡지 않는다
+  world/     engine + db + narration + net 을 조합하는 유일한 곳
+             roomText.ts(플레이어 경로) / upgrade.ts(백그라운드 승급)
   db/        모든 SQL 이 queries.ts 한 파일에 있다 (나중에 Postgres 로 옮기려고)
   net/       세션·유예·presence 팬아웃·핸들러
 client/
@@ -158,7 +167,7 @@ UPDATE room_text SET text=?, source='llm', ... WHERE room_id=? AND state_hash=? 
 1단계는 부팅 프리시드를 **하지 않고** 첫 입장 때 lazy 기록한다 — 프리시드하면
 "조회 → 없으면 생성 → 기록" 중 조회만 실행되고 나머지가 죽은 코드가 된다.
 
-### 규칙 4는 1단계 프로토콜 속성이다
+### 규칙 4는 프로토콜 속성이다
 
 이동 처리는 두 단계다.
 
@@ -166,9 +175,12 @@ UPDATE room_text SET text=?, source='llm', ... WHERE room_id=? AND state_hash=? 
   이벤트 + 재실자 로스터 줄
 - **Phase B** (`await roomText()` 뒤): 서술 `log{narr}` **하나뿐**. 세션별 프로미스 체인.
 
-2단계에 LLM이 들어와도 (a) 이동이 절대 LLM 뒤에 서지 않고 (b) 방 A의 묘사가 이미 방 B에
-선 플레이어에게 도착하는 인터리브가 **구조적으로 불가능**하다.
-"서술 텍스트는 이동 확정보다 늦게 도착할 수 있다" 가 **1단계 클라이언트 계약**이다.
+(a) 이동이 절대 LLM 뒤에 서지 않고 (b) 방 A의 묘사가 이미 방 B에 선 플레이어에게
+도착하는 인터리브가 **구조적으로 불가능**하다.
+"서술 텍스트는 이동 확정보다 늦게 도착할 수 있다" 가 **클라이언트 계약**이다.
+
+2단계에서는 한 겹 더 있다: Phase B 가 기다리는 것도 LLM 이 아니라 폴백 렌더러다.
+모델은 백그라운드 큐에만 있다 (아래 2단계 절).
 
 ---
 
@@ -197,16 +209,16 @@ UPDATE room_text SET text=?, source='llm', ... WHERE room_id=? AND state_hash=? 
 
 ---
 
-## 1단계에서 뺀 것 (전부 순수 가산 경로)
+## 아직 뺀 것 (전부 순수 가산 경로)
 
 | 미룬 것 | 언제 | 왜 지금이 아닌가 |
 |---|---|---|
-| `room_gen_lock` 표 | 필요해지면 | **단일 프로세스로 가기로 했다.** 정확성은 PK + `ON CONFLICT DO NOTHING` + 재조회가 이미 쥐고 있고, 비용 중복은 `world/roomText.ts` 의 인플라이트 맵이 막는다. 워커를 별도 프로세스로 뗄 때만 표가 필요해진다 |
+| `room_gen_lock` 표 | 워커를 별도 프로세스로 뗄 때 | **단일 프로세스로 가기로 했다.** 정확성은 PK + `ON CONFLICT DO NOTHING` + `UPDATE ... WHERE source='fallback'` 가 쥐고 있고(프로세스를 넘어서도 성립), 비용 중복은 `narration/queue.ts` 의 키 중복 제거가 막는다 |
 | `npcs` / `npc_lines` | 4단계 | PK가 아직 추측이다. **SQLite는 PK를 ALTER 하지 못한다** — 지금 만들면 틀린 규약이 굳는다. `source`/`flags_json`/`prompt_version` 칼럼 규약과 `state_hash` 공식은 이미 고정됐으므로 그때 복사하면 된다 |
 | `player_items` | 4단계 | 옳은 모양은 `players` 의 JSON 블롭이 아니라 `player_items(player_id, item_id, qty)` 다. 형태는 지금 정했고 표만 안 만들었다. `hp`/`max_hp` 는 반대로 지금 만들었다 — UI가 이미 표시하므로 |
 | `player_seen_rooms` | 안개가 수천 칸이 될 때 | 지금은 `players.seen` JSON 배열. 통째로만 읽고 쓰며 조인이 없다. 와이어 타입은 그대로다 |
 | 서사 로그 영속화 | 3단계 | 1단계 로그는 휘발성이다. 세계가 플레이어 부재중에 변하기 시작할 때 값이 생긴다 |
-| `narration_queue` | 3단계 | 리스·재시도 칼럼이 추측이고, `WHERE source='fallback'` 로 언제든 재구성 가능하다 |
+| `narration_queue` **표** | 워커가 프로세스를 넘을 때 | 큐 자체는 `narration/queue.ts` 에 있다(메모리). 영속화가 필요해지는 것은 워커가 별도 프로세스가 될 때뿐이고, 그 전까지는 `WHERE source='fallback'`(인덱스 있음)로 언제든 재구성된다 |
 | delta-since-seq 재개 | 3단계 | 재접속이 최초 접속과 **글자 그대로 같은 코드 경로**다. 7x7 스냅샷은 수백 바이트인 반면 재개는 링버퍼·보존 정책·오버런 폴백을 요구한다 |
 | 4단계 액션 동사 | 4단계 | 유니온 멤버 추가는 순수 가산이고, 구현 없는 멤버는 `not_implemented` 분기와 죽은 검증기를 만든다. 옛 서버는 `ack{unknown_action}` 으로 거절할 뿐 크래시하지 않는다 |
 | `narration/prompts/` | 2단계 | LLM이 없어 프롬프트가 없다. 디렉터리 위치와 파일 규약(`room.v1.ko.md`)은 `room_text.prompt_version` 칼럼으로 이미 고정됐다 |
@@ -216,21 +228,82 @@ UPDATE room_text SET text=?, source='llm', ... WHERE room_id=? AND state_hash=? 
 
 ---
 
-## 다음 (2단계)
+## 2단계 — 생성 파이프라인
 
-바꿔야 하는 것은 **한 줄**이다:
+### 규칙 4가 '구조' 다: 플레이어 경로에는 모델 호출이 없다
 
-```ts
-// server/index.ts
-const roomText = makeRoomTextService(world, q, staticRenderer, clock);
-//                                          ^^^^^^^^^^^^^^ 여기만 llmRenderer 로
+플레이어의 요청 경로(`world/roomText.ts`)에는 **결정론적 폴백 렌더러만** 있다.
+LLM 은 백그라운드 큐(`world/upgrade.ts`)에만 존재한다. 그래서 실수로
+기다리게 만들 방법이 없다 — 코드에 그 경로가 없다.
+
+```
+방 입장
+ └─ 조회 ─┬─ hit(llm/authored) ──────────→ log{narr, source:'llm'}      끝
+          └─ miss 또는 hit(fallback)
+               ├─ 폴백 문장을 '즉시'      → log{narr, source:'fallback'} ← 플레이어는 여기서 끝
+               └─ 승급 큐에 등록
+                    └─ (백그라운드) LLM → UPDATE ... WHERE source='fallback'
+                         └─ 재조회 → log.replace{id, text, source:'llm'} → 그 줄만 교체
 ```
 
-`RoomTextRenderer` 서명(`shared/narration.ts`)은 이미 최종형이고, `staticRenderer` 는
-지워지는 게 아니라 **API 실패 시의 폴백으로 그대로 남는다**. 스키마 변경도, `ALTER TABLE` 도 없다.
+`log.replace` 는 그 줄을 받은 **모든** 세션에 간다. 생성을 촉발한 한 명에게만
+보내면 같은 방의 두 사람이 영구히 다른 문장을 보게 되고, 그건 CLAUDE.md 20줄
+("그 시점부터 모든 플레이어에게 동일하다") 위반이다. 그리고 교체 문장은 우리가
+방금 만든 것이 아니라 **재조회한 DB 값**이다 — 남이 먼저 확정했으면 그쪽이 진실이다.
 
-같이 붙는 것: 캐시 히트가 `source='fallback'` 이면 그 텍스트를 provisional 로 즉시 서빙하고
-동시에 생성을 등록한다. 확정되면 `(roomId, stateHash)` 를 보고 있던 **모든 세션**에
-`log.replace` 를 보낸다 — 그러지 않으면 같은 방의 두 명이 영구히 다른 텍스트를 보게 되어
-CLAUDE.md 20줄이 깨진다. 클라이언트는 이미 `log.replace` 를 처리하고 로그를
-`log.id` 로 키잉하고 있다.
+### 좌표 락
+
+두 겹이다.
+
+| 층 | 무엇을 막나 |
+|---|---|
+| `narration/queue.ts` 의 `(roomId, stateHash)` 중복 제거 | 같은 방에 동시 진입한 두 명이 API 를 **두 번 호출**하는 것 (비용) |
+| `PRIMARY KEY` + `ON CONFLICT DO NOTHING` + `UPDATE ... WHERE source='fallback'` | 두 개의 텍스트가 **기록**되는 것 (정확성). 프로세스를 넘어서도 성립한다 |
+
+단일 프로세스로 가기로 했으므로 `room_gen_lock` 표는 여전히 없다.
+
+### 실패
+
+- LLM 오류·거절(`stop_reason:"refusal"`)·`max_tokens` 로 잘림·빈 응답 →
+  **폴백 문장이 그대로 남는다.** 반쯤 만들어진 문장을 DB 에 영구 고정하지 않는다.
+- 큐가 쿨다운(기본 60초)을 걸고, 3회 실패하면 그 (방, 상태)는 포기한다.
+  계속 실패하는 방이 큐를 점유하지 않는다.
+- 승급이 안 된 행은 언제든 `SELECT ... WHERE source='fallback'` 로 다시 찾을 수 있다
+  (인덱스 있음). 그래서 재시도 큐를 영속화할 필요가 없다.
+
+### 프롬프트는 파일이다
+
+```
+server/narration/prompts/
+  room.v1.ko.md              # '# system' / '# user' 두 절. {{seed}} {{mood}} 치환
+  moods/guardian_slain.md    # '# prompt'(LLM 지시) / '# fallback'(결정론 문장)
+```
+
+**파일명이 곧 `prompt_version`** 이고 `room_text.prompt_version` 에 기록된다.
+문구를 바꿀 때는 같은 파일을 고치지 말고 `room.v2.ko.md` 를 새로 만들 것 —
+같은 파일을 고치면 옛 텍스트가 어느 프롬프트로 만들어졌는지 잃는다.
+
+### 모델
+
+기본값 `claude-opus-5`. `.env` 의 `MUD_MODEL` 로 바꿀 수 있다.
+`effort: "low"` 로 부른다 — 방 묘사는 2~3문장짜리 창작이라 깊은 추론이 필요 없고,
+사고를 아예 끄는 것보다 이쪽이 안전하다. 19개 방이면 전체 생성 비용은 1센트 미만이다.
+
+---
+
+## 다음 (3단계 — 이벤트 재렌더링)
+
+배선은 대부분 이미 있다.
+
+- **플래그를 켜는 것**: `q.setFlag` + `world.load()`. 이미 있고 테스트도 있다.
+- **영향 범위**: `world.roomsSensitiveTo(flag)` 가 이미 있다.
+- **백그라운드 워커**: `narration/queue.ts` 를 그대로 쓴다.
+- **재생성**: 플래그가 바뀌면 `state_hash` 가 바뀌므로 그냥 캐시 미스다.
+  씨앗에서 **다시 렌더링**되고 옛 행은 살아남는다 (규칙 3).
+
+새로 필요한 것은 둘뿐이다:
+
+1. `world.flag` 같은 이벤트 메시지 — 클라이언트는 모르는 `t` 를 무시하므로 순수 가산.
+2. **새 텍스트는 다음 입장부터 적용한다** (CLAUDE.md 63줄). 지금 그 방에 서 있는
+   플레이어의 화면을 갈아치우지 않는다. `log.replace` 는 provisional→확정 전용이고
+   3단계에는 쓰지 않는다 — 이건 지금 코드 주석에도 못박혀 있다.
