@@ -3,7 +3,8 @@
  * narration/ 은 이 얼어붙은 레코드만 받는다. engine/ 도 db/ 도 import 하지 않고,
  * 텍스트를 '반환'할 뿐 기록하지 않는다 — 그래서 world_flags 를 UPDATE 할 수 있는
  * 핸들을 애초에 잡지 못한다. 기록은 호출자(server/world/roomText.ts)가 한다.
- * 이 두 방향은 .eslintrc.cjs 의 no-restricted-imports 가 빌드 에러로 강제한다. */
+ * 이 두 방향은 .eslintrc.cjs 의 no-restricted-imports 가 빌드 에러로 강제한다
+ * (그리고 package.json 의 test:all 이 lint 를 먼저 돌려 그 강제를 실제로 부른다). */
 
 import type { RoomId } from "./ids";
 import type { JsonScalar } from "./json";

@@ -67,7 +67,7 @@ npm run test:events   # 3단계: 플래그 -> 영향 범위 -> 재생성 (44개 
 npm run test:combat   # 4a단계: 실시간 전투 + 사망/부활 회귀 (58개 검사)
 npm run test:npc      # 4b단계: 대사 생성·주제 권한·재렌더링 (46개 검사)
 npm run test:browser  # 진짜 크로미움 — 데스크톱 창 3개 + 모바일(390x844) 1개
-npm run test:all      # 전부
+npm run test:all      # lint + typecheck + 위 전부
 ```
 
 ---
@@ -90,7 +90,7 @@ client/
   ui/        미니맵 · 로그 · 상태 · D패드
 ```
 
-### 규칙 1은 주석이 아니라 빌드 에러다
+### 규칙 1·2 는 주석이 아니라 빌드 에러다
 
 CLAUDE.md 110줄("`engine/`이 `narration/`을 import 하는 코드가 생기면 규칙 1이 깨진 것이다")은
 `.eslintrc.cjs` 의 `no-restricted-imports` 로 강제된다. 다음은 전부 **린트 에러**다:
@@ -103,8 +103,25 @@ CLAUDE.md 110줄("`engine/`이 `narration/`을 import 하는 코드가 생기면
 | `narration/` → `db/` | **LLM 출력이 상태를 바꾸는 경로가 생긴다** |
 | `narration/` → `engine/` | 얼어붙은 `RoomTextRequest` 만 받는다 |
 | `client/` → `@anthropic-ai/*` | 클라이언트는 LLM을 호출하지 않는다 (규칙 2) |
+| `engine/` → `@anthropic-ai/*` | 규칙 1 의 가장 직접적인 위반 — 엔진이 모델을 직접 부르는 것 |
+| `shared/` → `@anthropic-ai/*` | **클라이언트가 `shared/` 를 런타임으로 import 한다** — SDK 가 브라우저 번들로 샌다 |
+| `shared/` → `server/`, `client/`, `better-sqlite3`, `ws` | `shared/` 는 계약만 산다. 화살표는 언제나 양쪽 → `shared/` 한 방향이다 |
 
 `shared/narration.ts` 의 **계약 타입**은 예외적으로 허용된다 — 구현이 아니라 서명이다.
+
+두 가지를 덧붙여 둔다.
+
+**강제는 부르는 사람이 있어야 강제다.** 이 표가 오래 '선언' 이었다 — `npm run lint` 가
+정의되어 있었지만 그것을 부르는 자동 경로가 없었다(`build` 는 `tsc --noEmit && vite build`
+뿐이다). 지금은 `test:all` 이 `lint && typecheck` 로 시작한다. 그 전에는 `engine/` 이
+SDK 를 직접 import 해도, `shared/` 가 SDK 를 끌어들여 브라우저 번들로 새어도 lint·tsc·
+vite build 가 전부 초록이었다 — 일부러 위반해서 확인한 사실이다.
+
+**오버라이드에 `no-restricted-syntax` 를 넣지 말 것.** eslint 8 은 같은 키의 규칙을
+병합하지 않고 **교체**한다. 어느 오버라이드에든 그 키를 넣는 순간 그 디렉터리에서
+위 표의 `Math.random()` 금지가 조용히 사라지고, 4a 전투의 시드 재현성이 거기 걸려 있다.
+(동적 `import()` 를 막고 싶은 유혹이 정확히 이 함정으로 이어진다. 저장소에 `import()`
+사용이 0건이라 얻을 것도 없다.)
 
 ---
 
