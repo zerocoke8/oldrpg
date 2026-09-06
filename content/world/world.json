@@ -1,8 +1,8 @@
 {
   "spawn": {
-    "region": "d6",
-    "x": 2,
-    "y": 1
+    "region": "d6town",
+    "x": 4,
+    "y": 7
   },
   "flags": {
     "journal_recovered": {

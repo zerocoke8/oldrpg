@@ -34,6 +34,17 @@
       },
       "requires": null,
       "oneWay": false
+    },
+    {
+      "at": "4,4",
+      "dir": "south",
+      "to": {
+        "region": "d6town",
+        "x": 4,
+        "y": 1
+      },
+      "requires": null,
+      "oneWay": false
     }
   ]
 }
