@@ -22,7 +22,7 @@ import type { Action, Limits, RejectReason, Snapshot } from "../../shared/protoc
 import { PROTOCOL_VERSION } from "../../shared/protocol";
 import { makeActionSchemas, type Envelope } from "../../shared/validators";
 import { sanitize, sanitizeName } from "../../shared/sanitize";
-import { SPAWN, walkableAt } from "../engine/map";
+import type { GameMap } from "../engine/map";
 import { resolveMove } from "../engine/move";
 import type { World } from "../engine/world";
 import type { Queries } from "../db/queries";
@@ -57,6 +57,8 @@ export interface Ctx {
   reg: Registry;
   emit: Emit;
   presence: Presence;
+  /** 세계의 구조. content/world/ 에서 읽어 검증된 것이 index.ts 에서 여기로 온다. */
+  map: GameMap;
   world: World;
   q: Queries;
   roomText: RoomTextService;
@@ -171,8 +173,8 @@ export function handleHello(
     pos = { region: row.region, x: row.x, y: row.y };
     // 저장된 좌표가 벽 안이면(맵이 바뀌었으면) 스폰으로 이송한다.
     // 메모리 권위 위치가 '처음 확립되는' 지점이 여기라, 검증도 여기가 맞다.
-    if (!walkableAt(pos)) {
-      pos = SPAWN;
+    if (!ctx.map.walkableAt(pos)) {
+      pos = ctx.map.spawn;
       displaced = true;
     }
     hp = row.hp;
@@ -193,7 +195,7 @@ export function handleHello(
      * 아래에서 connId 를 새 에폭으로 올리므로 아직 살아 있던 옛 타이머는
      * cur.connId !== s.connId 로 빠져나간다. */
     if (hp <= 0) {
-      pos = SPAWN;
+      pos = ctx.map.spawn;
       hp = Math.max(1, Math.floor(maxHp / 2)); // combat.ts 의 부활과 같은 값
       revived = true;
     }
@@ -210,8 +212,8 @@ export function handleHello(
     playerId = randomUUID();
     name = sanitizeName(env.name, LIMITS.nameMaxLen) ?? defaultName(playerId);
     token = randomBytes(32).toString("hex");
-    pos = SPAWN;
-    seen = new Set([roomIdOf(SPAWN)]);
+    pos = ctx.map.spawn;
+    seen = new Set([roomIdOf(ctx.map.spawn)]);
     hp = ctx.balance.player.maxHp;
     maxHp = ctx.balance.player.maxHp;
     ctx.q.insertPlayer.run({
@@ -485,7 +487,7 @@ function doMove(ctx: Ctx, s: Session, seq: number, dir: Dir): void {
   const from = s.pos;
   /* 봉인된 문이 열렸는지는 DB 가 아는 사실이다. 엔진은 db/ 를 모르므로
      읽는 함수를 넘긴다 — 난수·시계·밸런스와 같은 주입 방식이다. */
-  const result = resolveMove(from, dir, (key) => ctx.world.flagValue(key) === true);
+  const result = resolveMove(ctx.map, from, dir, (key: string) => ctx.world.flagValue(key) === true);
 
   if (!result.ok) {
     /* 벽은 엔진이 계산한 정상적 결정론 결과, 즉 '세계의 진실' 이지

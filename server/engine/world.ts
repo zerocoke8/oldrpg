@@ -7,7 +7,7 @@
 import { createHash } from "node:crypto";
 import type { RoomId } from "../../shared/ids";
 import type { JsonScalar } from "../../shared/json";
-import { allRooms, type RoomDef } from "./map";
+import type { GameMap, RoomDef } from "./map";
 import { NPC_BY_ID, npcSeedId, topicOf, type NpcDef, type TopicDef } from "./npcs";
 
 const sha = (s: string, n: number): string =>
@@ -20,8 +20,10 @@ export class World {
    *  관례가 아니라 단일 쓰기 경로에 의해 서로 다른 상태다. */
   private readonly flags = new Map<string, string>();
 
-  constructor() {
-    for (const r of allRooms()) this.rooms.set(r.id, r);
+  /** 맵을 주입받는다. engine/ 은 파일을 읽지 않으므로 지역 데이터는
+   *  server/content/world.ts 가 읽어 검증하고 index.ts 가 여기로 넘긴다. */
+  constructor(map: GameMap) {
+    for (const r of map.rooms()) this.rooms.set(r.id, r);
   }
 
   load(flags: ReadonlyMap<string, string> | Iterable<[string, string]>): void {

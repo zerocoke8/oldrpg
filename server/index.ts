@@ -11,6 +11,8 @@ import { migrate } from "./db/migrate";
 import { makeQueries } from "./db/queries";
 import { loadFlags, seed } from "./db/seed";
 import { loadBalance } from "./content/balance";
+import { loadWorld } from "./content/world";
+import { makeMap, type MapData } from "./engine/map";
 import { World } from "./engine/world";
 import { makeStaticNpcRenderer, makeStaticRenderer } from "./narration/static";
 import { makeLlmNpcRenderer, makeLlmRenderer } from "./narration/llm";
@@ -63,6 +65,9 @@ export interface BootOptions {
   /** 밸런스를 갈아끼운다. 테스트가 수치를 손에 쥐는 자리이고, 지정하지 않으면
    *  content/balance/ 를 읽는다 (MUD_BALANCE 로도 갈아끼울 수 있다). */
   balance?: Balance;
+  /** 세계(지역)를 갈아끼운다. 지정하지 않으면 content/world/ 를 읽는다
+   *  (MUD_WORLD 로도 갈아끼울 수 있다). 테스트가 작은 세계를 손에 쥐는 자리다. */
+  world?: MapData;
   /** 실물 모델 호출을 통째로 끈다 ("off"). 주입된 가짜 렌더러는 그대로 쓴다.
    *
    *  ★ 왜 필요한가: 렌더러를 '안 꽂은 것' 이 곧 '네트워크로 나가는 것' 이었다.
@@ -86,16 +91,20 @@ export interface BootOptions {
 export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
   const clock = () => Date.now();
 
-  /* ★ 밸런스를 가장 먼저 읽는다. 잘못된 값이면 DB 를 열기도 전에 죽는 편이
-     낫다 — 조용히 이상한 세계로 도는 것보다. */
+  /* ★ 데이터를 가장 먼저 읽는다. 잘못된 값이면 DB 를 열기도 전에 죽는 편이
+     낫다 — 조용히 이상한 세계로 도는 것보다.
+
+     여기가 유일한 조합 지점이다: 파일을 읽는 것은 server/content/ 가 하고,
+     engine/ 은 그 결과를 주입받기만 한다 (난수·시계·렌더러와 같은 방식). */
   const balance = options.balance ?? loadBalance();
+  const map = makeMap(options.world ?? loadWorld());
 
   const db = openDb(dbPath);
   migrate(db, clock());
   const q = makeQueries(db);
-  const { seededRooms, reaped } = seed(db, q, balance, clock());
+  const { seededRooms, reaped } = seed(db, q, map, balance, clock());
 
-  const world = new World();
+  const world = new World(map);
   world.load(loadFlags(q)); // DB -> 메모리. engine/ 이 db/ 를 import 하지 않는 이유.
 
   /* 종료 플래그. 두 곳이 본다:
@@ -115,6 +124,7 @@ export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
   const presence = makePresence(
     reg,
     emit,
+    map,
     () => events?.publicFlags() ?? [],
     (id) => combat?.viewFor(id) ?? null,
     (roomId) => Boolean(combat?.enemyIn(roomId)),
@@ -162,13 +172,14 @@ export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
      presence 보다 뒤에 만들어지므로 npcsIn 은 위에서 늦게 바인딩한다. */
   const dialogue = makeDialogue(world, npcText, upgrades, emit);
   npcsIn = dialogue.npcsIn;
-  const combatSvc = makeCombat(q, reg, emit, events, inventory, balance, clock, options.combat ?? {});
+  const combatSvc = makeCombat(q, reg, emit, events, inventory, map, balance, clock, options.combat ?? {});
   combat = combatSvc;
 
   const ctx: Ctx = {
     reg,
     emit,
     presence,
+    map,
     world,
     q,
     roomText,

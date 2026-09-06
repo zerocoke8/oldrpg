@@ -17,7 +17,14 @@ import { boot } from "../server/index";
 import { PROTOCOL_VERSION, type ServerMsg } from "../shared/protocol";
 import type { RoomTextRequest } from "../shared/narration";
 import type { Dir } from "../shared/ids";
-import { SPAWN, regionOf } from "../server/engine/map";
+import { makeMap } from "../server/engine/map";
+import { loadWorld } from "../server/content/world";
+
+/** 실제 content/world/ 를 읽은 맵. 테스트는 서버가 부팅에서 쓰는 것과
+ *  같은 데이터를 봐야 한다 — 별도의 테스트 세계를 만들면 검사는 통과하는데
+ *  운영 데이터는 틀린 상황이 생긴다. */
+const map = makeMap(loadWorld());
+const SPAWN = map.spawn;
 
 const PORT = 8904;
 const DB = join(tmpdir(), `mud-events-${process.pid}.db`);
@@ -134,7 +141,7 @@ async function main() {
   const ev = server.events;
 
   const AFFECTED = new Set(
-    Object.entries(regionOf(SPAWN.region)!.sensitive)
+    Object.entries(map.region(SPAWN.region)!.sensitive)
       .filter(([, flags]) => flags.includes("guardian_slain"))
       .map(([k]) => `${SPAWN.region}:${k}`),
   );

@@ -17,9 +17,16 @@ import WebSocket from "ws";
 import { boot } from "../server/index";
 import { PROTOCOL_VERSION, type ServerMsg } from "../shared/protocol";
 import type { Dir } from "../shared/ids";
-import { allRegions, exitAt, regionOf, REGIONS, walkable } from "../server/engine/map";
+import { makeMap } from "../server/engine/map";
+import { loadWorld } from "../server/content/world";
+
+/** 실제 content/world/ 를 읽은 맵. 테스트는 서버가 부팅에서 쓰는 것과
+ *  같은 데이터를 봐야 한다 — 별도의 테스트 세계를 만들면 검사는 통과하는데
+ *  운영 데이터는 틀린 상황이 생긴다. */
+const map = makeMap(loadWorld());
 import { assertWorldData } from "../server/db/seed";
 import { loadBalance } from "../server/content/balance";
+import { NPCS } from "../server/engine/npcs";
 
 /** DB 는 토큰의 sha256 만 갖는다 (server/net/handlers.ts 와 같은 공식). */
 const sha256 = (t: string) => createHash("sha256").update(t, "utf8").digest("hex");
@@ -116,15 +123,15 @@ async function main() {
   // ── ① 지역 데이터 자체 ──────────────────────────────────────────────
   section("① 지역 정의 — 부팅 검증이 실제로 무엇을 잡는가");
   check("지역이 둘 이상이다 (단일 지역 가정이 코드에 남아 있지 않다)",
-    allRegions().length >= 2, String(allRegions().length));
-  check("지역 id 와 키가 일치한다",
-    Object.entries(REGIONS).every(([k, r]) => k === r.id));
+    map.regions().length >= 2, String(map.regions().length));
+  check("지역 id 는 파일 이름에서 온다 (값 안에 다시 적지 않는다)",
+    map.regions().every((r) => Boolean(r.id) && map.region(r.id) === r));
   check("모든 지역의 모든 걷는 칸에 씨앗이 있다 (부팅 검증이 통과했다)", true);
 
   /* 같은 좌표가 지역마다 다른 방이다 — 좌표만으로 방을 식별하는 코드가
      남아 있으면 여기서 두 지역이 서로의 캐시를 덮어쓴다. */
-  const b1 = regionOf("b1")!;
-  const b2 = regionOf("b2")!;
+  const b1 = map.region("b1")!;
+  const b2 = map.region("b2")!;
   check("두 지역이 같은 좌표를 쓴다 (roomId 가 지역을 포함해야만 구별된다)",
     Boolean(b1.seeds["1,3"]) && Boolean(b2.seeds["1,3"]) && b1.seeds["1,3"] !== b2.seeds["1,3"]);
   check("같은 적을 다른 지역에도 배치할 수 있다 ('정의' 와 '배치' 가 갈라져 있다)",
@@ -136,14 +143,14 @@ async function main() {
     const undo = mutate();
     let threw = false;
     try {
-      assertWorldData(balance);
+      assertWorldData(map, balance);
     } catch {
       threw = true;
     }
     undo();
     check(label, threw);
     // 되돌린 뒤에는 다시 통과해야 한다 — 아니면 다음 검사가 거짓 양성이 된다.
-    assertWorldData(balance);
+    assertWorldData(map, balance);
   };
   const exits = b2.exits as { at: string; dir: Dir; to: { region: string; x: number; y: number }; requires: string | null; oneWay: boolean }[];
   throws("★ 짝 없는 왕복 출구를 부팅이 거절한다 (들어가면 못 나오는 지역)", () => {
@@ -165,6 +172,14 @@ async function main() {
     exits[0] = { ...saved, requires: "존재하지않는플래그" };
     return () => (exits[0] = saved);
   });
+  throws("★ NPC 가 없는 방에 있으면 부팅이 거절한다 (아니면 FK 에러로 죽는다)", () => {
+    /* NPC 는 아직 코드에 있고 방은 데이터에 있다. 그 참조가 끊기면 시더가
+       'FOREIGN KEY constraint failed' 로 죽는데, 그 말에는 어느 NPC 인지가 없다. */
+    const npc = NPCS[0] as { roomId: string };
+    const saved = npc.roomId;
+    npc.roomId = "b1:0,0"; // 벽이다 — 방이 아니다
+    return () => (npc.roomId = saved);
+  });
   throws("★ 걸을 수 있는 칸을 향한 출구를 부팅이 거절한다 (한 칸 이동과 뜻이 겹친다)", () => {
     const saved = { ...exits[0]! };
     // b2 (1,3) 에서 east 는 (2,3) — 걸을 수 있는 칸이다.
@@ -183,9 +198,9 @@ async function main() {
   await alice.walk(["east", "east", "south", "south"]); // (3,3)->(5,3)->(5,5)
   const at = alice.of("room.describe").at(-1)?.room.roomId;
   check("문 앞(b1:5,5)에 섰다", at === "b1:5,5", String(at));
-  check("그 칸 east 에 문이 선언돼 있다", Boolean(exitAt({ region: "b1", x: 5, y: 5 }, "east")));
+  check("그 칸 east 에 문이 선언돼 있다", Boolean(map.exitAt({ region: "b1", x: 5, y: 5 }, "east")));
   check("문 자리는 지도상 벽이다 (미니맵에 문이 그려지지 않는다)",
-    !walkable("b1", 6, 5));
+    !map.walkable("b1", 6, 5));
 
   alice.clear();
   const sealedAck = await alice.step("east");
@@ -286,7 +301,7 @@ async function main() {
   const backPatch = alice.of("self.patch").find((m) => m.region !== undefined);
   check("b1 의 격자가 다시 온다", backPatch?.region?.id === "b1");
   check("돌아오는 문에는 조건이 없다 (한 번 열린 길은 닫히지 않는다)",
-    exitAt({ region: "b2", x: 1, y: 3 }, "west")?.requires === null);
+    map.exitAt({ region: "b2", x: 1, y: 3 }, "west")?.requires === null);
 
   // ── ⑦ seen 쓰기 조건화 ─────────────────────────────────────────────
   section("⑦ 이미 밟은 칸으로 가는 걸음은 seen 을 다시 쓰지 않는다");

@@ -23,13 +23,15 @@ import type {
   WorldFlagView,
 } from "../../shared/protocol";
 import { lines } from "../narration/lines";
-import { regionView } from "../engine/map";
+import type { GameMap } from "../engine/map";
 import type { Emit } from "./emit";
 import { canSee, type Registry, type Session } from "./session";
 
 export function makePresence(
   reg: Registry,
   emit: Emit,
+  /** 지역 격자의 출처. 스냅샷과 self.patch 가 '지금 있는 지역' 하나만 싣는다. */
+  map: GameMap,
   /** 공개된 월드 플래그. 스냅샷이 실어야 재접속한 클라이언트가 접속 전에
    *  일어난 일을 알 수 있다 — world.flag 델타만으로는 영영 모른다.
    *  주입인 이유: presence 는 world/events 를 import 하지 않는다 (순환). */
@@ -78,7 +80,7 @@ export function makePresence(
         seen: [...self.seen],
         items: itemsOf(self.playerId),
       },
-      region: regionView(self.pos.region),
+      region: map.view(self.pos.region),
       room: roomView(self.pos, self),
       presence: visiblePresence(self),
       world: publicFlags(),
@@ -160,7 +162,7 @@ export function makePresence(
        순서가 뒤집히면 클라이언트가 한 프레임 동안 옛 지역의 격자 위에
        새 좌표를 찍는다 — 미니맵의 점이 벽 안에 들어가 있거나 아예 밖으로 나간다. */
     if (from.region !== to.region) {
-      emit.send(self, { t: "self.patch", region: regionView(to.region) });
+      emit.send(self, { t: "self.patch", region: map.view(to.region) });
     }
     emit.send(self, { t: "room.describe", room: roomView(to, self) });
     if (fromRoom !== toRoom) sendRoster(self, toRoom);

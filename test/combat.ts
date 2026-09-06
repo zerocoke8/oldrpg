@@ -24,7 +24,14 @@ import type { RoomTextRequest } from "../shared/narration";
 import type { Dir } from "../shared/ids";
 import { loadBalance } from "../server/content/balance";
 import { makeRng } from "../server/engine/rng";
-import { SPAWN } from "../server/engine/map";
+import { makeMap } from "../server/engine/map";
+import { loadWorld } from "../server/content/world";
+
+/** 실제 content/world/ 를 읽은 맵. 테스트는 서버가 부팅에서 쓰는 것과
+ *  같은 데이터를 봐야 한다 — 별도의 테스트 세계를 만들면 검사는 통과하는데
+ *  운영 데이터는 틀린 상황이 생긴다. */
+const map = makeMap(loadWorld());
+const SPAWN = map.spawn;
 import { pickTarget } from "../server/engine/combat";
 
 const PORT = 8906;

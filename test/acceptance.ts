@@ -18,7 +18,14 @@ import WebSocket from "ws";
 import { boot } from "../server/index";
 import { PROTOCOL_VERSION, type ServerMsg } from "../shared/protocol";
 import { GRACE_MS } from "../server/net/session";
-import { regionOf, SPAWN, walkable } from "../server/engine/map";
+import { makeMap } from "../server/engine/map";
+import { loadWorld } from "../server/content/world";
+
+/** 실제 content/world/ 를 읽은 맵. 테스트는 서버가 부팅에서 쓰는 것과
+ *  같은 데이터를 봐야 한다 — 별도의 테스트 세계를 만들면 검사는 통과하는데
+ *  운영 데이터는 틀린 상황이 생긴다. */
+const map = makeMap(loadWorld());
+const SPAWN = map.spawn;
 import type { Dir } from "../shared/ids";
 
 const PORT = 8899;
@@ -129,10 +136,10 @@ async function main() {
      막는다" 를 듣는다. 자연어를 전부 검사할 수는 없지만, 그 거짓 주장의
      모양만큼은 기계로 잡을 수 있다. */
   const spawnExits = ([[0, -1], [0, 1], [1, 0], [-1, 0]] as const).filter(([dx, dy]) =>
-    walkable(SPAWN.region, SPAWN.x + dx, SPAWN.y + dy),
+    map.walkable(SPAWN.region, SPAWN.x + dx, SPAWN.y + dy),
   ).length;
   check("스폰의 실제 출구는 둘이다 (동·서)", spawnExits === 2, String(spawnExits));
-  const spawnSeed = regionOf(SPAWN.region)?.seeds[`${SPAWN.x},${SPAWN.y}`] ?? "";
+  const spawnSeed = map.region(SPAWN.region)?.seeds[`${SPAWN.x},${SPAWN.y}`] ?? "";
   check("★ 스폰 씨앗이 네 방향을 주장하지 않는다 (맵과 어긋나면 안 된다)",
     !spawnSeed.includes("네 방향") && !spawnSeed.includes("사방"), spawnSeed);
   check("무너진 남북 통로를 문장이 설명한다",

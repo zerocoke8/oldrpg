@@ -34,7 +34,7 @@ import {
   type Effect,
 } from "../engine/combat";
 import { makeRng, type Rng } from "../engine/rng";
-import { regionOf, SPAWN } from "../engine/map";
+import type { GameMap } from "../engine/map";
 import type { Queries } from "../db/queries";
 import { lines } from "../narration/lines";
 import type { Emit } from "../net/emit";
@@ -114,6 +114,8 @@ export function makeCombat(
   emit: Emit,
   events: EventService,
   inventory: InventoryService,
+  /** 적 배치와 부활 지점의 출처. 수치와 같은 주입이다 — engine 은 파일을 읽지 않는다. */
+  map: GameMap,
   /** 수치는 데이터가 소유한다 (content/balance/). 시계·시드와 같은 주입이다. */
   balance: Balance,
   clock: () => number,
@@ -150,7 +152,7 @@ export function makeCombat(
     const coord = roomId.slice(sep + 1);
     // 배치(맵)와 정의(밸런스)가 두 단계로 갈라져 있다. 짝은 부팅에서 검증된다.
     // 배치는 지역마다 따로다 — 같은 좌표가 지역마다 다른 적을 가리킨다.
-    const id = regionOf(roomId.slice(0, sep))?.enemies[coord];
+    const id = map.region(roomId.slice(0, sep))?.enemies[coord];
     const def = id ? balance.enemies[id] : undefined;
     if (!def) return null;
     // 이미 죽은 적은 없는 것과 같다. 죽음의 '소유자' 가 둘로 나뉜다:
@@ -634,12 +636,12 @@ export function makeCombat(
       const cur = reg.get(playerId);
       if (!cur || cur.connId !== epoch) return;
       const hp = Math.max(1, Math.floor(cur.maxHp / 2));
-      const seen = new Set(cur.seen).add(roomIdOf(SPAWN));
+      const seen = new Set(cur.seen).add(roomIdOf(map.spawn));
       try {
         q.commitMoveSeen.run({
-          region: SPAWN.region,
-          x: SPAWN.x,
-          y: SPAWN.y,
+          region: map.spawn.region,
+          x: map.spawn.x,
+          y: map.spawn.y,
           seen: JSON.stringify([...seen]),
           now: clock(),
           id: playerId,
@@ -649,7 +651,7 @@ export function makeCombat(
         console.error("[combat] respawn", err);
         return;
       }
-      reg.reposition(cur, { ...SPAWN });
+      reg.reposition(cur, { ...map.spawn });
       cur.seen = seen;
       cur.hp = hp;
       emit.send(cur, { t: "self.patch", hp, seen: [...seen] });

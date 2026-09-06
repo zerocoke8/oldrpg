@@ -15,7 +15,7 @@
 
 import type { Dir, Pos } from "../../shared/ids";
 import { step } from "../../shared/ids";
-import { exitAt, walkableAt } from "./map";
+import type { GameMap } from "./map";
 
 export type MoveResult =
   | { ok: true; to: Pos; via: "step" | "door" }
@@ -33,16 +33,21 @@ export type MoveResult =
  *  ★ 문을 한 칸 이동보다 '먼저' 본다. 출구는 벽 자리에만 있으므로(부팅에서
  *    검증한다) 실제로 겹치는 일은 없지만, 순서를 명시해 두면 나중에 누가
  *    걸을 수 있는 칸에 문을 달아도 판정이 흔들리지 않는다. */
-export function resolveMove(from: Pos, dir: Dir, isFlagOn: (key: string) => boolean): MoveResult {
-  const door = exitAt(from, dir);
+export function resolveMove(
+  map: GameMap,
+  from: Pos,
+  dir: Dir,
+  isFlagOn: (key: string) => boolean,
+): MoveResult {
+  const door = map.exitAt(from, dir);
   if (door) {
     if (door.requires !== null && !isFlagOn(door.requires)) return { ok: false, reason: "sealed" };
     // 목적지가 걸을 수 있는 칸인 것은 부팅에서 검증했다. 그래도 한 번 더 본다 —
     // 이 함수의 사후조건은 "반환한 to 는 설 수 있는 칸" 이다.
-    if (!walkableAt(door.to)) return { ok: false, reason: "wall" };
+    if (!map.walkableAt(door.to)) return { ok: false, reason: "wall" };
     return { ok: true, to: door.to, via: "door" };
   }
   const to = step(from, dir);
-  if (!walkableAt(to)) return { ok: false, reason: "wall" };
+  if (!map.walkableAt(to)) return { ok: false, reason: "wall" };
   return { ok: true, to, via: "step" };
 }

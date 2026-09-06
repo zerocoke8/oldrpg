@@ -7,18 +7,11 @@
  * room_text 는 여기서 건드리지 않는다 (첫 입장 때 lazy 기록). */
 
 import {
-  allRegions,
-  allRooms,
-  contentHash,
   MAX_SENSITIVE,
-  regionOf,
-  SPAWN,
   WORLD_FLAGS,
   WORLD_FLAG_DEFAULTS,
   declHashOf,
-  tileAt,
-  walkable,
-  walkableAt,
+  type GameMap,
   type RegionDef,
 } from "../engine/map";
 import { DELTA, OPPOSITE } from "../../shared/ids";
@@ -38,9 +31,9 @@ const STALE_PLAYER_MS = 30 * 24 * 60 * 60 * 1000;
  *    "특징 없는 돌 통로" 로 조용히 메우고 있었다 — 새 방을 뚫고 씨앗을
  *    빠뜨리면 아무 소리 없이 무명의 방이 하나 생긴다.
  *    부팅에서 죽는 편이 조용히 틀린 세계로 도는 것보다 낫다. */
-export function assertWorldData(balance: Balance): void {
-  for (const r of allRegions()) assertRegion(r, balance);
-  assertDoors();
+export function assertWorldData(map: GameMap, balance: Balance): void {
+  for (const r of map.regions()) assertRegion(map, r, balance);
+  assertDoors(map);
 
   // ⑦ 적이 켜는 플래그는 선언돼 있어야 한다 (파일을 넘나드는 참조라 zod 가 못 본다).
   for (const [id, e] of Object.entries(balance.enemies)) {
@@ -49,18 +42,27 @@ export function assertWorldData(balance: Balance): void {
     }
   }
 
-  // ⑧ 스폰은 걸을 수 있는 칸이어야 한다. 아니면 모든 신규 플레이어가 벽 안에서 시작한다.
-  if (!walkableAt(SPAWN)) {
-    throw new Error(`SPAWN ${SPAWN.region} ${SPAWN.x},${SPAWN.y} 이 벽이다 (engine/map.ts).`);
+  /* ⑧ NPC 가 실재하는 방을 가리키는가. NPC 는 아직 코드에 있고(engine/npcs.ts)
+     방은 데이터에 있으므로 이 참조는 파일을 넘나든다 — 아무도 안 보면 부팅이
+     'FOREIGN KEY constraint failed' 라는 말로 죽는다. 어느 NPC 가 어느 방을
+     못 찾았는지는 그 메시지 어디에도 없다. */
+  const roomIds = new Set(map.rooms().map((r) => r.id));
+  for (const n of NPCS) {
+    if (!roomIds.has(n.roomId)) {
+      throw new Error(`NPC ${n.id} 가 없는 방 ${n.roomId} 에 있다 (engine/npcs.ts 또는 content/world/).`);
+    }
+  }
+
+  // ⑨ 스폰은 걸을 수 있는 칸이어야 한다. 아니면 모든 신규 플레이어가 벽 안에서 시작한다.
+  if (!map.walkableAt(map.spawn)) {
+    const s = map.spawn;
+    throw new Error(`스폰 ${s.region} ${s.x},${s.y} 이 벽이다 (content/world/world.json).`);
   }
 }
 
-function assertRegion(r: RegionDef, balance: Balance): void {
-  // ① 모든 줄의 길이가 같다. 들쭉날쭉하면 x 범위가 y 마다 달라져 미니맵과 어긋난다.
-  const widths = new Set(r.tiles.map((t) => t.length));
-  if (widths.size !== 1) {
-    throw new Error(`지역 ${r.id}: 타일 줄 길이가 제각각이다 (${[...widths].join(" ")}).`);
-  }
+function assertRegion(map: GameMap, r: RegionDef, balance: Balance): void {
+  // ① 줄 길이가 같은 것은 server/content/world.ts 가 이미 봤다 (그게 어긋나면
+  //    x 범위가 y 마다 달라져 아래의 모든 검사가 무엇을 말하는지 알 수 없다).
   const w = r.tiles[0]?.length ?? 0;
   const h = r.tiles.length;
 
@@ -69,7 +71,7 @@ function assertRegion(r: RegionDef, balance: Balance): void {
   const walkables = new Set<string>();
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
-      if (!walkable(r.id, x, y)) continue;
+      if (!map.walkable(r.id, x, y)) continue;
       walkables.add(`${x},${y}`);
       if (!r.seeds[`${x},${y}`]) seedless.push(`${x},${y}`);
     }
@@ -100,7 +102,7 @@ function assertRegion(r: RegionDef, balance: Balance): void {
   // ④ 'E' 타일과 적 '배치' 는 양방향으로 짝이 맞는다.
   const eTiles = new Set<string>();
   for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) if (tileAt(r.id, x, y) === "E") eTiles.add(`${x},${y}`);
+    for (let x = 0; x < w; x++) if (map.tileAt(r.id, x, y) === "E") eTiles.add(`${x},${y}`);
   }
   for (const k of eTiles) {
     if (!r.enemies[k]) throw new Error(`지역 ${r.id}: 'E' 타일 ${k} 에 적이 배치되지 않았다.`);
@@ -117,8 +119,8 @@ function assertRegion(r: RegionDef, balance: Balance): void {
 
 /** ⑥ 지역 간 문. 오타 하나가 '들어갔다 못 나오는 지역' 이나 '아무 데도 없는 지역'
  *  을 만든다 — 어느 쪽이든 플레이어가 갇히고 나서야 알게 된다. */
-function assertDoors(): void {
-  for (const r of allRegions()) {
+function assertDoors(map: GameMap): void {
+  for (const r of map.regions()) {
     for (const e of r.exits) {
       const where = `지역 ${r.id} 의 출구 ${e.at} ${e.dir}`;
       const [ax, ay] = e.at.split(",").map(Number);
@@ -126,16 +128,16 @@ function assertDoors(): void {
         throw new Error(`${where}: at 이 "x,y" 형식이 아니다.`);
       }
       // 출발 칸은 걸을 수 있어야 한다 — 아무도 설 수 없는 칸의 문은 존재하지 않는 문이다.
-      if (!walkable(r.id, ax, ay)) throw new Error(`${where}: 출발 칸이 벽이다.`);
+      if (!map.walkable(r.id, ax, ay)) throw new Error(`${where}: 출발 칸이 벽이다.`);
       // 그 방향은 벽이어야 한다. 걸어갈 수 있는 칸을 가리키면 같은 키 입력에
       // 두 가지 뜻이 생긴다 (한 칸 이동인가 지역 이동인가).
       const d = DELTA[e.dir];
-      if (walkable(r.id, ax + d.dx, ay + d.dy)) {
+      if (map.walkable(r.id, ax + d.dx, ay + d.dy)) {
         throw new Error(`${where}: 그 방향이 벽이 아니다 — 한 칸 이동과 뜻이 겹친다.`);
       }
-      const dst = regionOf(e.to.region);
+      const dst = map.region(e.to.region);
       if (!dst) throw new Error(`${where}: 목적지 지역 ${e.to.region} 이 없다.`);
-      if (!walkableAt(e.to)) {
+      if (!map.walkableAt(e.to)) {
         throw new Error(`${where}: 목적지 ${e.to.region} ${e.to.x},${e.to.y} 이 벽이다.`);
       }
       if (e.requires !== null && !(e.requires in WORLD_FLAGS)) {
@@ -161,8 +163,8 @@ function assertDoors(): void {
   }
 }
 
-export function seed(db: Db, q: Queries, balance: Balance, now: number): { seededRooms: number; reaped: number } {
-  assertWorldData(balance);
+export function seed(db: Db, q: Queries, map: GameMap, balance: Balance, now: number): { seededRooms: number; reaped: number } {
+  assertWorldData(map, balance);
   let seededRooms = 0;
 
   const tx = db.transaction(() => {
@@ -174,10 +176,10 @@ export function seed(db: Db, q: Queries, balance: Balance, now: number): { seede
       q.insertFlagIfAbsent.run(key, value, now);
     }
 
-    const want = contentHash();
+    const want = map.contentHash();
     const have = q.getMeta.get("content_hash")?.value;
     if (have !== want) {
-      for (const r of allRooms()) {
+      for (const r of map.rooms()) {
         if (r.sensitiveFlags.length > MAX_SENSITIVE) {
           // charter 47-48줄: 방 하나가 2^n 개의 상태를 갖는 것을 부팅에서 막는다.
           throw new Error(
