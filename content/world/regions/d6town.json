@@ -261,6 +261,38 @@
           "requires": null
         }
       ]
+    },
+    "shirayuki": {
+      "at": "6,7",
+      "name": "시라유키",
+      "persona": "쿠로가네 씨족의 대장장이. 6구역에서 어느 세계 것이든 받아 손봐 준다. 말이 느리고 손이 빠르다. 물건에 대해서는 길게 말하고 사람에 대해서는 말하지 않는다",
+      "sensitive": [],
+      "topics": [
+        {
+          "id": "greet",
+          "label": null,
+          "seed": "받아 든 것을 먼저 보고 사람은 나중에 본다",
+          "requires": null
+        },
+        {
+          "id": "clan",
+          "label": "쿠로가네 씨족에 대해",
+          "seed": "검은 쪽은 벼리고 붉은 쪽은 잇는다. 우리 집안은 벼리는 쪽이다",
+          "requires": null
+        },
+        {
+          "id": "repair",
+          "label": "수리에 대해",
+          "seed": "어느 세계 것이든 부러지는 자리는 비슷하다. 만든 사람이 급했던 자리다",
+          "requires": null
+        },
+        {
+          "id": "dark",
+          "label": "어둠 결정에 대해",
+          "seed": "그건 벼릴 수 있는 것이 아니다. 가져와도 돌려보낸다",
+          "requires": null
+        }
+      ]
     }
   },
   "exits": [
@@ -282,6 +314,17 @@
         "region": "corpa84",
         "x": 2,
         "y": 1
+      },
+      "requires": null,
+      "oneWay": false
+    },
+    {
+      "at": "2,5",
+      "dir": "west",
+      "to": {
+        "region": "dscu",
+        "x": 9,
+        "y": 4
       },
       "requires": null,
       "oneWay": false
