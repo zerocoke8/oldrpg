@@ -509,11 +509,19 @@ export function makeCombat(
     });
     leave(playerId, "defeat");
     if (!s) return;
-    // 부활: 스폰으로 이송하고 절반의 체력으로 일으킨다.
-    // 스키마 변경이 없다 — hp 도 좌표도 이미 칼럼이다.
+    /* 부활: 스폰으로 이송하고 절반의 체력으로 일으킨다.
+     * 스키마 변경이 없다 — hp 도 좌표도 이미 칼럼이다.
+     *
+     * ★ 에폭은 '값' 으로 붙잡는다. cur.connId !== s.connId 로 쓰면 유예 중인
+     *   세션을 입양한 경우 cur 과 s 가 '같은 객체' 라서 비교가 언제나 거짓이고,
+     *   가드가 통째로 죽는다. 그러면 재개 경로가 이미 일으켜 세운 사람을
+     *   이 타이머가 한 번 더 부활시킨다 (문장이 두 번 나간다).
+     *   저장소의 다른 지연 연속들(net/handlers.ts 의 Phase B, world/dialogue.ts)이
+     *   전부 쓰는 관용구가 바로 이 '값으로 붙잡기' 다. */
+    const epoch = s.connId;
     setTimeout(() => {
       const cur = reg.get(playerId);
-      if (!cur || cur.connId !== s.connId) return;
+      if (!cur || cur.connId !== epoch) return;
       const hp = Math.max(1, Math.floor(cur.maxHp / 2));
       const seen = new Set(cur.seen).add(roomIdOf(SPAWN));
       try {

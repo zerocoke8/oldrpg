@@ -13,6 +13,7 @@
  *   새로고침해도 전투가 이어지는가
  *   규칙 1 — 전투 판정이 전부 서버에 있는가 */
 
+import { createHash } from "node:crypto";
 import { rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,6 +24,7 @@ import type { RoomTextRequest } from "../shared/narration";
 import type { Dir } from "../shared/ids";
 import { ENEMIES, SKILLS, PLAYER_SWING_MS } from "../server/engine/enemies";
 import { makeRng } from "../server/engine/rng";
+import { SPAWN } from "../server/engine/map";
 import { pickTarget } from "../server/engine/combat";
 
 const PORT = 8906;
@@ -40,6 +42,8 @@ function check(label: string, cond: boolean, detail = ""): void {
   }
 }
 const section = (s: string) => console.log(`\n${s}`);
+/** DB 는 토큰의 sha256 만 갖는다 (server/net/handlers.ts 와 같은 공식). */
+const sha256 = (t: string) => createHash("sha256").update(t, "utf8").digest("hex");
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const fakeLlm = async (req: RoomTextRequest) => ({
@@ -60,9 +64,12 @@ class Client {
   /** 접속 때 붙잡아 둔다 — clear() 가 welcome 을 지우기 때문이다. */
   id = "";
   seq = 0;
-  constructor(readonly label: string) {}
+  constructor(
+    readonly label: string,
+    readonly port: number = PORT,
+  ) {}
   async connect(token: string | null = null): Promise<void> {
-    this.ws = new WebSocket(`ws://127.0.0.1:${PORT}`);
+    this.ws = new WebSocket(`ws://127.0.0.1:${this.port}`);
     await new Promise<void>((res, rej) => {
       this.ws.once("open", () => res());
       this.ws.once("error", rej);
@@ -308,6 +315,108 @@ async function main() {
     spoofAck.ok === false && spoofAck.reason === "bad_args");
   check("attack 액션 타입에 피해량 필드 자체가 없다 (표현 불가능하게)",
     !JSON.stringify(Object.keys({ type: "attack" })).includes("damage"));
+
+  /* ── ⑨ 부활 타이머를 잃어도 캐릭터가 굳지 않는다 ────────────────────
+   *
+   * 부활은 world/combat.ts 의 메모리 setTimeout 하나뿐이라 두 경로로 유실된다:
+   *   (a) 프로세스가 그 창 안에 죽는다 (tsx watch 재시작이 정확히 이 창)
+   *   (b) 끊긴 뒤 3~8초 사이에 링크데드로 죽으면 유예 만료가 부활보다 먼저 와
+   *       세션이 지워지고 콜백이 !cur 로 빠져나간다
+   * 그러면 hp=0 이 DB 에 남고, HP 를 올리는 경로가 전투 안(mend)에만 있는데
+   * 전투는 hp<=0 을 거절하므로 캐릭터가 영구히 굳었다. 토큰을 버리는 것 외에
+   * 탈출구가 없었다.
+   *
+   * 여기서는 (a)를 그대로 재현한다 — 부활이 절대 오지 않게 해 두고 죽인 뒤
+   * 서버를 내렸다 올린다. (b)도 결과가 같다(타이머 유실). */
+  section("⑨ 부활 타이머를 잃어도 재개 경로가 일으켜 세운다");
+  const DB2 = join(tmpdir(), `mud-combat-revive-${process.pid}.db`);
+  const PORT2 = PORT + 1;
+  for (const f of [DB2, `${DB2}-wal`, `${DB2}-shm`]) rmSync(f, { force: true });
+
+  let clock2 = 1_000_000;
+  const boot2 = (respawnMs: number) =>
+    boot(DB2, PORT2, {
+      llmRenderer: fakeLlm,
+      // ★ 부활이 '절대' 오지 않는다 = 타이머를 잃은 것과 같은 상태.
+      combat: { now: () => clock2, manualTick: true, seedFor: () => 999, respawnMs },
+    });
+
+  let srv2 = boot2(3_600_000);
+  const tick2 = () => (srv2.combat as unknown as { tick(): void }).tick();
+  const carol = new Client("carol", PORT2);
+  await carol.connect(null);
+  const carolToken = carol.token!;
+  await carol.walk(["west", "west", "south", "south"]);
+  await carol.walk(["east", "east"]);
+  await carol.actAndWait({ type: "attack" });
+  // 혼자서는 진다 (적 200HP vs 플레이어 40HP). 죽을 때까지 시계를 민다.
+  for (let i = 0; i < 200 && !carol.texts("bad").some((t) => t.includes("쓰러졌다")); i++) {
+    clock2 += 100;
+    tick2();
+    await sleep(2);
+  }
+  await sleep(40);
+  check("혼자 싸우다 쓰러졌다", carol.texts("bad").some((t) => t.includes("당신은 쓰러졌다")),
+    JSON.stringify(carol.texts("bad").slice(-2)));
+  const deadRow = srv2.ctx.q.playerByTokenHash.get(sha256(carolToken));
+  check("사망이 DB 에 hp=0 으로 남는다", deadRow?.hp === 0, String(deadRow?.hp));
+
+  carol.close();
+  await srv2.close(); // ★ 부활 타이머가 여기서 사라진다
+  await sleep(120);
+
+  srv2 = boot2(3_600_000);
+  const carol2 = new Client("carol2", PORT2);
+  await carol2.connect(carolToken);
+  const revivedSelf = carol2.of("snapshot")[0]!.self;
+  check("★ 돌아오면 일어나 있다 (hp>0)", revivedSelf.hp > 0, `${revivedSelf.hp}/${revivedSelf.maxHp}`);
+  check("절반의 체력이다 (combat.ts 의 부활과 같은 값)",
+    revivedSelf.hp === Math.max(1, Math.floor(revivedSelf.maxHp / 2)), String(revivedSelf.hp));
+  check("스폰으로 이송됐다", revivedSelf.pos.x === SPAWN.x && revivedSelf.pos.y === SPAWN.y,
+    JSON.stringify(revivedSelf.pos));
+  check("DB 도 같이 갱신됐다 (메모리만 고치지 않는다)",
+    srv2.ctx.q.playerByTokenHash.get(sha256(carolToken))?.hp === revivedSelf.hp);
+  check("부활 문장이 한 번 나간다",
+    carol2.texts("sys").filter((t) => t.includes("차가운 돌바닥")).length === 1,
+    JSON.stringify(carol2.texts("sys")));
+
+  carol2.clear();
+  await carol2.actAndWait({ type: "attack" });
+  check("★ 다시 싸울 수 있다 — 거절 이유가 '쓰러졌다' 가 아니다",
+    !carol2.texts("sys").some((t) => t.includes("당신은 쓰러졌다")),
+    JSON.stringify(carol2.texts("sys")));
+
+  /* 이중 부활이 나지 않는가. 타이머가 '아직 살아 있는' 채로 재접속하면,
+     hello 가 connId 를 새 에폭으로 올리므로 옛 콜백은 빠져나가야 한다. */
+  carol2.close();
+  await srv2.close();
+  await sleep(80);
+  srv2 = boot2(400); // 이번엔 부활이 곧 온다
+  const dave = new Client("dave", PORT2);
+  await dave.connect(null);
+  const daveToken = dave.token!;
+  await dave.walk(["west", "west", "south", "south"]);
+  await dave.walk(["east", "east"]);
+  await dave.actAndWait({ type: "attack" });
+  for (let i = 0; i < 200 && !dave.texts("bad").some((t) => t.includes("쓰러졌다")); i++) {
+    clock2 += 100;
+    tick2();
+    await sleep(2);
+  }
+  dave.close(); // 타이머가 아직 도는 중에 새 소켓으로 돌아온다
+  const dave2 = new Client("dave2", PORT2);
+  await dave2.connect(daveToken);
+  await sleep(600); // 옛 부활 타이머가 지나가도록
+  check("★ 이중 부활이 나지 않는다 (에폭이 옛 타이머를 무효화한다)",
+    dave2.texts("sys").filter((t) => t.includes("차가운 돌바닥")).length === 1,
+    JSON.stringify(dave2.texts("sys")));
+  const daveRow = srv2.ctx.q.playerByTokenHash.get(sha256(daveToken));
+  check("체력도 한 번만 적용됐다", daveRow?.hp === Math.max(1, Math.floor((daveRow?.max_hp ?? 0) / 2)),
+    `${daveRow?.hp}/${daveRow?.max_hp}`);
+
+  dave2.close();
+  await srv2.close();
+  for (const f of [DB2, `${DB2}-wal`, `${DB2}-shm`]) rmSync(f, { force: true });
 
   // ── 정리 ────────────────────────────────────────────────────────────
   alice.close();

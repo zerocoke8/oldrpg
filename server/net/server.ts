@@ -146,7 +146,7 @@ export function startServer(ctx: Ctx, port: number): WebSocketServer {
         }
         conn.session = out.session;
         conn.epoch = out.session.connId;
-        sendConnectBurst(ctx, out.session, out.token, out.displaced);
+        sendConnectBurst(ctx, out.session, out.token, out.displaced, out.revived);
         // 도착 방출은 '신규' 일 때만. 입양이면 아무도 그가 떠났다는 말을
         // 들은 적이 없으므로 돌아왔다는 말도 필요 없다.
         if (!out.adopted) ctx.presence.announceArrival(out.session);

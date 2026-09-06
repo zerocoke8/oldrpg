@@ -124,6 +124,8 @@ export interface HelloOutcome {
   token: string;
   /** 저장된 좌표가 벽 안이라 스폰으로 이송했는가. */
   displaced: boolean;
+  /** hp<=0 인 채로 돌아와서 여기서 일으켰는가 (부활 타이머를 잃은 경우). */
+  revived: boolean;
   /** 기존 세션을 이어받았는가. 이어받았으면 관찰자 입장에서 그 플레이어는
    *  한 번도 사라진 적이 없으므로, 도착을 방출하지 '않는다'. */
   adopted: boolean;
@@ -156,6 +158,7 @@ export function handleHello(
   let hp: number;
   let maxHp: number;
   let displaced = false;
+  let revived = false;
 
   if (row) {
     playerId = row.id;
@@ -168,12 +171,33 @@ export function handleHello(
       pos = SPAWN;
       displaced = true;
     }
-    seen = new Set(JSON.parse(row.seen) as RoomId[]);
-    seen.add(roomIdOf(pos));
     hp = row.hp;
     maxHp = row.max_hp;
-    if (displaced) {
+    /* ★ 저장된 vitals 도 좌표와 같은 이유로 여기서 검사한다.
+     *
+     * 부활은 world/combat.ts 의 메모리 setTimeout 하나뿐이고, 그것을 잃는
+     * 경로가 둘 있다: (a) 프로세스가 그 5초 안에 죽는다(tsx watch 재시작이
+     * 정확히 이 창이다), (b) 끊긴 뒤 3~8초 사이에 링크데드로 죽으면 유예
+     * 만료(8초)가 부활(사망+5초)보다 먼저 와서 세션이 지워지고 콜백이
+     * !cur 로 빠져나간다. 그러면 hp=0 이 DB 에 남는데, HP 를 올리는 경로가
+     * 전투 안(mend)에만 있고 전투는 hp<=0 을 거절하므로 캐릭터가 영구히
+     * 굳는다 — 토큰을 버리는 것 말고 탈출구가 없다.
+     *
+     * 그래서 '메모리 타이머' 가 아니라 '재개 경로' 가 부활의 최종 보증이다.
+     * 여기는 DB 가 진실인 유일한 지점이고, 타이머와 달리 유실되지 않는다.
+     * 이중 부활은 나지 않는다: hp>0 이면 여기가 아무 일도 하지 않고,
+     * 아래에서 connId 를 새 에폭으로 올리므로 아직 살아 있던 옛 타이머는
+     * cur.connId !== s.connId 로 빠져나간다. */
+    if (hp <= 0) {
+      pos = SPAWN;
+      hp = Math.max(1, Math.floor(maxHp / 2)); // combat.ts 의 부활과 같은 값
+      revived = true;
+    }
+    seen = new Set(JSON.parse(row.seen) as RoomId[]);
+    seen.add(roomIdOf(pos));
+    if (displaced || revived) {
       ctx.q.commitMove.run({ ...pos, seen: JSON.stringify([...seen]), now, id: playerId });
+      if (revived) ctx.q.setPlayerHp.run(hp, now, playerId);
     } else {
       ctx.q.touchPlayer.run(now, playerId);
     }
@@ -233,11 +257,14 @@ export function handleHello(
     existing.lastSeq = 0;
     existing.awaitingPong = 0;
     existing.brief = { id: playerId, name };
-    if (displaced) ctx.reg.reposition(existing, pos);
+    if (displaced || revived) ctx.reg.reposition(existing, pos);
+    // 유예 중인 세션을 입양하는 경우, 메모리의 hp 도 DB 와 같아야 한다.
+    existing.hp = hp;
+    existing.maxHp = maxHp;
     existing.seen = seen;
     // 살아 있는 소켓 교체든 유예 입양이든, 관찰자는 그가 떠났다는 말을 들은
     // 적이 없다. 그래서 돌아왔다는 말도 필요 없다 — 둘 다 조용하다.
-    return { session: existing, token, displaced, adopted: true };
+    return { session: existing, token, displaced, revived, adopted: true };
   }
 
   const session: Session = {
@@ -260,11 +287,17 @@ export function handleHello(
     awaitingPong: 0,
   };
   ctx.reg.add(session);
-  return { session, token, displaced, adopted: false };
+  return { session, token, displaced, revived, adopted: false };
 }
 
 /** hello 직후의 Phase A: welcome -> snapshot -> 안내/이송 로그. */
-export function sendConnectBurst(ctx: Ctx, s: Session, token: string, displaced: boolean): void {
+export function sendConnectBurst(
+  ctx: Ctx,
+  s: Session,
+  token: string,
+  displaced: boolean,
+  revived: boolean,
+): void {
   ctx.emit.send(s, {
     t: "welcome",
     pv: PROTOCOL_VERSION,
@@ -276,6 +309,8 @@ export function sendConnectBurst(ctx: Ctx, s: Session, token: string, displaced:
   ctx.emit.send(s, ctx.presence.snapshotFor(s, "connect", 0));
   ctx.emit.log(s, "sys", lines.welcome);
   if (displaced) ctx.emit.log(s, "sys", lines.displaced);
+  // 문장은 combat.ts 의 부활과 같은 것을 쓴다 — 플레이어에게는 같은 사건이다.
+  if (revived) ctx.emit.log(s, "sys", lines.respawn);
   ctx.presence.sendRoster(s, roomIdOf(s.pos));
   noticeEnemy(ctx, s, roomIdOf(s.pos));
   noticeNpcs(ctx, s, roomIdOf(s.pos));
