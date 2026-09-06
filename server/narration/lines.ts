@@ -47,6 +47,50 @@ export const lines = {
   sayEmpty: "할 말이 없다.",
   sayTooLong: "그렇게 긴 말은 숨이 차서 못 한다.",
 
+  // ── 전투 ──────────────────────────────────────────────────────────────
+  /* ★ 전부 결정론적이다. 0.5초 스윙에 모델을 기다릴 수 없다 (규칙 4).
+     LLM 이 전투에 들어올 자리는 나중에 둘 — 전투 종료 후 요약, 또는
+     (무기 x 적 x 결과) 키로 미리 생성해 둔 문장 풀(room_text 와 같은 패턴).
+     그때도 여기 있는 문장이 폴백으로 남는다. */
+  /** 방에 들어섰을 때. 아직 교전은 아니다 — 실시간이라 '먼저 치는' 선택이 있다. */
+  enemyHere: (enemy: string): string => `${enemy}이(가) 어둠 속에서 이쪽을 향해 서 있다.`,
+  engage: (enemy: string): string => `${enemy}이(가) 이쪽을 노려본다. 교전이 시작됐다.`,
+  /** 평범한 타격. kind:"combat" 으로 나가고 클라이언트가 연속된 것을 접는다. */
+  hit: (enemy: string, dmg: number): string => `${enemy}에게 ${dmg}의 피해를 주었다.`,
+  crit: (enemy: string, dmg: number): string =>
+    `급소를 파고들었다! ${enemy}에게 ${dmg}의 피해.`,
+  /** 남이 때리는 것은 짧게 — 방에 여럿이면 로그가 두 배가 된다. */
+  allyHit: (who: string, enemy: string, dmg: number): string =>
+    `${who}의 공격, ${enemy}에게 ${dmg}.`,
+  enemyHit: (enemy: string, dmg: number, guarded: boolean): string =>
+    guarded
+      ? `${enemy}의 일격을 받아넘겼다. ${dmg}의 피해.`
+      : `${enemy}의 일격. ${dmg}의 피해를 입었다.`,
+  enemyHitOther: (enemy: string, who: string, dmg: number): string =>
+    `${enemy}이(가) ${who}을(를) 후려친다. ${dmg}.`,
+  skillStrike: (skill: string, enemy: string, dmg: number): string =>
+    `${skill}! ${enemy}에게 ${dmg}의 피해.`,
+  skillHeal: (skill: string, amount: number): string =>
+    amount > 0 ? `${skill}. 체력이 ${amount} 회복되었다.` : `${skill}. 상처가 이미 아물어 있다.`,
+  skillGuard: (skill: string, percent: number): string =>
+    `${skill}. 다음 일격을 ${percent}% 흘려낼 수 있다.`,
+  skillQueued: (skill: string): string => `${skill} 준비 — 다음 호흡에 나간다.`,
+  skillCooling: (skill: string, secs: number): string => `${skill}은(는) 아직 ${secs}초 남았다.`,
+  /** 어그로가 옮겨간 순간. 실시간에서 이게 안 보이면 왜 맞는지 알 수 없다. */
+  threatShift: (enemy: string, who: string): string => `${enemy}의 시선이 ${who}에게 옮겨간다.`,
+  threatShiftSelf: (enemy: string): string => `${enemy}이(가) 이제 당신을 노린다.`,
+  slain: (enemy: string): string => `${enemy}이(가) 연기처럼 흩어진다.`,
+  slainByOther: (who: string, enemy: string): string => `${who}이(가) ${enemy}을(를) 쓰러뜨렸다.`,
+  defeated: "시야가 어두워진다... 당신은 쓰러졌다.",
+  defeatedOther: (who: string): string => `${who}이(가) 쓰러졌다.`,
+  respawn: "차가운 돌바닥의 감촉에 정신이 든다. 입구로 끌려와 있었다.",
+  disengage: (enemy: string): string => `${enemy}에게서 물러났다.`,
+  fled: (enemy: string): string => `${enemy}을(를) 뒤로하고 어둠 속으로 빠져나왔다.`,
+  noEnemy: "여기에는 맞설 것이 없다.",
+  alreadyEngaged: "이미 교전 중이다.",
+  notInCombat: "지금은 싸우고 있지 않다.",
+  unknownSkill: "그런 기술은 익히지 않았다.",
+
   // ── 복구 ──────────────────────────────────────────────────────────────
   /** resume 시 저장된 좌표가 벽 안이면(맵이 바뀌었으면) 스폰으로 이송한다. */
   displaced: "길이 무너져 있었다. 정신을 차려 보니 입구다.",

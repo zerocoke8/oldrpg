@@ -17,16 +17,20 @@ import { loadMoods } from "./narration/prompts";
 import { makeRoomTextService } from "./world/roomText";
 import { makeUpgradeService } from "./world/upgrade";
 import { makeEvents } from "./world/events";
+import { makeCombat, type CombatOptions } from "./world/combat";
 import { makeEmit } from "./net/emit";
 import { makePresence } from "./net/presence";
 import { Registry } from "./net/session";
 import { startServer } from "./net/server";
-import type { Ctx } from "./net/handlers";
+import { enqueueRoomText, type Ctx } from "./net/handlers";
+import { roomIdOf } from "../shared/ids";
+import type { Session } from "./net/session";
 import type { ErrorEvent } from "../shared/protocol";
 import type { RoomTextRenderer } from "../shared/narration";
 import type { QueueOptions } from "./narration/queue";
 import type { UpgradeService } from "./world/upgrade";
 import type { EventService } from "./world/events";
+import type { CombatService } from "./world/combat";
 
 /** 승급 경로가 없을 때 (API 키 없음). 아무것도 하지 않는다. */
 const NO_UPGRADES: UpgradeService = {
@@ -53,6 +57,8 @@ export interface BootOptions {
   llmRenderer?: RoomTextRenderer;
   /** 큐 옵션 (테스트에서 동시성/쿨다운을 조인다). */
   queue?: QueueOptions;
+  /** 전투 옵션 (테스트가 시계와 시드를 손에 쥔다). */
+  combat?: CombatOptions;
 }
 
 export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
@@ -76,7 +82,14 @@ export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
   const emit = makeEmit(reg);
   /* presence 는 world/events 를 import 하지 않는다 (순환). 늦게 바인딩한다. */
   let events: EventService | null = null;
-  const presence = makePresence(reg, emit, () => events?.publicFlags() ?? []);
+  let combat: CombatService | null = null;
+  const presence = makePresence(
+    reg,
+    emit,
+    () => events?.publicFlags() ?? [],
+    (id) => combat?.viewFor(id) ?? null,
+    (roomId) => Boolean(combat?.enemyIn(roomId)),
+  );
 
   /* ── 서술 레이어 ────────────────────────────────────────────────────
      폴백 렌더러는 '플레이어의 경로' 에 있고, LLM 렌더러는 '백그라운드 큐' 에만
@@ -96,6 +109,8 @@ export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
       NO_UPGRADES;
 
   events = makeEvents(world, q, reg, emit, moods, roomText, upgrades, clock);
+  const combatSvc = makeCombat(q, reg, emit, events, clock, options.combat ?? {});
+  combat = combatSvc;
 
   const ctx: Ctx = {
     reg,
@@ -105,9 +120,17 @@ export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
     q,
     roomText,
     upgrades,
+    combat: combatSvc,
     clock,
     isShuttingDown: () => shuttingDown,
   };
+  /* 부활하면 스폰의 묘사를 다시 보낸다. combat 이 net/handlers 를 import 하지
+     않도록(순환) 여기서 꽂는다 — index.ts 가 조합 지점이라는 원칙 그대로다. */
+  (combatSvc as unknown as { setOnRespawn(fn: (s: Session) => void): void }).setOnRespawn((s) => {
+    emit.send(s, { t: "room.describe", room: presence.roomView(s.pos, s) });
+    enqueueRoomText(ctx, s, roomIdOf(s.pos));
+  });
+
   const wss = startServer(ctx, port);
 
   console.log(
@@ -151,10 +174,12 @@ export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
     wss,
     upgrades,
     events,
+    combat: combatSvc,
     close: () =>
       new Promise<void>((resolve) => {
         shuttingDown = true;
         upgrades.stop();
+        combatSvc.stop_();
         // 유예 타이머를 먼저 끈다. 안 그러면 종료 후에 깨어나 없어진
         // 레지스트리에 대고 방출을 시도한다.
         for (const s of reg.all()) {

@@ -300,10 +300,18 @@ async function main() {
     badDir.ok === false && badDir.reason === "bad_args");
   check("거절도 pos 를 실어 pending 을 비운다", badDir.pos.x === 3);
 
-  const unkSeq = alice.send({ type: "attack", targetId: "x" });
+  // 이 서버가 구현하지 않은 동사. (4단계에서 attack 이 '진짜' 가 됐으므로
+  //  앞으로도 구현될 일이 없을 이름을 쓴다 — 이 검사의 요점은 '옛 서버가
+  //  새 클라이언트를 만나도 크래시하지 않는다' 이지 특정 동사가 아니다.)
+  const unkSeq = alice.send({ type: "cast_fireball", targetId: "x" });
   const unk = await alice.ack(unkSeq);
   check("모르는 액션은 ack{unknown_action} (크래시도 error 도 아님)",
     unk.t === "ack" && unk.reason === "unknown_action");
+  // 아는 동사에 모르는 필드를 끼워 넣으면 bad_args 다 (strict 스키마).
+  const strictSeq = alice.send({ type: "attack", targetId: "x" });
+  const strict = await alice.ack(strictSeq);
+  check("아는 동사 + 모르는 필드는 ack{bad_args}",
+    strict.t === "ack" && strict.reason === "bad_args", String(strict.t === "ack" && strict.reason));
 
   const longSeq = alice.send({ type: "say", text: "가".repeat(500) });
   const long = await alice.ack(longSeq);

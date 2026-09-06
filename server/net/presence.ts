@@ -13,7 +13,13 @@
 
 import type { Dir, Pos, RoomId } from "../../shared/ids";
 import { OPPOSITE, roomIdOf } from "../../shared/ids";
-import type { PresenceEntry, RoomView, Snapshot, WorldFlagView } from "../../shared/protocol";
+import type {
+  CombatView,
+  PresenceEntry,
+  RoomView,
+  Snapshot,
+  WorldFlagView,
+} from "../../shared/protocol";
 import { lines } from "../narration/lines";
 import { regionView } from "../engine/map";
 import type { Emit } from "./emit";
@@ -26,6 +32,11 @@ export function makePresence(
    *  일어난 일을 알 수 있다 — world.flag 델타만으로는 영영 모른다.
    *  주입인 이유: presence 는 world/events 를 import 하지 않는다 (순환). */
   publicFlags: () => WorldFlagView[] = () => [],
+  /** 진행 중인 전투. presence 가 world/combat 을 import 하지 않도록 주입한다. */
+  combatFor: (playerId: string) => CombatView | null = () => null,
+  /** 그 방에 살아 있는 적이 있는가. 역시 주입 — presence 는 world/ 를
+   *  import 하지 않는다 (world/combat 이 net/emit 을 쓰므로 순환이 된다). */
+  hasEnemy: (roomId: RoomId) => boolean = () => false,
 ) {
   const others = (self: Session): Session[] =>
     reg.all().filter((s) => s.playerId !== self.playerId);
@@ -38,7 +49,7 @@ export function makePresence(
       .inRoom(roomId)
       .filter((s) => !self || s.playerId !== self.playerId)
       .map((s) => s.brief);
-    return { roomId, pos, occupants };
+    return { roomId, pos, occupants, hasEnemy: hasEnemy(roomId) };
   }
 
   function visiblePresence(self: Session): PresenceEntry[] {
@@ -64,6 +75,7 @@ export function makePresence(
       room: roomView(self.pos, self),
       presence: visiblePresence(self),
       world: publicFlags(),
+      combat: combatFor(self.playerId),
     };
   }
 

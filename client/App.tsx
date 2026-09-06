@@ -6,6 +6,7 @@ import { actionForKey, HANDLED_KEYS } from "./input/keyboard";
 import { connect, type Socket } from "./net/socket";
 import { Reconciler } from "./net/reconcile";
 import { initialState, reduce } from "./state/store";
+import { Combat } from "./ui/Combat";
 import { Dpad } from "./ui/Dpad";
 import { Log } from "./ui/Log";
 import { Minimap } from "./ui/Minimap";
@@ -121,6 +122,8 @@ export default function App() {
         />
       </div>
 
+      {st.combat && <Combat combat={st.combat} selfId={st.self.id} act={act} />}
+
       <Log lines={st.log} />
 
       {/* error{} 는 계약 위반이므로 서사 로그가 아니라 여기에 뜬다. */}
@@ -128,7 +131,7 @@ export default function App() {
         <div style={{ ...win, color: C.red, marginBottom: 12, fontSize: 13 }}>{st.notice}</div>
       )}
 
-      <Dpad act={act} />
+      <Dpad act={act} canAttack={Boolean(st.combat) || st.room?.hasEnemy} />
     </div>
   );
 }

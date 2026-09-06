@@ -29,6 +29,7 @@ import type { Queries } from "../db/queries";
 import { defaultName, lines } from "../narration/lines";
 import type { RoomTextService } from "../world/roomText";
 import type { UpgradeService } from "../world/upgrade";
+import type { CombatService } from "../world/combat";
 import type { Emit } from "./emit";
 import type { Presence } from "./presence";
 import { GRACE_MS, type Registry, type Session } from "./session";
@@ -57,6 +58,7 @@ export interface Ctx {
   q: Queries;
   roomText: RoomTextService;
   upgrades: UpgradeService;
+  combat: CombatService;
   clock: () => number;
   /** 종료 중인가. true 면 handleClose 가 아무 일도 하지 않는다 —
    *  db.close() 뒤에 도착하는 소켓 close 이벤트가 닫힌 핸들에 쓰는 것을 막는다. */
@@ -66,6 +68,13 @@ export interface Ctx {
 /* ------------------------------------------------------------------ */
 /* Phase B                                                             */
 /* ------------------------------------------------------------------ */
+
+/** 그 방에 살아 있는 적이 있으면 알린다. Phase A 다 — 구조화 상태에서
+ *  순수 파생되므로 await 가 필요 없다. */
+export function noticeEnemy(ctx: Ctx, s: Session, roomId: RoomId): void {
+  const def = ctx.combat.enemyIn(roomId);
+  if (def) ctx.emit.log(s, "bad", lines.enemyHere(def.name));
+}
 
 /** 방 묘사를 세션별 체인에 얹는다. 이 체인 밖에서 log{narr} 을 보내는 곳은 없다. */
 export function enqueueRoomText(ctx: Ctx, s: Session, roomId: RoomId): void {
@@ -255,6 +264,7 @@ export function sendConnectBurst(ctx: Ctx, s: Session, token: string, displaced:
   ctx.emit.log(s, "sys", lines.welcome);
   if (displaced) ctx.emit.log(s, "sys", lines.displaced);
   ctx.presence.sendRoster(s, roomIdOf(s.pos));
+  noticeEnemy(ctx, s, roomIdOf(s.pos));
   enqueueRoomText(ctx, s, roomIdOf(s.pos));
 }
 
@@ -323,6 +333,24 @@ export function handleAction(
       action = p.data;
       break;
     }
+    case "attack": {
+      const p = SCHEMAS.attack.safeParse(raw);
+      if (!p.success) return reject(ctx, s, seq, "bad_args");
+      action = p.data;
+      break;
+    }
+    case "skill": {
+      const p = SCHEMAS.skill.safeParse(raw);
+      if (!p.success) return reject(ctx, s, seq, "bad_args");
+      action = p.data;
+      break;
+    }
+    case "stop": {
+      const p = SCHEMAS.stop.safeParse(raw);
+      if (!p.success) return reject(ctx, s, seq, "bad_args");
+      action = p.data;
+      break;
+    }
     default:
       // 이 서버가 구현하지 않은 variant. 옛 서버가 새 클라이언트를 만나는
       // 경우가 정확히 이것이고, 크래시가 아니라 거절이어야 한다.
@@ -340,7 +368,36 @@ export function handleAction(
       return doUnparsed(ctx, s, seq, action.raw);
     case "resync":
       return doResync(ctx, s, seq);
+    case "attack":
+      return doCombatCommand(ctx, s, seq, () => ctx.combat.attack(s));
+    case "skill":
+      return doCombatCommand(ctx, s, seq, () => ctx.combat.skill(s, action.skillId));
+    case "stop":
+      return doCombatCommand(ctx, s, seq, () => ctx.combat.stop(s));
   }
+}
+
+/** 전투 명령은 전부 같은 모양이다: 서비스가 실패 문장을 돌려주거나 null.
+ *
+ *  ★ 실패도 ack{ok:true} 다. "여기엔 적이 없다" 는 계약 위반이 아니라
+ *    엔진이 계산한 '세계의 진실' 이고, 벽 부딪힘과 정확히 같은 부류다.
+ *    (거절 이유가 아니라 문장으로 답하는 것이 요점이다.) */
+function doCombatCommand(
+  ctx: Ctx,
+  s: Session,
+  seq: number,
+  run: () => string | null,
+): void {
+  ctx.emit.send(s, { t: "ack", seq, ok: true, reason: null, pos: s.pos });
+  let refusal: string | null;
+  try {
+    refusal = run();
+  } catch (err) {
+    console.error("[combat]", err);
+    ctx.emit.log(s, "sys", "무언가 잘못됐다.");
+    return;
+  }
+  if (refusal) ctx.emit.log(s, "sys", refusal);
 }
 
 function doMove(ctx: Ctx, s: Session, seq: number, dir: Dir): void {
@@ -380,11 +437,15 @@ function doMove(ctx: Ctx, s: Session, seq: number, dir: Dir): void {
 
   ctx.reg.reposition(s, to);
   s.seen = nextSeen;
+  // 방을 벗어나면 교전이 끊긴다. 별도의 '도망' 동사를 두지 않는 이유다 —
+  // 실시간에서는 걸어 나가는 것이 곧 도망이다.
+  ctx.combat.leave(s.playerId, "left");
 
   // ── Phase A: await 없음 ────────────────────────────────────────────
   ctx.emit.send(s, { t: "ack", seq, ok: true, reason: null, pos: to });
   if (isNewlySeen) ctx.emit.send(s, { t: "self.patch", seen: [...nextSeen] });
   ctx.presence.announceMove(s, from, to, dir);
+  noticeEnemy(ctx, s, newRoom);
 
   // ── Phase B ────────────────────────────────────────────────────────
   enqueueRoomText(ctx, s, newRoom);
@@ -394,6 +455,7 @@ function doLook(ctx: Ctx, s: Session, seq: number): void {
   ctx.emit.send(s, { t: "ack", seq, ok: true, reason: null, pos: s.pos });
   ctx.emit.send(s, { t: "room.describe", room: ctx.presence.roomView(s.pos, s) });
   ctx.presence.sendRoster(s, roomIdOf(s.pos));
+  noticeEnemy(ctx, s, roomIdOf(s.pos));
   enqueueRoomText(ctx, s, roomIdOf(s.pos));
 }
 
@@ -470,6 +532,9 @@ export function handleClose(ctx: Ctx, s: Session, epoch: number): void {
     // 유예 만료. 다시 한 번 에폭을 확인한다 — 그 사이 입양됐을 수 있다.
     if (s.connId !== epoch || !ctx.reg.isCurrent(s) || s.socket !== null) return;
     s.linger = null;
+    // 유예가 만료될 때까지는 전투가 이어진다 (링크데드 상태로 계속 맞는다).
+    // 세션이 사라지는 지금이 전투에서도 빠질 때다.
+    ctx.combat.leave(s.playerId, "gone");
     ctx.presence.announceDeparture(s);
     ctx.reg.remove(s.playerId);
   }, GRACE_MS);

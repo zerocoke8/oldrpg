@@ -124,6 +124,11 @@ export function makeQueries(db: Db) {
       `UPDATE players SET region = @region, x = @x, y = @y, seen = @seen, last_seen_at = @now
        WHERE id = @id`,
     ),
+    /** 전투의 핫패스. 이동의 commitMove 와 같은 규칙으로 쓴다:
+     *  DB 커밋이 먼저, 메모리 갱신이 나중. */
+    setPlayerHp: db.prepare(
+      "UPDATE players SET hp = ?, last_seen_at = ? WHERE id = ?",
+    ),
     touchPlayer: db.prepare("UPDATE players SET last_seen_at = ? WHERE id = ?"),
     renamePlayer: db.prepare("UPDATE players SET name = ? WHERE id = ?"),
     /** 인증이 없는 표의 유일한 방어책. 부팅 때 한 번 돈다. */

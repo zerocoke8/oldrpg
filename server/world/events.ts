@@ -47,6 +47,9 @@ export interface EventService {
   setFlag(key: string, value: JsonScalar): SetFlagResult;
   /** 공개된 플래그들의 현재 값. 스냅샷이 싣는다. */
   publicFlags(): WorldFlagView[];
+  /** 그 플래그가 켜져 있는가. 전투가 '이 적은 이미 죽었나' 를 물을 때 쓴다 —
+   *  적의 사망은 별도 표가 아니라 월드 플래그가 소유한다. */
+  isFlagOn(key: string): boolean;
 }
 
 export function makeEvents(
@@ -153,5 +156,5 @@ export function makeEvents(
     return true;
   }
 
-  return { setFlag, publicFlags };
+  return { setFlag, publicFlags, isFlagOn: (key) => world.flagValue(key) === true };
 }

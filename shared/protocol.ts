@@ -95,7 +95,17 @@ export type Action =
   /** 클라이언트가 desync 를 의심할 때 전체 스냅샷을 다시 요청한다.
    *  Action 인 이유: 서버가 도착 순서대로 처리하므로 스냅샷이 자동으로
    *  '이 seq 까지 반영된 상태'가 되고, ack 가 그 seq 를 확정해 준다. */
-  | { type: "resync" };
+  | { type: "resync" }
+  /** 이 방의 적과 교전을 시작한다. 한 번 누르면 '계속' 서로 때린다 —
+   *  이 액션은 한 번의 타격이 아니라 '자동 공격 켜기' 다. 이미 교전 중이면
+   *  아무 일도 없다(멱등). */
+  | { type: "attack" }
+  /** 스킬을 예약한다. 다음 스윙(최대 0.5초)에 기본 공격을 '대신해' 발동한다.
+   *  큐는 하나 — 다시 누르면 덮어쓴다(나중 입력이 이긴다).
+   *  쿨다운은 서버가 강제한다. 클라이언트의 쿨다운 표시는 안내일 뿐이다. */
+  | { type: "skill"; skillId: string }
+  /** 교전을 끊는다. 방을 벗어나도 같은 효과다. */
+  | { type: "stop" };
 
 export interface Hello {
   t: "hello";
@@ -160,11 +170,44 @@ export interface RoomView {
    *  유예(linger) 중인 세션도 포함한다 — snapshot.presence 와 반드시 일치해야
    *  하고, 둘이 어긋나면 '점 없는 유령'이 생긴다. */
   occupants: PlayerBrief[];
+  /** 살아 있는 적이 있는가. 이름이 아니라 불리언인 이유: 적의 이름과 상태는
+   *  교전을 시작해야(combat.start) 알 수 있고, 그 전에 필요한 것은
+   *  '공격 버튼을 보여줄까' 하나뿐이다. 문장은 log 가 나른다. */
+  hasEnemy: boolean;
 }
 
 export interface PresenceEntry {
   player: PlayerBrief;
   pos: Pos;
+}
+
+/** 전투 중인 적. 구조화 데이터만 — 문장은 log 가 싣는다. */
+export interface EnemyView {
+  id: string;
+  name: string;
+  hp: number;
+  maxHp: number;
+}
+
+/** 스킬 하나의 현재 상태. 쿨다운은 서버가 강제하고, 이건 표시용이다. */
+export interface SkillView {
+  id: string;
+  name: string;
+  /** 쿨다운이 끝나기까지 남은 밀리초. 0 이면 지금 쓸 수 있다.
+   *  절대 시각이 아니라 '남은 시간' 인 이유: 클라이언트 시계를 믿지 않는다. */
+  readyInMs: number;
+}
+
+/** 내가 지금 하고 있는 전투. 없으면 null. */
+export interface CombatView {
+  enemy: EnemyView;
+  /** 자동 공격이 켜져 있는가. stop 하면 false 가 되지만 적은 계속 때린다. */
+  engaged: boolean;
+  /** 예약된 스킬 (다음 스윙에 발동). */
+  queuedSkill: string | null;
+  skills: SkillView[];
+  /** 지금 적이 노리고 있는 사람. 누적 데미지가 가장 높은 사람이다. */
+  targetId: PlayerId | null;
 }
 
 /** 클라이언트에 공개되는 월드 플래그 하나.
@@ -219,6 +262,8 @@ export type LogKind =
   | "presence" // "○○ 님이 들어왔다"
   | "say" // 플레이어 발화 (speaker 필드가 반드시 있다)
   | "world" // 세계가 바뀌었다 — "멀리서 무언가 무너지는 소리가 들린다"
+  | "combat" // 평범한 타격 한 번. 연속된 combat 줄은 클라이언트가 접는다.
+  //          스킬·치명타·사망은 good/bad 로 보내서 접히지 않고 드러나게 한다.
   | "good" // 4단계 결과용. 프로토타입 색상표와 1:1로 맞춰 두어
   | "bad"; // 나중에 클라이언트 색상 테이블을 고칠 일이 없게 한다.
 
@@ -257,6 +302,9 @@ export interface Snapshot {
    *  복원할 수 있어야 하므로 스냅샷이 실어야 한다 — world.flag 델타만
    *  있으면 접속 전에 일어난 일을 영영 모른다. */
   world: WorldFlagView[];
+  /** 진행 중인 전투. 새로고침해도 전투가 이어지므로 스냅샷이 실어야 한다.
+   *  (세션이 유예로 살아남기 때문에 전투도 살아남는다.) */
+  combat: CombatView | null;
 }
 
 /** 액션 하나당 정확히 하나. 확인이자 거절이자 재조정 반송자다 —
@@ -370,6 +418,37 @@ export interface LogReplace {
   source: TextSource;
 }
 
+/* ── 전투 ──────────────────────────────────────────────────────────────
+   실시간이다. attack 한 번이 '자동 공격 켜기' 이고, 그 뒤로는 서버가 밀어준다.
+   0.5초 간격이라 모델을 기다릴 수 없으므로 전투 문장은 전부 결정론적이다
+   (규칙 4). LLM 은 나중에 '전투 요약' 이나 미리 생성해 둔 문장 풀로 들어온다.
+
+   HP 는 combat.update 가 나르고, 문장은 log 가 나른다 — 언제나처럼 분리되어
+   있다. 그래서 매 스윙마다 두 종류가 함께 간다. */
+
+export interface CombatStart {
+  t: "combat.start";
+  combat: CombatView;
+}
+
+/** 매 스윙의 구조화 결과. 문장은 뒤따르는 log 가 싣는다. */
+export interface CombatUpdate {
+  t: "combat.update";
+  enemyHp: number;
+  /** 적이 지금 노리는 사람 (누적 데미지 최대). 바뀌었을 때만 실린다. */
+  targetId?: PlayerId | null;
+  /** 예약된 스킬이 소모됐거나 새로 예약됐을 때. */
+  queuedSkill?: string | null;
+  /** 쿨다운이 바뀐 스킬들. */
+  skills?: SkillView[];
+  engaged?: boolean;
+}
+
+export interface CombatEnd {
+  t: "combat.end";
+  reason: "victory" | "defeat" | "left" | "disengaged" | "gone";
+}
+
 /** 세계가 바뀌었다. 구조화 데이터만 — 문장은 뒤따르는 log{kind:"world"} 가 싣는다.
  *
  *  ★ 이 이벤트는 '방 묘사를 갈아치우라' 는 뜻이 아니다. charter 63줄:
@@ -412,10 +491,13 @@ export type ServerMsg =
   | RoomLeave
   | LogEvent
   | LogReplace
+  | CombatStart
+  | CombatUpdate
+  | CombatEnd
   | WorldFlagEvent
   | ServerPing
   | ErrorEvent;
-// 서버->클라이언트 15종, 클라이언트->서버 3종(액션 variant 5종). 이게 전부다.
+// 서버->클라이언트 18종, 클라이언트->서버 3종(액션 variant 8종). 이게 전부다.
 //
 // world.flag 를 추가하면서 PROTOCOL_VERSION 을 올리지 않았다: 불변식 (3)에
 // 따라 옛 클라이언트는 모르는 t 를 무시하고 계속 돈다. 깨는 변경이 아니다.

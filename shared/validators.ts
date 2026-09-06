@@ -59,6 +59,11 @@ export function makeActionSchemas(limits: { sayMaxLen: number; unparsedMaxLen: n
     say: z.object({ type: z.literal("say"), text: z.string() }).strict(),
     unparsed: z.object({ type: z.literal("unparsed"), raw: z.string() }).strict(),
     resync: z.object({ type: z.literal("resync") }).strict(),
+    attack: z.object({ type: z.literal("attack") }).strict(),
+    // skillId 는 서버의 SKILLS 테이블에 있는지 핸들러가 다시 확인한다 —
+    // 스키마는 '문자열이고 길이가 온당한가' 까지만 본다.
+    skill: z.object({ type: z.literal("skill"), skillId: z.string().max(32) }).strict(),
+    stop: z.object({ type: z.literal("stop") }).strict(),
     maxLen: { say: limits.sayMaxLen, unparsed: limits.unparsedMaxLen },
   };
 }

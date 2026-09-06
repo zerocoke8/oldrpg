@@ -20,6 +20,7 @@ import type {
   TextSource,
   LogKind,
   WorldFlagView,
+  CombatView,
 } from "../../shared/protocol";
 
 /** 클라이언트 내부 이벤트. 와이어에는 존재하지 않지만 같은 리듀서를 지난다 —
@@ -48,6 +49,8 @@ export interface UiState {
   /** 공개된 월드 플래그. 스냅샷이 전부 주고 world.flag 가 델타로 갱신한다.
    *  label 은 서버가 만든다 — 클라이언트는 key 로 문구를 조립하지 않는다. */
   world: Map<string, WorldFlagView>;
+  /** 진행 중인 전투. 실시간이라 이 값이 초당 여러 번 바뀐다. */
+  combat: CombatView | null;
 }
 
 export const initialState = (): UiState => ({
@@ -60,6 +63,7 @@ export const initialState = (): UiState => ({
   log: [],
   limits: null,
   world: new Map(),
+  combat: null,
 });
 
 const MAX_LOG = 300;
@@ -84,7 +88,8 @@ export function reduce(st: UiState, m: ServerMsg | LocalMsg): UiState {
       for (const p of m.presence) others.set(p.player.id, p);
       // 접속 전에 일어난 세계의 변화도 여기서 복원된다.
       const world = new Map((m.world ?? []).map((f) => [f.key, f]));
-      return { ...st, self: m.self, region: m.region, room: m.room, others, world };
+      // 새로고침해도 전투가 이어진다 (세션이 유예로 살아남으므로).
+      return { ...st, self: m.self, region: m.region, room: m.room, others, world, combat: m.combat ?? null };
     }
 
     case "ack":
@@ -160,6 +165,27 @@ export function reduce(st: UiState, m: ServerMsg | LocalMsg): UiState {
         ...st,
         log: st.log.map((l) => (l.id === m.id ? { ...l, text: m.text, source: m.source } : l)),
       };
+
+    case "combat.start":
+      return { ...st, combat: m.combat };
+
+    case "combat.update": {
+      if (!st.combat) return st; // 모르는 전투의 갱신 — no-op
+      return {
+        ...st,
+        combat: {
+          ...st.combat,
+          enemy: { ...st.combat.enemy, hp: m.enemyHp },
+          ...(m.targetId !== undefined ? { targetId: m.targetId } : {}),
+          ...(m.queuedSkill !== undefined ? { queuedSkill: m.queuedSkill } : {}),
+          ...(m.skills !== undefined ? { skills: m.skills } : {}),
+          ...(m.engaged !== undefined ? { engaged: m.engaged } : {}),
+        },
+      };
+    }
+
+    case "combat.end":
+      return { ...st, combat: null };
 
     case "world.flag": {
       // 구조화 상태만. 이 메시지는 방 묘사를 갈아치우라는 뜻이 '아니다' —

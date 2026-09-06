@@ -195,8 +195,61 @@ async function main() {
   check("'새로 생성됨' 뱃지가 켜졌다", (await badges()) > badgesBefore);
   await c.screenshot({ path: join(SHOTS, "7-교체-후.png") });
 
-  console.log("\n⑨ 3단계 — 세계가 바뀌어도 서 있는 화면을 갈아치우지 않는다");
-  // c 는 (4,3) 에 있다 — guardian_slain 을 선언하지 '않은' 방.
+  console.log("\n⑨ 4a단계 — 실시간 전투 (진짜 시계로)");
+  /* c 를 적이 있는 방으로. (3,4) 는 벽이라 (5,4) 로 돌아가야 한다:
+       (4,3) -> (5,3) -> (5,4) -> (5,5) -> (4,5) -> (3,5) */
+  for (const k of ["ArrowRight", "ArrowDown", "ArrowDown", "ArrowLeft", "ArrowLeft"]) {
+    await c.keyboard.press(k);
+    await sleep(300);
+  }
+  await sleep(600);
+  const atEnemy = await logText(c);
+  check("적이 있는 방에 도착했다",
+    atEnemy.some((t) => t.includes("이쪽을 향해 서 있다")), JSON.stringify(atEnemy.slice(-3)));
+  check("공격 버튼이 떴다", (await c.locator("button:has-text('공격')").count()) > 0);
+
+  await c.locator("button:has-text('공격')").first().click();
+  await sleep(200);
+  check("전투 패널이 떴다", (await c.locator("text=그림자 파수꾼").count()) > 0);
+  const skillCount = await c.locator("button:has-text('강타'), button:has-text('응급 치료'), button:has-text('방어 태세')").count();
+  check("스킬 버튼 3개", skillCount === 3, String(skillCount));
+
+  // ★ 한 번만 눌렀는데 계속 오가는가 — 진짜 시계로 2.5초 지켜본다
+  const linesAfterEngage = (await logText(c)).length;
+  await sleep(2500);
+  const linesLater = (await logText(c)).length;
+  check("★ 명령 한 번에 공방이 계속 오갔다 (턴제가 아니다)",
+    linesLater > linesAfterEngage, `${linesAfterEngage} -> ${linesLater}`);
+  check("★ 전투 로그가 접혀 있다 (연속된 combat 줄)",
+    (await c.locator("text=공방이 오갔다").count()) > 0,
+    JSON.stringify((await logText(c)).slice(-4)));
+  await c.screenshot({ path: join(SHOTS, "10-실시간-전투.png") });
+
+  // 스킬이 다음 스윙에 나가는가
+  await c.locator("button:has-text('강타')").first().click();
+  await sleep(900);
+  const afterSkill = await logText(c);
+  check("스킬이 발동했다 (접히지 않고 드러난다)",
+    afterSkill.some((t) => t.includes("강타!")), JSON.stringify(afterSkill.slice(-4)));
+  check("쿨다운이 버튼에 표시된다",
+    await c.locator("button:has-text('강타')").first().isDisabled());
+  await c.screenshot({ path: join(SHOTS, "11-스킬.png") });
+
+  // 접힌 로그를 펼쳐 본다
+  await c.locator("text=공방이 오갔다").first().click();
+  await sleep(150);
+  check("접힌 로그를 펼칠 수 있다", (await c.locator("text=접기").count()) > 0);
+  await c.screenshot({ path: join(SHOTS, "12-로그-펼침.png") });
+
+  // 방을 벗어나 교전을 끊는다. (2,5) 도 guardian_slain 영향권이라
+  // 다음 절에서 C 는 'near' 를 받는다.
+  await c.keyboard.press("ArrowLeft");
+  await sleep(400);
+  check("걸어 나가니 전투 패널이 사라졌다",
+    (await c.locator("button:has-text('물러나기')").count()) === 0);
+
+  console.log("\n⑩ 3단계 — 세계가 바뀌어도 서 있는 화면을 갈아치우지 않는다");
+  // c 는 (3,5) 에 있다 — guardian_slain 을 선언한 방(영향권)이다.
   // a 를 영향권으로 보낸다: (3,3) -> (2,3) -> (1,3) -> (1,4)
   for (const k of ["ArrowLeft", "ArrowLeft", "ArrowDown"]) {
     await a.keyboard.press(k);
@@ -213,10 +266,13 @@ async function main() {
 
   const aAfter = await logText(a);
   const cAfter = await logText(c);
+  const bAfter = await logText(b);
   check("영향권의 A 는 '주변의 공기가 달라졌다'",
     aAfter.some((t) => t.includes("주변의 공기가 달라졌다")), JSON.stringify(aAfter.slice(-2)));
-  check("비영향권의 C 는 '멀리서 무언가 무너지는 소리'",
-    cAfter.some((t) => t.includes("멀리서 무언가 무너지는")), JSON.stringify(cAfter.slice(-2)));
+  check("같은 영향권의 C 도 '주변의 공기가 달라졌다'",
+    cAfter.some((t) => t.includes("주변의 공기가 달라졌다")), JSON.stringify(cAfter.slice(-2)));
+  check("비영향권의 B(스폰)는 '멀리서 무언가 무너지는 소리'",
+    bAfter.some((t) => t.includes("멀리서 무언가 무너지는")), JSON.stringify(bAfter.slice(-2)));
   check("★ A 의 방 묘사는 그대로다 — 이벤트 한 줄만 늘었다",
     aAfter.length === aBeforeLines + 1, `${aBeforeLines} -> ${aAfter.length}`);
   check("상태창에 '파수꾼 처치됨' 이 떴다",

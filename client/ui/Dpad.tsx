@@ -24,7 +24,7 @@ const btn = (label: string, onClick: () => void, extra: React.CSSProperties = {}
   </button>
 );
 
-export function Dpad({ act }: { act: (a: Action) => void }) {
+export function Dpad({ act, canAttack }: { act: (a: Action) => void; canAttack?: boolean }) {
   return (
     <div style={{ display: "flex", gap: 16, alignItems: "center", justifyContent: "space-between" }}>
       <div
@@ -45,7 +45,16 @@ export function Dpad({ act }: { act: (a: Action) => void }) {
         {btn("↓", () => act({ type: "move", dir: "south" }))}
         <div />
       </div>
-      {btn("살펴보기", () => act({ type: "look" }), { padding: "12px 18px", fontSize: 14 })}
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {btn("살펴보기", () => act({ type: "look" }), { padding: "12px 18px", fontSize: 14 })}
+        {canAttack &&
+          btn("공격", () => act({ type: "attack" }), {
+            padding: "12px 18px",
+            fontSize: 14,
+            borderColor: C.red,
+            color: C.red,
+          })}
+      </div>
     </div>
   );
 }
