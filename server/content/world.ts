@@ -72,6 +72,52 @@ function parse<T extends z.ZodTypeAny>(path: string, schema: T, raw: unknown): z
   return parsed.data;
 }
 
+/* ── 브리프 ────────────────────────────────────────────────────────────
+   지역 하나를 만들기 위해 '사람이 쓰는' 입력. 저작 도구만 읽는다 —
+   서버는 브리프를 모른다 (읽는 것은 regions/*.json 뿐이다).
+
+   여기 있는 이유: 이것도 content/ 를 읽어 검증하는 일이고, 같은 zod 를
+   쓰고 같은 오류 메시지 규약을 쓴다. 도구가 스스로 파싱하면 그 규약이 갈린다. */
+
+const zBrief = z
+  .object({
+    /** 표시 이름. regions/<id>.json 의 name 이 된다. */
+    name: z.string().min(1),
+    /** 이 장소가 무엇인가. 사람이 쓰는 유일한 '창작' 이고 나머지는 여기서 파생된다. */
+    theme: z.string().min(1),
+    /** 반드시 있어야 하는 것들. 개요가 이걸 중심으로 짜인다. */
+    landmarks: z.array(z.string().min(1)).default([]),
+    /** 목표 방 수. tiles 를 직접 적으면 무시된다. 50방쯤을 권한다. */
+    rooms: z.number().int().min(1).max(400).default(40),
+    /** 배치 생성기의 시드. 같은 시드는 같은 지도를 낸다 — 지도가 어디서
+     *  왔는지가 커밋 안에 남는다. */
+    layoutSeed: z.number().int().default(1),
+    /** 고리가 생길 확률. 0 이면 막다른 길 투성이의 나무 미로. */
+    loopChance: z.number().min(0).max(0.5).default(0.12),
+    /** 손으로 그린 격자. 있으면 생성기를 쓰지 않는다. */
+    tiles: z.array(z.string()).nullable().default(null),
+    /** 도구가 한 번 만들어 적어 둔다. 있으면 다시 만들지 않는다 —
+     *  방을 나중에 더 뚫어도 같은 장소로 이어져야 한다. */
+    overview: z.string().nullable().default(null),
+  })
+  .strict();
+
+export type RegionBrief = z.infer<typeof zBrief>;
+
+export function loadBrief(id: string, dir = process.env.MUD_WORLD ?? DEFAULT_DIR): RegionBrief {
+  const path = join(dir, "briefs", `${id}.json`);
+  return parse(path, zBrief, readJson(path));
+}
+
+/** 브리프에 개요를 적어 넣는다. 이미 있으면 건드리지 않는다 (호출자가 먼저 본다). */
+export function briefPath(id: string, dir = process.env.MUD_WORLD ?? DEFAULT_DIR): string {
+  return join(dir, "briefs", `${id}.json`);
+}
+
+export function regionPath(id: string, dir = process.env.MUD_WORLD ?? DEFAULT_DIR): string {
+  return join(dir, "regions", `${id}.json`);
+}
+
 export function loadWorld(dir = process.env.MUD_WORLD ?? DEFAULT_DIR): MapData {
   const world = parse(join(dir, "world.json"), zWorld, readJson(join(dir, "world.json")));
 

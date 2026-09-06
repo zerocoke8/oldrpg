@@ -88,6 +88,50 @@ export function loadRoomPrompt(version = "room.v1.ko"): RoomPrompt {
   };
 }
 
+/* ── 저작 시점의 프롬프트 ─────────────────────────────────────────────
+   런타임 프롬프트와 같은 디렉터리·같은 규약이다 (charter 139줄: 프롬프트는
+   파일로 분리한다). 다른 것은 부르는 사람뿐이다 — server/tools/ 의 도구가
+   부르고, 서버는 부르지 않는다. */
+
+export interface AuthorPrompt<V> {
+  readonly version: string;
+  readonly system: string;
+  render(vars: V): string;
+}
+
+function loadPrompt<V extends Record<string, string>>(version: string): AuthorPrompt<V> {
+  const raw = readFileSync(join(PROMPTS, `${version}.md`), "utf8");
+  const s = sections(raw);
+  if (!s.system || !s.user) {
+    throw new Error(`${version}.md 에 '# system' 과 '# user' 절이 모두 있어야 한다`);
+  }
+  const system = s.system;
+  const user = s.user;
+  return {
+    version,
+    system,
+    render: (vars) => {
+      let out = user;
+      for (const [k, v] of Object.entries(vars)) out = out.split(`{{${k}}}`).join(v);
+      return out.trim();
+    },
+  };
+}
+
+export const loadRegionPrompt = (version = "region.v1.ko"): AuthorPrompt<{
+  name: string;
+  theme: string;
+  landmarks: string;
+}> => loadPrompt(version);
+
+export const loadSeedsPrompt = (version = "seeds.v1.ko"): AuthorPrompt<{
+  name: string;
+  overview: string;
+  map: string;
+  count: string;
+  coords: string;
+}> => loadPrompt(version);
+
 /** 플래그 하나가 프로즈에 하는 일 전부. prompts/moods/<flag>.md 한 파일. */
 export interface Mood {
   /** LLM 에게 주는 톤 지시 (2단계). */

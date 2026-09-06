@@ -55,6 +55,19 @@ module.exports = {
       },
     },
     {
+      /* ── 저작 경로는 런타임에 존재하지 않는다.
+         narration/author.ts 는 씨앗 초안을 '파일로' 뽑는 배치 도구다. 서버가
+         이걸 import 하는 순간 규칙 1이 깨진다 — 모델이 지어낸 문장이 리뷰를
+         거치지 않고 살아 있는 세계로 들어가는 경로가 생기기 때문이다.
+         부를 수 있는 것은 server/tools/ 뿐이다. */
+      files: ["server/index.ts", "server/net/**/*.ts", "server/world/**/*.ts", "server/db/**/*.ts"],
+      rules: {
+        "no-restricted-imports": ["error", { patterns: [
+          { group: ["**/narration/author", "*/author"], message: "규칙 1 위반: 저작 시점의 LLM 호출은 런타임에 존재해서는 안 된다. 씨앗은 파일로 뽑아 리뷰를 거쳐 커밋된다 (server/tools/authorRegion.ts)." },
+        ]}],
+      },
+    },
+    {
       /* ── content/ 는 데이터를 읽어 engine/ 의 계약(Balance)으로 바꾸는 곳이다.
          읽기만 한다 — DB 도 소켓도 모른다. 그래야 "밸런스가 게임 상태를 만지는"
          경로가 생기지 않는다. */

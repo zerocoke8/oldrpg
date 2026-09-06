@@ -73,7 +73,11 @@ regions/<id>.json   지역 하나. 파일 이름이 곧 지역 id 다
 
 ## 새 지역 만들기
 
-`server/tools/authorRegion.ts` 가 브리프에서 초안을 만든다.
-`content/world/briefs/README.md` 참조.
+```
+npm run author -- b3 --dry-run    # 지도만 그려 본다. 모델을 부르지 않는다
+npm run author -- b3              # 개요 + 씨앗을 만들어 regions/b3.json 에 쓴다
+```
 
-**이미 있는 씨앗은 도구가 절대 덮어쓰지 않는다** (규칙 3). 빈 칸만 채운다.
+`content/world/briefs/README.md` 에 순서와 필드가 있다.
+
+**이미 있는 것은 도구가 절대 덮어쓰지 않는다** (규칙 3). 빈 것만 채운다.
