@@ -8,7 +8,7 @@ import { createHash } from "node:crypto";
 import type { RoomId } from "../../shared/ids";
 import type { JsonScalar } from "../../shared/json";
 import type { GameMap, RoomDef } from "./map";
-import { NPC_BY_ID, npcSeedId, topicOf, type NpcDef, type TopicDef } from "./npcs";
+import { npcSeedId, topicOf, type NpcDef, type TopicDef } from "./npcs";
 
 const sha = (s: string, n: number): string =>
   createHash("sha256").update(s, "utf8").digest("hex").slice(0, n);
@@ -22,7 +22,7 @@ export class World {
 
   /** 맵을 주입받는다. engine/ 은 파일을 읽지 않으므로 지역 데이터는
    *  server/content/world.ts 가 읽어 검증하고 index.ts 가 여기로 넘긴다. */
-  constructor(map: GameMap) {
+  constructor(private readonly map: GameMap) {
     for (const r of map.rooms()) this.rooms.set(r.id, r);
   }
 
@@ -104,7 +104,7 @@ export class World {
 
   /** 그 NPC 가 '선언한' 플래그만 투영한다. 방과 같은 이유로 좁게. */
   npcProjectFlags(npcId: string): (readonly [string, JsonScalar])[] {
-    const npc = NPC_BY_ID[npcId];
+    const npc = this.map.npc(npcId);
     if (!npc) return [];
     return npc.sensitiveFlags.map((k) => {
       const raw = this.flags.get(k);
@@ -115,7 +115,7 @@ export class World {
 
   /** state_hash = `${seedId}.${declHash}.${valueDigest}` — 방과 같은 공식. */
   npcStateHash(npcId: string, topicId: string): string {
-    const npc = NPC_BY_ID[npcId];
+    const npc = this.map.npc(npcId);
     const topic = npc && topicOf(npc, topicId);
     if (!npc || !topic) throw new Error(`unknown npc/topic ${npcId}/${topicId}`);
     const decl = [...npc.sensitiveFlags].sort();
@@ -129,13 +129,13 @@ export class World {
 
   /** 지금 열려 있는 주제만. requires 플래그가 켜져야 열린다. */
   openTopics(npcId: string): TopicDef[] {
-    const npc = NPC_BY_ID[npcId];
+    const npc = this.map.npc(npcId);
     if (!npc) return [];
     return npc.topics.filter((t) => !t.requires || this.flags.get(t.requires) === "true");
   }
 
   npc(npcId: string): NpcDef | undefined {
-    return NPC_BY_ID[npcId];
+    return this.map.npc(npcId);
   }
 
   /** 3단계에서 워커가 쓴다. narration/ 이 engine/ 을 import 하지 않고도

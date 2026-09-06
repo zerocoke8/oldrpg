@@ -13,8 +13,9 @@
 import type { RoomId } from "../../shared/ids";
 import { roomIdOf } from "../../shared/ids";
 import type { NpcBrief, TopicView } from "../../shared/protocol";
-import { GREET, npcsInRoom } from "../engine/npcs";
+import { GREET } from "../engine/npcs";
 import type { World } from "../engine/world";
+import type { GameMap } from "../engine/map";
 import { lines } from "../narration/lines";
 import type { Emit } from "../net/emit";
 import type { Session } from "../net/session";
@@ -31,12 +32,14 @@ export interface DialogueService {
 
 export function makeDialogue(
   world: World,
+  /** NPC 배치의 출처. 방·적과 같은 주입이다. */
+  map: GameMap,
   npcText: NpcTextService,
   upgrades: UpgradeService,
   emit: Emit,
 ): DialogueService {
   const npcsIn = (roomId: RoomId): NpcBrief[] =>
-    npcsInRoom(roomId).map((n) => ({ id: n.id, name: n.name }));
+    map.npcsInRoom(roomId).map((n) => ({ id: n.id, name: n.name }));
 
   /** 지금 열려 있는 주제만. 잠긴 것은 목록에 아예 없다 —
    *  "무엇을 물을 수 있는가" 자체가 세계의 상태이고 스포일러가 될 수 있다. */

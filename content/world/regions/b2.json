@@ -21,6 +21,7 @@
   "enemies": {
     "3,1": "rusted_watcher"
   },
+  "npcs": {},
   "exits": [
     {
       "at": "1,3",

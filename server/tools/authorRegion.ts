@@ -59,6 +59,9 @@ interface RegionFile {
   seeds: Record<string, string>;
   sensitive: Record<string, string[]>;
   enemies: Record<string, string>;
+  /* 도구는 NPC 를 만들지 않는다 — 누가 어디 서서 무엇을 아는가는 진행의
+     결정이라 사람이 쓴다. 자리만 만들어 두고 그대로 실어 나른다. */
+  npcs: Record<string, unknown>;
   exits: unknown[];
 }
 
@@ -167,6 +170,7 @@ export async function authorRegion(
       seeds: Object.fromEntries(coords.filter((c) => seeds[c]).map((c) => [c, seeds[c]!])),
       sensitive: existing?.sensitive ?? {},
       enemies: existing?.enemies ?? {},
+      npcs: existing?.npcs ?? {},
       exits: existing?.exits ?? [],
     };
     writeJson(rPath, out);

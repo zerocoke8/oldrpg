@@ -167,10 +167,10 @@ export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
       : // 키가 없으면 승급 경로가 통째로 없다. 게임은 1단계와 똑같이 돈다.
         NO_UPGRADES;
 
-  events = makeEvents(world, q, reg, emit, moods, roomText, npcText, upgrades, clock);
+  events = makeEvents(world, map, q, reg, emit, moods, roomText, npcText, upgrades, clock);
   /* 대화는 engine(누가 있나) + npcText(대사) + upgrades(승급) 를 조합한다.
      presence 보다 뒤에 만들어지므로 npcsIn 은 위에서 늦게 바인딩한다. */
-  const dialogue = makeDialogue(world, npcText, upgrades, emit);
+  const dialogue = makeDialogue(world, map, npcText, upgrades, emit);
   npcsIn = dialogue.npcsIn;
   const combatSvc = makeCombat(q, reg, emit, events, inventory, map, balance, clock, options.combat ?? {});
   combat = combatSvc;

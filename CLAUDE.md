@@ -36,7 +36,7 @@ LLM 출력이 게임 상태를 바꾸는 경로는 존재해서는 안 된다.
 rooms          id, x, y, seed, region, sensitive_flags[]   -- 절대 변경 안 됨
 world_flags    key, value                                  -- 엔진 소유
 room_text      room_id, state_hash, text, created_at       -- 생성 결과 캐시
-npcs           id, room_id, persona_seed, sensitive_flags[]
+npcs           id, room_id, persona_seed, sensitive_flags[]  -- 지역 파일의 투영
 npc_lines      npc_id, state_hash, text
 players        id, name, x, y, hp
 player_items   player_id, item_id, qty                     -- 소지품. 0개는 행이 없다
@@ -67,6 +67,10 @@ player_items   player_id, item_id, qty                     -- 소지품. 0개는
 
 그래서 지역은 50방쯤으로 유지한다. 1000방을 한 지역에 넣으면 반경 기반
 `canSee`, 창(window) 미니맵, 스냅샷 분할이 한꺼번에 필요해진다.
+
+NPC 도 지역 파일 안에 산다. 방에 서 있는 것은 전부 그 방이 있는 지역이
+소유한다 — 전역 목록으로 두면 `"b1:3,1"` 같은 문자열이 지역과 어긋나도
+아무도 모른다.
 
 지역 간 문은 **벽 자리에만** 둔다. 걸어갈 수 있는 칸을 가리키면 같은 키
 입력에 두 가지 뜻이 생긴다 — 한 칸 이동인가 지역 이동인가.
@@ -121,7 +125,7 @@ player_items   player_id, item_id, qty                     -- 소지품. 0개는
 ```
 content/
   balance/     적·스킬·아이템·플레이어 수치 (JSON). 사람이 고치는 곳
-  world/       지역 — 타일·씨앗·플래그 선언·적 배치·문 (JSON)
+  world/       지역 — 타일·씨앗·플래그 선언·적 배치·NPC·문 (JSON)
     briefs/    지역 하나를 만들기 위해 사람이 쓰는 입력. 서버는 읽지 않는다
 server/
   engine/      맵 규칙·배치 생성기, 전투, 이동 — LLM도 DB도 파일도 import 하지 않는다

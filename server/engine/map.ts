@@ -23,7 +23,7 @@
 import { createHash } from "node:crypto";
 import type { Dir, Pos, RegionId, RoomId } from "../../shared/ids";
 import { roomIdOf } from "../../shared/ids";
-import { NPCS } from "./npcs";
+import type { NpcDef, NpcPlacement } from "./npcs";
 
 /** 다른 지역으로 나가는 문 하나.
  *
@@ -57,6 +57,9 @@ export interface RegionDef {
   /** `"x,y"` -> 적 id. '무엇인가' 는 content/balance/enemies.json 이 소유한다 —
    *  여기 있는 것은 '어디에 있는가' 뿐이고, 같은 적을 여러 방에 둘 수 있다. */
   readonly enemies: Readonly<Record<string, string>>;
+  /** id -> 그 지역에 서 있는 NPC. 키가 곧 id 다 (전역 유일, 부팅에서 검증).
+   *  적과 같은 자리에 있는 이유도 같다 — '어디에 있는가' 는 맵의 일이다. */
+  readonly npcs: Readonly<Record<string, NpcPlacement>>;
   readonly exits: readonly ExitDef[];
 }
 
@@ -145,6 +148,12 @@ export interface GameMap {
   walkableAt(p: Pos): boolean;
   exitAt(from: Pos, dir: Dir): ExitDef | undefined;
   rooms(): RoomDef[];
+  /** 모든 지역의 NPC. 지역·방이 붙은 모습이다. */
+  npcs(): NpcDef[];
+  npc(id: string): NpcDef | undefined;
+  npcsInRoom(roomId: RoomId): NpcDef[];
+  /** 그 플래그를 선언한 NPC 들. 3단계의 영향 범위가 "방·NPC" 인 근거. */
+  npcsSensitiveTo(flag: string): NpcDef[];
   contentHash(): string;
   view(id: RegionId): RegionSlice;
 }
@@ -204,6 +213,18 @@ export function makeMap(data: MapData): GameMap {
     return out;
   };
 
+  /* 배치에 지역·방을 붙여 한 번만 만든다. 코드가 보는 것은 언제나 이쪽이고,
+     "b1:3,1" 같은 문자열을 사람이 손으로 적는 자리는 이제 없다. */
+  const npcList: NpcDef[] = data.regions.flatMap((r) =>
+    Object.entries(r.npcs).map(([id, n]) => ({
+      ...n,
+      id,
+      region: r.id,
+      roomId: `${r.id}:${n.at}`,
+    })),
+  );
+  const npcById = new Map<string, NpcDef>(npcList.map((n) => [n.id, n]));
+
   return {
     spawn: data.spawn,
     region: (id) => byId.get(id),
@@ -218,6 +239,10 @@ export function makeMap(data: MapData): GameMap {
       byId.get(from.region)?.exits.find((e) => e.at === `${from.x},${from.y}` && e.dir === dir),
 
     rooms,
+    npcs: () => [...npcList],
+    npc: (id) => npcById.get(id),
+    npcsInRoom: (roomId) => npcList.filter((n) => n.roomId === roomId),
+    npcsSensitiveTo: (flag) => npcList.filter((n) => n.sensitiveFlags.includes(flag)),
 
     /** "코드 맵과 DB rooms 가 같은 세대인가"를 한 번에 판정한다.
      *  플래그 레지스트리도 preimage 에 넣는다 — 안 그러면 새 플래그를 선언해도
@@ -229,17 +254,20 @@ export function makeMap(data: MapData): GameMap {
       const flags = Object.keys(WORLD_FLAG_DEFAULTS).sort().join(",");
       /* NPC 도 같은 해시에 들어간다. 빠뜨리면 시더의 단축경로가 살아 있는 채로
          persona 나 방을 고쳐도 npcs 표가 옛 값을 유지한다 — "표는 코드의 그림자"
-         라는 성질이 조용히 깨진다. */
-      const npcs = NPCS.map((n) =>
-        [
-          n.id,
-          n.roomId,
-          n.name,
-          n.persona,
-          [...n.sensitiveFlags].sort().join(","),
-          ...n.topics.flatMap((t) => [t.id, t.label ?? "", t.seed, t.requires ?? ""]),
-        ].join(SEP),
-      ).sort();
+         라는 성질이 조용히 깨진다. (대사 캐시는 별개다: 그쪽은 seed_id 가
+         persona+topic.seed 파생이라 알아서 미스가 난다 — npcSeedId 참조.) */
+      const npcs = npcList
+        .map((n) =>
+          [
+            n.id,
+            n.roomId,
+            n.name,
+            n.persona,
+            [...n.sensitiveFlags].sort().join(","),
+            ...n.topics.flatMap((t) => [t.id, t.label ?? "", t.seed, t.requires ?? ""]),
+          ].join(SEP),
+        )
+        .sort();
       /* 적 배치도 맵의 일부다. 빠뜨리면 배치를 옮겨도 content_hash 가 그대로라
          시더가 단축경로를 탄다. (적의 '수치' 는 여기 없다 — 그건 밸런스라
          캐시와 무관하고, 바꿔도 방을 다시 만들 이유가 없다.) */

@@ -16,6 +16,7 @@ import { join } from "node:path";
 import WebSocket from "ws";
 import { loadWorld } from "../server/content/world";
 import { makeMap, seedIdOf, type MapData } from "../server/engine/map";
+import { npcSeedId } from "../server/engine/npcs";
 import { boot } from "../server/index";
 import { PROTOCOL_VERSION, type ServerMsg } from "../shared/protocol";
 
@@ -57,23 +58,23 @@ function refuses(dir: string): string | null {
   }
 }
 
-/* 세 방짜리 세계. 주입이 진짜인지 보려면 '진짜와 다른' 세계여야 한다.
+/* 두 방짜리 세계. 주입이 진짜인지 보려면 '진짜와 다른' 세계여야 한다.
  *
- * ★ 지역 id 가 "b1" 인 것은 우연이 아니다. NPC 는 아직 코드에 있고
- *   (server/engine/npcs.ts) 제단지기가 "b1:3,1" 을 가리킨다 — 주입된 세계에
- *   그 방이 없으면 npcs 표의 외래키가 깨진다. 그 결합이 남아 있다는 사실을
- *   숨기지 않고 여기에 적어 둔다. NPC 도 content/world/ 로 옮기면 사라진다.
- *   (그 전까지는 assertWorldData 가 사람이 읽을 수 있는 말로 먼저 죽는다.) */
+ * ★ 지역 id 가 진짜와 겹치지 않는다는 것이 이번 이동의 성과다. 전에는
+ *   NPC 가 코드에 있고 "b1:3,1" 을 하드코딩으로 가리켜서, 주입된 세계에도
+ *   b1 과 그 방이 있어야 npcs 표의 외래키가 살았다. 이제 NPC 가 지역 파일
+ *   안에 있으므로 세계에 NPC 가 하나도 없어도 된다. */
 const TINY: MapData = {
-  spawn: { region: "b1", x: 1, y: 1 },
+  spawn: { region: "t1", x: 1, y: 1 },
   regions: [
     {
-      id: "b1",
+      id: "t1",
       name: "시험장",
-      tiles: ["#####", "#...#", "#####"],
-      seeds: { "1,1": "시험용 첫 칸", "2,1": "시험용 둘째 칸", "3,1": "시험용 셋째 칸" },
+      tiles: ["####", "#..#", "####"],
+      seeds: { "1,1": "시험용 첫 칸", "2,1": "시험용 둘째 칸" },
       sensitive: {},
       enemies: {},
+      npcs: {},
       exits: [],
     },
   ],
@@ -111,6 +112,27 @@ async function main() {
   check("seedIdOf 는 여전히 내용 파생이다 (A -> B -> A 가 복구된다)",
     seedIdOf("어떤 씨앗") === seedIdOf("어떤 씨앗") && seedIdOf("어떤 씨앗") !== seedIdOf("다른 씨앗"));
 
+  section("②' NPC 도 같은 표에 얼어붙어 있다");
+  /* npc_lines 의 seed_id 는 persona + topic.seed 파생이다. 이동하면서 한
+     글자라도 바뀌면 이미 만든 대사가 전부 캐시 미스가 된다. */
+  const keeper = map.npc("altar_keeper");
+  check("NPC 가 지역 파일에서 실렸다", keeper?.region === "b1" && keeper?.roomId === "b1:3,1",
+    JSON.stringify([keeper?.region, keeper?.roomId]));
+  const FROZEN_NPC: Record<string, string> = {
+    greet: "4128f090",
+    warden: "3b499c52",
+    altar: "c9861dd3",
+    sealed_door: "91ffd8be",
+  };
+  for (const [topicId, want] of Object.entries(FROZEN_NPC)) {
+    const t = keeper?.topics.find((x) => x.id === topicId);
+    const got = t && npcSeedId(keeper!, t);
+    check(`제단지기/${topicId} 의 seed_id 가 그대로다`, got === want, `${String(got)} != ${want}`);
+  }
+  check("주제 순서가 그대로다 (대화 메뉴의 순서다)",
+    keeper?.topics.map((t) => t.id).join(",") === "greet,warden,altar,sealed_door",
+    String(keeper?.topics.map((t) => t.id)));
+
   section("③ 틀린 세계는 '부팅에서' 죽는다");
   const cases: [string, string | null][] = [
     ["줄 길이가 제각각인 타일",
@@ -128,6 +150,30 @@ async function main() {
     ["모르는 방향의 출구",
       refuses(broken("regions/b2.json", (d) => {
         (d.exits as Record<string, unknown>[])[0]!.dir = "up";
+      }))],
+    ["NPC id 가 지역을 넘어 겹침",
+      refuses((() => {
+        const d = mkdtempSync(join(tmpdir(), "world-"));
+        cpSync("content/world", d, { recursive: true });
+        const p2 = join(d, "regions", "b2.json");
+        const b1 = JSON.parse(readFileSync(join(d, "regions", "b1.json"), "utf8")) as {
+          npcs: Record<string, unknown>;
+        };
+        const b2 = JSON.parse(readFileSync(p2, "utf8")) as Record<string, unknown>;
+        b2.npcs = { altar_keeper: { ...(b1.npcs.altar_keeper as object), at: "1,3" } };
+        writeFileSync(p2, JSON.stringify(b2, null, 2));
+        return d;
+      })())],
+    ["같은 주제 id 가 두 번",
+      refuses(broken("regions/b1.json", (d) => {
+        const n = (d.npcs as Record<string, { topics: unknown[] }>).altar_keeper!;
+        n.topics.push({ ...(n.topics[0] as object) });
+      }))],
+    ["NPC id 에 ':' (승급 큐 키의 구분자)",
+      refuses(broken("regions/b1.json", (d) => {
+        const npcs = d.npcs as Record<string, unknown>;
+        npcs["altar:keeper"] = npcs.altar_keeper;
+        delete npcs.altar_keeper;
       }))],
     ["없는 지역을 스폰으로",
       refuses(broken("world.json", (d) => {
@@ -159,12 +205,15 @@ async function main() {
   ws.send(JSON.stringify({ t: "hello", pv: PROTOCOL_VERSION, token: null, name: null }));
   for (let i = 0; i < 200 && !inbox.some((m) => m.t === "snapshot"); i++) await sleep(10);
   const snap = inbox.find((m) => m.t === "snapshot") as Extract<ServerMsg, { t: "snapshot" }>;
-  check("★ 주입한 세계에서 시작한다 (코드가 맵을 들고 있지 않다)",
-    snap.self.pos.x === 1 && snap.self.pos.y === 1, JSON.stringify(snap.self.pos));
+  check("★ 주입한 세계에서 시작한다 (코드가 맵도 NPC 도 들고 있지 않다)",
+    snap.self.pos.region === "t1" && snap.self.pos.x === 1 && snap.self.pos.y === 1,
+    JSON.stringify(snap.self.pos));
   check("격자도 주입한 것이다", snap.region.name === "시험장" && snap.region.height === 3,
     JSON.stringify([snap.region.name, snap.region.width, snap.region.height]));
-  check("rooms 표도 그 세계의 것이다 (3방)",
-    server.ctx.q.allRooms.all().length === 3, String(server.ctx.q.allRooms.all().length));
+  check("rooms 표도 그 세계의 것이다 (2방)",
+    server.ctx.q.allRooms.all().length === 2, String(server.ctx.q.allRooms.all().length));
+  check("★ NPC 가 하나도 없는 세계로도 부팅된다", server.ctx.map.npcs().length === 0,
+    String(server.ctx.map.npcs().length));
 
   /* 주입된 세계에는 b1 이 없다 — 그러니 b1 의 씨앗이 와이어에 있을 수 없다.
      '코드가 진짜 맵을 어딘가에 들고 있다' 를 배제하는 검사다. */

@@ -22,8 +22,7 @@ import type { RoomId } from "../../shared/ids";
 import { roomIdOf } from "../../shared/ids";
 import type { JsonScalar } from "../../shared/json";
 import type { WorldFlagView } from "../../shared/protocol";
-import { isBroadcastFlag, WORLD_FLAGS } from "../engine/map";
-import { npcsSensitiveTo } from "../engine/npcs";
+import { isBroadcastFlag, WORLD_FLAGS, type GameMap } from "../engine/map";
 import type { World } from "../engine/world";
 import type { Queries } from "../db/queries";
 import type { Mood } from "../narration/prompts";
@@ -58,6 +57,8 @@ export interface EventService {
 
 export function makeEvents(
   world: World,
+  /** NPC 배치의 출처 (어느 NPC 가 이 플래그에 반응하는가). */
+  map: GameMap,
   q: Queries,
   reg: Registry,
   emit: Emit,
@@ -129,7 +130,7 @@ export function makeEvents(
        선언한 방·NPC만 큐에 넣는다"). 지금 열려 있는 주제만 미리 만든다 —
        아직 잠긴 주제는 열리는 순간이 곧 그 주제의 첫 방문이다. */
     let queuedNpcLines = 0;
-    for (const npc of npcsSensitiveTo(key)) {
+    for (const npc of map.npcsSensitiveTo(key)) {
       for (const topic of world.openTopics(npc.id)) {
         if (pregenerateNpc(npc.id, topic.id)) queuedNpcLines++;
       }

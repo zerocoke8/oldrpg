@@ -58,6 +58,42 @@
     "4,1": "ashen_pages",
     "5,2": "rusted_watcher"
   },
+  "npcs": {
+    "altar_keeper": {
+      "at": "3,1",
+      "name": "제단지기",
+      "persona": "무너진 서고의 제단을 지키는 늙은 사제. 눈이 어둡고 말수가 적다. 짧게 끊어 말하며, 묻지 않은 것은 말하지 않는다",
+      "sensitive": [
+        "guardian_slain"
+      ],
+      "topics": [
+        {
+          "id": "greet",
+          "label": null,
+          "seed": "낯선 이를 흘깃 보고는 다시 제단으로 시선을 돌린다. 인사라기보다 확인에 가깝다",
+          "requires": null
+        },
+        {
+          "id": "warden",
+          "label": "파수꾼에 대해",
+          "seed": "남쪽 홀을 지키는 그림자 파수꾼. 오래전부터 거기 있었고, 무엇을 지키는지는 말하지 않는다",
+          "requires": null
+        },
+        {
+          "id": "altar",
+          "label": "제단에 대해",
+          "seed": "제단 위의 낡은 상자. 자신이 지키는 것이지만 열어 본 적은 없다",
+          "requires": null
+        },
+        {
+          "id": "sealed_door",
+          "label": "봉인된 문에 대해",
+          "seed": "동쪽 끝의 봉인된 문. 파수꾼이 사라진 지금에야 말할 수 있는 것이고, 그 너머에 무엇이 있는지는 자신도 모른다",
+          "requires": "guardian_slain"
+        }
+      ]
+    }
+  },
   "exits": [
     {
       "at": "5,5",

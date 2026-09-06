@@ -52,6 +52,7 @@ const regionOf = (dir: string, id: string): Record<string, never> & {
   seeds: Record<string, string>;
   sensitive: Record<string, string[]>;
   enemies: Record<string, string>;
+  npcs: Record<string, unknown>;
   exits: unknown[];
 } => JSON.parse(readFileSync(join(dir, "regions", `${id}.json`), "utf8")) as never;
 
@@ -220,6 +221,7 @@ async function main() {
   const before = regionOf(dir, "bt");
   before.enemies = {};
   before.sensitive = { [Object.keys(before.seeds)[0]!]: ["guardian_slain"] };
+  before.npcs = {};
   before.exits = [];
   before.seeds = {};
   writeFileSync(join(dir, "regions", "bt.json"), JSON.stringify(before, null, 2), "utf8");
@@ -242,8 +244,9 @@ async function main() {
     r4.missing.length === 10, JSON.stringify(r4.missing.length));
   check("★ 사람이 붙인 구조를 건드리지 않았다",
     JSON.stringify(after.sensitive) === JSON.stringify(before.sensitive) &&
-      JSON.stringify(after.enemies) === "{}" && JSON.stringify(after.exits) === "[]",
-    JSON.stringify([after.sensitive, after.enemies, after.exits]));
+      JSON.stringify(after.enemies) === "{}" && JSON.stringify(after.exits) === "[]" &&
+      JSON.stringify(after.npcs) === JSON.stringify(before.npcs),
+    JSON.stringify([after.sensitive, after.enemies, after.exits, after.npcs]));
   check("배치도 그대로다", JSON.stringify(after.tiles) === firstTiles);
 
   // 끊긴 격자는 애초에 거절한다.

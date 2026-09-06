@@ -19,7 +19,11 @@ import { boot } from "../server/index";
 import { PROTOCOL_VERSION, type ServerMsg } from "../shared/protocol";
 import type { NpcLineRequest } from "../shared/narration";
 import type { Dir } from "../shared/ids";
-import { NPC_BY_ID } from "../server/engine/npcs";
+import { makeMap } from "../server/engine/map";
+import { loadWorld } from "../server/content/world";
+
+/** 서버가 부팅에서 쓰는 것과 같은 데이터. */
+const map = makeMap(loadWorld());
 
 const PORT = 8906;
 const DB = join(tmpdir(), `mud-npc-${process.pid}.db`);
@@ -136,7 +140,7 @@ async function main() {
   const server = boot(DB, PORT, { llm: "off", llmNpcRenderer: fakeNpcLlm, queue: { concurrency: 3 } });
   const q = server.ctx.q;
   const world = server.ctx.world;
-  const keeper = NPC_BY_ID["altar_keeper"]!;
+  const keeper = map.npc("altar_keeper")!;
   const lineRow = (topic: string) =>
     q.getNpcLineRow.get("altar_keeper", topic, world.npcStateHash("altar_keeper", topic));
 

@@ -16,7 +16,6 @@ import {
 } from "../engine/map";
 import { DELTA, OPPOSITE } from "../../shared/ids";
 import type { Balance } from "../engine/enemies";
-import { NPCS } from "../engine/npcs";
 import type { Db } from "./open";
 import type { Queries } from "./queries";
 
@@ -42,14 +41,25 @@ export function assertWorldData(map: GameMap, balance: Balance): void {
     }
   }
 
-  /* ⑧ NPC 가 실재하는 방을 가리키는가. NPC 는 아직 코드에 있고(engine/npcs.ts)
-     방은 데이터에 있으므로 이 참조는 파일을 넘나든다 — 아무도 안 보면 부팅이
-     'FOREIGN KEY constraint failed' 라는 말로 죽는다. 어느 NPC 가 어느 방을
-     못 찾았는지는 그 메시지 어디에도 없다. */
+  /* ⑧ NPC 가 실재하는 방에 서 있는가, 그리고 그 플래그들이 선언돼 있는가. NPC 는 아직 코드에 있고(engine/npcs.ts)
+     방도 데이터에 있지만 좌표가 벽일 수 있다. 아무도 안 보면 부팅이
+     'FOREIGN KEY constraint failed' 라는 말로 죽는다 — 어느 NPC 가 어느 방을
+     못 찾았는지는 그 메시지 어디에도 없다. 주제를 여는 플래그도 여기서 본다
+     (플래그 레지스트리는 코드에, NPC 는 데이터에 있어 파일을 넘나든다). */
   const roomIds = new Set(map.rooms().map((r) => r.id));
-  for (const n of NPCS) {
+  for (const n of map.npcs()) {
     if (!roomIds.has(n.roomId)) {
-      throw new Error(`NPC ${n.id} 가 없는 방 ${n.roomId} 에 있다 (engine/npcs.ts 또는 content/world/).`);
+      throw new Error(`NPC ${n.id} 가 ${n.region} 의 걷는 칸이 아닌 ${n.at} 에 서 있다.`);
+    }
+    for (const t of n.topics) {
+      if (t.requires !== null && !(t.requires in WORLD_FLAGS)) {
+        throw new Error(`NPC ${n.id} 의 주제 ${t.id} 가 선언되지 않은 플래그 ${t.requires} 로 열린다.`);
+      }
+    }
+    for (const f of n.sensitiveFlags) {
+      if (!(f in WORLD_FLAGS)) {
+        throw new Error(`NPC ${n.id} 가 선언되지 않은 플래그 ${f} 를 sensitive 에 적었다.`);
+      }
     }
   }
 
@@ -202,7 +212,7 @@ export function seed(db: Db, q: Queries, map: GameMap, balance: Balance, now: nu
         seededRooms += info.changes;
       }
       // NPC 도 같은 방식으로 투영한다 (저작 주체는 코드, 표는 그림자).
-      for (const n of NPCS) {
+      for (const n of map.npcs()) {
         const decl = [...new Set(n.sensitiveFlags)].sort();
         if (decl.length > MAX_SENSITIVE) {
           throw new Error(

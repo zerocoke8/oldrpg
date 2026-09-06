@@ -41,6 +41,27 @@ const zExit = z
   })
   .strict();
 
+/** 주제 하나. 배열인 이유는 순서가 곧 대화 메뉴의 순서이기 때문이다 —
+ *  지역·적과 달리 여기만 키가 아니라 항목 안에 id 가 있다. */
+const zTopic = z
+  .object({
+    id: z.string().min(1).regex(/^[a-z0-9_]+$/, "소문자·숫자·밑줄만"),
+    label: z.string().min(1).nullable(),
+    seed: z.string().min(1),
+    requires: z.string().min(1).nullable(),
+  })
+  .strict();
+
+const zNpc = z
+  .object({
+    at: coord,
+    name: z.string().min(1),
+    persona: z.string().min(1),
+    sensitive: z.array(z.string().min(1)),
+    topics: z.array(zTopic).min(1),
+  })
+  .strict();
+
 const zRegion = z
   .object({
     name: z.string().min(1),
@@ -48,6 +69,9 @@ const zRegion = z
     seeds: z.record(coord, z.string().min(1)),
     sensitive: z.record(coord, z.array(z.string().min(1))),
     enemies: z.record(coord, z.string().min(1)),
+    /* 키가 곧 NPC id 다. ':' 를 금지하는 이유는 승급 큐의 키 구분자이기
+       때문이다 — 들어가면 큐가 엉뚱한 항목을 같은 것으로 본다. */
+    npcs: z.record(z.string().min(1).regex(/^[a-z0-9_]+$/, "소문자·숫자·밑줄만"), zNpc),
     exits: z.array(zExit),
   })
   .strict();
@@ -144,7 +168,35 @@ export function loadWorld(dir = process.env.MUD_WORLD ?? DEFAULT_DIR): MapData {
     if (widths.size !== 1) {
       throw new Error(`${path}: 타일 줄 길이가 제각각이다 (${[...widths].sort().join(" ")}).`);
     }
-    regions.push({ id, ...r });
+    /* 주제 id 가 지역 안에서 겹치면 뒤엣것이 영영 안 열린다 (topicOf 가 find 다). */
+    for (const [npcId, npc] of Object.entries(r.npcs)) {
+      const seen = new Set<string>();
+      for (const t of npc.topics) {
+        if (seen.has(t.id)) throw new Error(`${path}: NPC ${npcId} 의 주제 ${t.id} 가 두 번 있다.`);
+        seen.add(t.id);
+      }
+    }
+    /* JSON 의 `sensitive` 를 코드의 `sensitiveFlags` 로. 이름이 다른 이유는
+       파일에서는 방의 `sensitive` 와 같은 낱말이 읽기 좋고, 코드에서는
+       "무엇의 sensitive 인가" 가 드러나야 하기 때문이다. */
+    const npcs = Object.fromEntries(
+      Object.entries(r.npcs).map(([npcId, n]) => [
+        npcId,
+        { at: n.at, name: n.name, persona: n.persona, sensitiveFlags: n.sensitive, topics: n.topics },
+      ]),
+    );
+    regions.push({ id, ...r, npcs });
+  }
+
+  /* NPC id 는 '전역' 유일해야 한다. npcs 표의 PK 이고 승급 큐의 키다.
+     지역마다 파일이 나뉘어 있으므로 이 검사는 여기서만 할 수 있다. */
+  const npcSeen = new Map<string, string>();
+  for (const r of regions) {
+    for (const npcId of Object.keys(r.npcs)) {
+      const other = npcSeen.get(npcId);
+      if (other) throw new Error(`NPC id ${npcId} 가 ${other} 와 ${r.id} 에 둘 다 있다 (전역 유일해야 한다).`);
+      npcSeen.set(npcId, r.id);
+    }
   }
 
   const ids = new Set(regions.map((r) => r.id));

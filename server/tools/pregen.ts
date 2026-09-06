@@ -25,7 +25,6 @@
 
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { NPCS } from "../engine/npcs";
 import { boot, type BootOptions } from "../index";
 
 export interface PregenResult {
@@ -52,7 +51,7 @@ export async function runPregen(
 
   try {
     const rooms = ctx.world.allRoomIds();
-    const topics = NPCS.flatMap((n) =>
+    const topics = ctx.map.npcs().flatMap((n) =>
       ctx.world.openTopics(n.id).map((t) => ({ npc: n.id, topic: t.id })),
     );
     log(`[pregen] db=${dbPath} · 방 ${rooms.length}개 · 대사 ${topics.length}개`);

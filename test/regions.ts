@@ -26,7 +26,6 @@ import { loadWorld } from "../server/content/world";
 const map = makeMap(loadWorld());
 import { assertWorldData } from "../server/db/seed";
 import { loadBalance } from "../server/content/balance";
-import { NPCS } from "../server/engine/npcs";
 
 /** DB 는 토큰의 sha256 만 갖는다 (server/net/handlers.ts 와 같은 공식). */
 const sha256 = (t: string) => createHash("sha256").update(t, "utf8").digest("hex");
@@ -172,20 +171,37 @@ async function main() {
     exits[0] = { ...saved, requires: "존재하지않는플래그" };
     return () => (exits[0] = saved);
   });
-  throws("★ NPC 가 없는 방에 있으면 부팅이 거절한다 (아니면 FK 에러로 죽는다)", () => {
-    /* NPC 는 아직 코드에 있고 방은 데이터에 있다. 그 참조가 끊기면 시더가
-       'FOREIGN KEY constraint failed' 로 죽는데, 그 말에는 어느 NPC 인지가 없다. */
-    const npc = NPCS[0] as { roomId: string };
-    const saved = npc.roomId;
-    npc.roomId = "b1:0,0"; // 벽이다 — 방이 아니다
-    return () => (npc.roomId = saved);
-  });
   throws("★ 걸을 수 있는 칸을 향한 출구를 부팅이 거절한다 (한 칸 이동과 뜻이 겹친다)", () => {
     const saved = { ...exits[0]! };
     // b2 (1,3) 에서 east 는 (2,3) — 걸을 수 있는 칸이다.
     exits[0] = { ...saved, dir: "east" };
     return () => (exits[0] = saved);
   });
+
+  /* NPC 검사는 지역 데이터를 고쳐 '다른 맵' 을 만들어 본다. makeMap 이 부팅에서
+     한 번 NPC 목록을 조립하므로, 위의 in-place 방식으로는 검사할 수 없다 —
+     그 조립이 한 번뿐이라는 것 자체가 이 파일이 지키는 성질이다. */
+  const withNpc = (patch: Record<string, unknown>) => {
+    const regions = map.regions().map((r) =>
+      r.id === "b1"
+        ? { ...r, npcs: { altar_keeper: { ...r.npcs.altar_keeper!, ...patch } } }
+        : r,
+    );
+    let threw = false;
+    try {
+      assertWorldData(makeMap({ regions, spawn: map.spawn }), balance);
+    } catch {
+      threw = true;
+    }
+    return threw;
+  };
+  check("★ NPC 가 벽에 서 있으면 부팅이 거절한다 (아니면 FK 에러로 죽는다)",
+    withNpc({ at: "0,0" }));
+  check("★ 선언되지 않은 플래그에 반응하는 NPC 를 거절한다",
+    withNpc({ sensitiveFlags: ["없는플래그"] }));
+  check("★ 선언되지 않은 플래그로 열리는 주제를 거절한다",
+    withNpc({ topics: [{ id: "x", label: null, seed: "씨앗", requires: "없는플래그" }] }));
+  check("멀쩡한 NPC 는 통과한다", !withNpc({}));
 
   // ── ② 잠긴 문 ───────────────────────────────────────────────────────
   section("② 잠긴 문 — 지역이 '얻는 것' 이다");
