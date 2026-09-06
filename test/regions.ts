@@ -173,6 +173,44 @@ async function main() {
     exits[0] = { ...saved, requires: "존재하지않는플래그" };
     return () => (exits[0] = saved);
   });
+  /* 임무는 세 파일을 한꺼번에 가리킨다 — NPC(지역), 적·보수(밸런스),
+     게시 플래그(world.json). 어느 한 파일의 zod 도 이걸 못 본다. */
+  type M = {
+    id: string; npcId: string; minRank: number; requires: string | null;
+    goal: { kind: "slay"; enemyId: string; count: number };
+    reward: { itemId: string; qty: number }[];
+  };
+  const missions = FIXTURE_WORLD.missions as unknown as M[];
+  const patchMission = (patch: Record<string, unknown>) => {
+    const saved = { ...missions[0]! };
+    missions[0] = { ...saved, ...patch } as typeof saved;
+    return () => (missions[0] = saved);
+  };
+  throws("★ 없는 NPC 가 게시하는 임무를 부팅이 거절한다", () =>
+    patchMission({ npcId: "없는사람" }));
+  throws("★ 길드 업무를 안 보는 사람이 게시하면 거절한다 (말을 걸어도 목록이 빈다)", () =>
+    patchMission({ npcId: "altar_keeper" }));
+  throws("★ 선언되지 않은 플래그로 게시되는 임무를 거절한다", () =>
+    patchMission({ requires: "존재하지않는플래그" }));
+  throws("★ 사다리에 없는 등급을 요구하는 임무를 거절한다 (영영 못 받는다)", () =>
+    patchMission({ minRank: 99 }));
+  throws("★ 없는 적을 목표로 두면 거절한다", () =>
+    patchMission({ goal: { kind: "slay", enemyId: "없는적", count: 1 } }));
+  /* 정의는 있는데 어디에도 배치되지 않은 적. 배치를 지워서 그 상황을 만든다 —
+     "밸런스에 없다" 와 다른 조항이고, 증상도 다르다 (부팅이 아니라 영영 0/1). */
+  throws("★ 어디에도 배치되지 않은 적을 목표로 두면 거절한다 (영영 0/1 이다)", () => {
+    const undoGoal = patchMission({ goal: { kind: "slay", enemyId: "shadow_warden", count: 1 } });
+    const enemies = b1.enemies as Record<string, string>;
+    const spot = Object.entries(enemies).find(([, id]) => id === "shadow_warden")![0];
+    delete enemies[spot];
+    return () => {
+      enemies[spot] = "shadow_warden";
+      undoGoal();
+    };
+  });
+  throws("★ 없는 아이템을 보수로 두면 거절한다", () =>
+    patchMission({ reward: [{ itemId: "없는아이템", qty: 1 }] }));
+
   throws("★ 사다리에 없는 등급을 요구하는 문을 부팅이 거절한다 (영영 안 열린다)", () => {
     const saved = { ...exits[0]! };
     exits[0] = { ...saved, minRank: 99 };
@@ -191,12 +229,15 @@ async function main() {
   const withNpc = (patch: Record<string, unknown>) => {
     const regions = map.regions().map((r) =>
       r.id === "b1"
-        ? { ...r, npcs: { altar_keeper: { ...r.npcs.altar_keeper!, ...patch } } }
+        /* ★ 나머지 NPC 를 남긴다. 통째로 갈아끼우면 임무를 게시하는 접수원이
+             사라져서 assertMissions 가 먼저 던지고, 이 검사가 무엇을 봤는지
+             알 수 없게 된다 (전부 '거절됨' 이 되어 초록불처럼 보인다). */
+        ? { ...r, npcs: { ...r.npcs, altar_keeper: { ...r.npcs.altar_keeper!, ...patch } } }
         : r,
     );
     let threw = false;
     try {
-      assertWorldData(makeMap({ regions, spawn: map.spawn, flags: FIXTURE_WORLD.flags }), balance);
+      assertWorldData(makeMap({ regions, spawn: map.spawn, flags: FIXTURE_WORLD.flags, missions: FIXTURE_WORLD.missions }), balance);
     } catch {
       threw = true;
     }

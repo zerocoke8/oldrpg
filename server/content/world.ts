@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { DIRECTIONS } from "../../shared/ids";
 import type { MapData, RegionDef } from "../engine/map";
+import type { MissionDef } from "../engine/missions";
 
 /** 저장소 루트의 content/world/. MUD_WORLD 로 갈아끼울 수 있다 (테스트·실험용). */
 const DEFAULT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../content/world");
@@ -89,6 +90,36 @@ const zFlag = z
     broadcast: z.boolean(),
   })
   .strict();
+
+/** 임무 하나. 목표 종류가 'slay' 뿐인 것은 의도다 — 늘리면 데이터가
+ *  조건식을 갖게 되고 그건 스크립트 언어다 (engine/missions.ts 주석 참조). */
+const zMission = z
+  .object({
+    /** 게시하는 NPC. 실재하는가, 그 사람이 guild 인가는 assertWorldData 가 본다. */
+    npcId: z.string().min(1).regex(/^[a-z0-9_]+$/, "소문자·숫자·밑줄만"),
+    name: z.string().min(1),
+    /** 게시판에 적힌 한 줄. 플레이어가 읽는 문장이라 데이터다. */
+    brief: z.string().min(1),
+    minRank: z.number().int().min(0).default(0),
+    requires: z.string().min(1).nullable(),
+    goal: z
+      .object({
+        kind: z.literal("slay"),
+        enemyId: z.string().min(1),
+        /* 0 마리 임무는 받는 즉시 완료라 '진행' 이 없다. 그건 임무가 아니라
+           보수 지급이고, 그걸 표현하고 싶으면 다른 것이 필요하다. */
+        count: z.number().int().min(1),
+      })
+      .strict(),
+    /* 보수가 비면 제출할 이유가 없다. 빈 배열을 조용히 통과시키면
+       '아무것도 안 주는 임무' 가 오타로 만들어진다. */
+    reward: z
+      .array(z.object({ itemId: z.string().min(1), qty: z.number().int().min(1) }).strict())
+      .min(1),
+  })
+  .strict();
+
+const zMissions = z.record(z.string().min(1).regex(/^[a-z0-9_]+$/, "소문자·숫자·밑줄만"), zMission);
 
 const zWorld = z
   .object({
@@ -223,7 +254,13 @@ export function loadWorld(dir = process.env.MUD_WORLD ?? DEFAULT_DIR): MapData {
     throw new Error(`world.json: 스폰 지역 ${world.spawn.region} 이 regions/ 에 없다.`);
   }
 
+  /* 임무. 지역마다 나뉘지 않는 이유: 게시하는 사람(마을)과 목표(괴담)가 다른
+     지역에 있다. 지역 파일에 넣으면 어느 쪽에 적어야 하는지가 매번 갈린다. */
+  const missionPath = join(dir, "missions.json");
+  const rawMissions = parse(missionPath, zMissions, readJson(missionPath));
+  const missions: MissionDef[] = Object.entries(rawMissions).map(([id, m]) => ({ id, ...m }));
+
   /* 선언되지 않은 플래그를 쓰는 곳은 db/seed.ts 의 assertWorldData 가 잡는다 —
      적의 slainFlag 와 밸런스를 함께 봐야 하므로 여기서는 판정할 수 없다. */
-  return { regions, spawn: world.spawn, flags: world.flags };
+  return { regions, spawn: world.spawn, flags: world.flags, missions };
 }

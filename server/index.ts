@@ -22,6 +22,7 @@ import { makeNpcTextService } from "./world/npcText";
 import { makeDialogue } from "./world/dialogue";
 import { makeInventory } from "./world/inventory";
 import { makeGuild } from "./world/guild";
+import { makeMissions, type MissionService } from "./world/missions";
 import { makeUpgradeService } from "./world/upgrade";
 import { makeEvents } from "./world/events";
 import { makeCombat, type CombatOptions } from "./world/combat";
@@ -127,6 +128,16 @@ export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
   const inventory = makeInventory(q, reg, emit, balance, clock, (fn: () => void) => db.transaction(fn)());
   const guild = makeGuild(q, emit, map, balance, clock, (fn: () => void) => db.transaction(fn)(),
     (s: Session) => inventory.push(s));
+  /* 임무는 '세계가 그것을 내걸었는가'(플래그)를 물어야 하는데 events 는 아래에서
+     만들어진다. 늦은 바인딩은 presence 와 같은 방식이다 — 순환을 피하려고
+     import 가 아니라 함수를 넘긴다. */
+  const missions: MissionService = makeMissions(
+    q, reg, emit, map, balance,
+    (key) => events?.isFlagOn(key) ?? false,
+    clock,
+    (fn: () => void) => db.transaction(fn)(),
+    (s: Session) => inventory.push(s),
+  );
   const presence = makePresence(
     reg,
     emit,
@@ -137,6 +148,7 @@ export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
     (roomId) => npcsIn?.(roomId) ?? [],
     (playerId) => inventory.of(playerId),
     (rank) => guild.view(rank),
+    (playerId) => missions.of(playerId),
   );
 
   /* ── 서술 레이어 ────────────────────────────────────────────────────
@@ -178,9 +190,11 @@ export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
   events = makeEvents(world, map, q, reg, emit, moods, roomText, npcText, upgrades, clock);
   /* 대화는 engine(누가 있나) + npcText(대사) + upgrades(승급) 를 조합한다.
      presence 보다 뒤에 만들어지므로 npcsIn 은 위에서 늦게 바인딩한다. */
-  const dialogue = makeDialogue(world, map, npcText, upgrades, emit);
+  const dialogue = makeDialogue(world, map, npcText, upgrades, emit, (s, npcId) => missions.offers(s, npcId));
   npcsIn = dialogue.npcsIn;
-  const combatSvc = makeCombat(q, reg, emit, events, inventory, map, balance, clock, options.combat ?? {});
+  /* 임무 진행은 전리품과 '같은 목록' 으로 오른다 — 피해를 준 사람 전원.
+     그래서 전투가 missions 를 받는다 (inventory 를 받는 것과 같은 이유다). */
+  const combatSvc = makeCombat(q, reg, emit, events, inventory, missions, map, balance, clock, options.combat ?? {});
   combat = combatSvc;
 
   const ctx: Ctx = {
@@ -196,6 +210,7 @@ export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
     dialogue,
     inventory,
     guild,
+    missions,
     balance,
     clock,
     isShuttingDown: () => shuttingDown,

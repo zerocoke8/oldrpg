@@ -44,6 +44,14 @@ export interface NpcLineFullRow extends RoomTextRow {
   updated_at: number;
 }
 
+/** player_missions 한 행. done_at 이 null 이면 진행 중이다. */
+export interface MissionRow {
+  mission_id: string;
+  progress: number;
+  accepted_at: number;
+  done_at: number | null;
+}
+
 export interface PlayerRow {
   id: string;
   name: string;
@@ -242,6 +250,42 @@ export function makeQueries(db: Db) {
     ),
     dropLastItem: db.prepare(
       "DELETE FROM player_items WHERE player_id = @player_id AND item_id = @item_id AND qty = 1",
+    ),
+
+    // ── player_missions ─────────────────────────────────────────────────
+    /** 그 사람의 전부 (끝낸 것 포함). PK 앞자리가 player_id 라 PK 인덱스를 탄다.
+     *  mission_id 로 정렬해 목록의 순서가 요청마다 흔들리지 않게 한다 —
+     *  커맨드 창의 커서가 같은 자리에 머물러야 한다 (itemsOf 와 같은 이유). */
+    missionsOf: db.prepare<[string], MissionRow>(
+      `SELECT mission_id, progress, accepted_at, done_at FROM player_missions
+       WHERE player_id = ? ORDER BY mission_id`,
+    ),
+    missionOf: db.prepare<[string, string], MissionRow>(
+      `SELECT mission_id, progress, accepted_at, done_at FROM player_missions
+       WHERE player_id = ? AND mission_id = ?`,
+    ),
+    /** 수락. ★ DO NOTHING 이라 이미 받았거나 이미 끝낸 임무를 다시 받아도
+     *  진행도가 0 으로 돌아가지 않는다. 0행이면 호출자가 '이미 받았다' 를 안다 —
+     *  먼저 SELECT 로 보고 INSERT 하면 그 사이에 낀 요청이 진행도를 지운다. */
+    acceptMission: db.prepare(
+      `INSERT INTO player_missions (player_id, mission_id, progress, accepted_at)
+       VALUES (@player_id, @mission_id, 0, @now)
+       ON CONFLICT (player_id, mission_id) DO NOTHING`,
+    ),
+    /** 진행. 한 문장으로 원자적이다 — 표를 쓴 두 번째 이유가 이것이다.
+     *  ★ MIN 으로 상한을 물린다. 목표가 1인데 둘을 잡으면 2가 되고, 그러면
+     *    "3/1 마리" 가 화면에 뜬다. 상한 자체는 데이터라 인자로 들어온다.
+     *  ★ done_at IS NULL 조건이 재제출을 막는다 — 끝낸 임무는 안 오른다. */
+    advanceMission: db.prepare(
+      `UPDATE player_missions SET progress = MIN(progress + @by, @cap)
+       WHERE player_id = @player_id AND mission_id = @mission_id AND done_at IS NULL`,
+    ),
+    /** 제출. ★ done_at IS NULL 이 조건이라 두 번 제출하면 두 번째는 0행이다.
+     *  보수 지급이 이 0행 검사 뒤에 오므로, 두 탭에서 동시에 눌러도 보수는
+     *  한 번만 나간다 (같은 트랜잭션 안이다). */
+    completeMission: db.prepare(
+      `UPDATE player_missions SET done_at = @now
+       WHERE player_id = @player_id AND mission_id = @mission_id AND done_at IS NULL`,
     ),
   };
   return q;

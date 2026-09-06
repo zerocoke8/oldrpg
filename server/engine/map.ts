@@ -22,6 +22,7 @@
 
 import { createHash } from "node:crypto";
 import type { Dir, Pos, RegionId, RoomId } from "../../shared/ids";
+import type { MissionDef } from "./missions";
 import { roomIdOf } from "../../shared/ids";
 import type { NpcDef, NpcPlacement } from "./npcs";
 
@@ -73,6 +74,9 @@ export interface MapData {
   readonly spawn: Pos;
   /** 존재하는 모든 월드 플래그. 세계마다 다르므로 지역·씨앗과 같은 데이터다. */
   readonly flags: Readonly<Record<string, WorldFlagDef>>;
+  /** 게시되는 임무 전부. 지역에 매이지 않는다 — 게시하는 사람과 목표가
+   *  다른 지역에 있기 때문이다. */
+  readonly missions: readonly MissionDef[];
 }
 
 export const MAX_SENSITIVE = 4;
@@ -158,6 +162,12 @@ export interface GameMap {
   flagDefaults(): Readonly<Record<string, string>>;
   /** 선언된 플래그 이름 전부. */
   flagKeys(): string[];
+  /** 게시되는 임무 전부. 순서는 파일의 키 순서 그대로다 (목록의 순서가
+   *  요청마다 흔들리면 커맨드 창의 커서가 튄다). */
+  missions(): readonly MissionDef[];
+  mission(id: string): MissionDef | undefined;
+  /** 그 NPC 가 게시하는 것들. */
+  missionsOf(npcId: string): readonly MissionDef[];
   contentHash(): string;
   view(id: RegionId): RegionSlice;
 }
@@ -170,6 +180,7 @@ export interface GameMap {
  *  상태가 생기고, 테스트가 서로의 세계를 덮어쓴다. */
 export function makeMap(data: MapData): GameMap {
   const byId = new Map<RegionId, RegionDef>(data.regions.map((r) => [r.id, r]));
+  const byMission = new Map<string, MissionDef>(data.missions.map((m) => [m.id, m]));
 
   const tileAt = (region: RegionId, x: number, y: number): string => {
     const r = byId.get(region);
@@ -253,6 +264,10 @@ export function makeMap(data: MapData): GameMap {
     flagDefaults: () =>
       Object.fromEntries(Object.entries(data.flags).map(([k, v]) => [k, v.default])),
     flagKeys: () => Object.keys(data.flags),
+
+    missions: () => data.missions,
+    mission: (id) => byMission.get(id),
+    missionsOf: (npcId) => data.missions.filter((m) => m.npcId === npcId),
 
     /** "코드 맵과 DB rooms 가 같은 세대인가"를 한 번에 판정한다.
      *  플래그 레지스트리도 preimage 에 넣는다 — 안 그러면 새 플래그를 선언해도

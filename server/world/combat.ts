@@ -41,6 +41,7 @@ import type { Emit } from "../net/emit";
 import type { Registry, Session } from "../net/session";
 import type { EventService } from "./events";
 import type { InventoryService } from "./inventory";
+import type { MissionService } from "./missions";
 
 export const TICK_MS = 100;
 export const RESPAWN_MS = 5000;
@@ -114,6 +115,7 @@ export function makeCombat(
   emit: Emit,
   events: EventService,
   inventory: InventoryService,
+  missions: MissionService,
   /** 적 배치와 부활 지점의 출처. 수치와 같은 주입이다 — engine 은 파일을 읽지 않는다. */
   map: GameMap,
   /** 수치는 데이터가 소유한다 (content/balance/). 시계·시드와 같은 주입이다. */
@@ -604,6 +606,9 @@ export function makeCombat(
       )
       .map(([playerId, damage]) => ({ playerId, damage }));
     inventory.award(rollDrops(c.def, contributions, c.rng));
+    /* ★ 임무 진행도 '같은 목록' 으로 오른다. 막타 기준으로 두면 같이 잡았을 때
+       전리품은 나오는데 임무는 안 오르고, 그건 함께 싸울 이유를 깎는다. */
+    missions.onSlain(c.def.id, contributions.map((x) => x.playerId));
 
     if (c.def.respawnMs !== null) downed.set(c.roomId, now() + c.def.respawnMs);
     endCombat(c, "victory");

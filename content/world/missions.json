@@ -1,0 +1,47 @@
+{
+  "m_first_descent": {
+    "npcId": "registrar",
+    "name": "첫 하강",
+    "brief": "[UE-001] 입구 쪽의 풀려난 검체 둘을 지우고 돌아올 것. 등록만 마친 사람에게 주는 일이다.",
+    "minRank": 1,
+    "requires": null,
+    "goal": { "kind": "slay", "enemyId": "husk_specimen", "count": 2 },
+    "reward": [{ "itemId": "stabilizer", "qty": 2 }]
+  },
+  "m_wraith": {
+    "npcId": "registrar",
+    "name": "잔류물 정리",
+    "brief": "연구실 서쪽 아래로 내려가 잔류 괴령 둘을 지울 것. 앰플을 챙겨 가는 편이 좋다.",
+    "minRank": 1,
+    "requires": null,
+    "goal": { "kind": "slay", "enemyId": "static_wraith", "count": 2 },
+    "reward": [{ "itemId": "stabilizer", "qty": 3 }]
+  },
+  "m_archivist": {
+    "npcId": "registrar",
+    "name": "기록실 회수",
+    "brief": "기록실의 괴령을 처리하고 남은 기록을 가져올 것. 안쪽 문은 그 기록이 없으면 열리지 않는다.",
+    "minRank": 1,
+    "requires": null,
+    "goal": { "kind": "slay", "enemyId": "archivist", "count": 1 },
+    "reward": [{ "itemId": "stabilizer", "qty": 3 }]
+  },
+  "m_containment": {
+    "npcId": "registrar",
+    "name": "격리 구역 정리",
+    "brief": "격리 구역의 창백한 접목을 둘 지울 것. 증식이 멈추지 않으면 구역째 봉인한다.",
+    "minRank": 1,
+    "requires": "journal_recovered",
+    "goal": { "kind": "slay", "enemyId": "pale_grafting", "count": 2 },
+    "reward": [{ "itemId": "dark_shard", "qty": 1 }]
+  },
+  "m_proliferant": {
+    "npcId": "registrar",
+    "name": "증식체 처리",
+    "brief": "격리 구역 안쪽의 증식체를 처치할 것. 이것이 6구역이 지금까지 미뤄 온 일이다.",
+    "minRank": 2,
+    "requires": "journal_recovered",
+    "goal": { "kind": "slay", "enemyId": "proliferant", "count": 1 },
+    "reward": [{ "itemId": "dark_shard", "qty": 2 }]
+  }
+}

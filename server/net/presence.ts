@@ -16,6 +16,7 @@ import { OPPOSITE, roomIdOf } from "../../shared/ids";
 import type {
   CombatView,
   ItemStack,
+  MissionView,
   NpcBrief,
   PresenceEntry,
   RankView,
@@ -48,6 +49,8 @@ export function makePresence(
   itemsOf: (playerId: string) => ItemStack[] = () => [],
   /** 등급의 이름은 서버가 붙인다 — 클라이언트가 숫자로 문구를 조립하지 않는다. */
   rankOf: (rank: number) => RankView = (level) => ({ level, name: null }),
+  /** 진행 중인 임무. 역시 주입 — presence 는 db/ 를 import 하지 않는다. */
+  missionsOf: (playerId: string) => MissionView[] = () => [],
 ) {
   const others = (self: Session): Session[] =>
     reg.all().filter((s) => s.playerId !== self.playerId);
@@ -83,6 +86,7 @@ export function makePresence(
         seen: [...self.seen],
         items: itemsOf(self.playerId),
         rank: rankOf(self.rank),
+        missions: missionsOf(self.playerId),
       },
       region: map.view(self.pos.region),
       room: roomView(self.pos, self),

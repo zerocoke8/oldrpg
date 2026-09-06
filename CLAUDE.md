@@ -40,6 +40,7 @@ npcs           id, room_id, persona_seed, sensitive_flags[]  -- 지역 파일의
 npc_lines      npc_id, state_hash, text
 players        id, name, x, y, hp, rank                 -- rank 는 길드 등급 (0 = 미등록)
 player_items   player_id, item_id, qty                     -- 소지품. 0개는 행이 없다
+player_missions player_id, mission_id, progress, done_at  -- 임무. done_at 이 null 이면 진행 중
 ```
 
 소지품이 `players.inventory` 블롭이 아니라 별도 표인 이유: 수량 갱신이 한 문장으로
@@ -53,6 +54,12 @@ player_items   player_id, item_id, qty                     -- 소지품. 0개는
 아이템은 냈는데 등급이 안 오른 상태가 존재해서는 안 된다.
 등급 사다리(어느 등급에 무엇이 필요한가)는 수치라서 `content/balance/ranks.json`
 에 있다.
+
+임무는 다시 소지품 쪽이다 — 한 사람에게 여럿이고 `progress = progress + 1` 이
+한 문장으로 원자적이어야 한다. 임무의 '정의'(누가 게시하고 무엇을 잡으며 보수가
+무엇인가)는 `content/world/missions.json` 에 있다: 무엇을 하게 되는가는 진행이고,
+진행은 세계의 구조다. 임무 완료는 **재료를 준다** — 승급은 여전히 접수원에게
+따로 신청한다. 두 계통을 직교로 두어야 사다리가 임무 목록에 종속되지 않는다.
 
 `state_hash`는 **그 방이 선언한 플래그들의 값만** 해시한 것이다.
 전체 월드 플래그를 해시하면 플래그 하나 바뀔 때마다 모든 방의 캐시가 날아간다.

@@ -12,7 +12,7 @@ import WebSocket from "ws";
 import { loadBalance } from "../server/content/balance";
 import { loadWorld } from "../server/content/world";
 import { makeMap } from "../server/engine/map";
-import { simulate } from "../server/tools/balanceSim";
+import { simulate, simulateMissions } from "../server/tools/balanceSim";
 import { boot } from "../server/index";
 import { PROTOCOL_VERSION, type ServerMsg } from "../shared/protocol";
 
@@ -92,6 +92,25 @@ async function main() {
   check("★ 잡몹 중 적어도 하나는 기본 공격만으로도 편하게 잡힌다 (첫 전투)",
     trash.some((r) => r.winRate === 1 && r.medianHpPct >= 80),
     JSON.stringify(trash.map((r) => [r.name, r.medianHpPct])));
+
+  /* ★ 임무는 '연달아' 싸운다. 한 판 승률 100% 가 임무 완주를 뜻하지 않는다 —
+     실제로 겪었다: 잔류 괴령은 혼자서는 100% 이기지만 남는 체력이 40% 라,
+     둘을 연달아 잡으라는 첫 임무가 회복 없이는 두 번째에서 죽었다.
+     위의 표만 봤으면 초록불이었다. */
+  section("①* 임무 — 받을 수 있는 일은 끝낼 수 있어야 한다");
+  const runs = simulateMissions(b, 120);
+  for (const r of runs.filter((x) => x.style === "skilled" && x.potions === 2)) {
+    check(`${r.name}: 스킬과 물약이면 끝낼 수 있다 (${Math.round(r.clearRate * 100)}%)`,
+      r.clearRate >= 0.6, `${Math.round(r.clearRate * 100)}%`);
+  }
+  /* 첫 임무는 아무것도 모르는 사람이 받는다. 여기서 죽으면 그게 첫인상이다. */
+  const firstMissions = runs.filter(
+    (r) => r.style === "basic" && r.potions === 0 && r.clearRate >= 0.9,
+  );
+  check("★ 기본 공격과 빈손으로도 끝낼 수 있는 임무가 있다 (처음 받는 일)",
+    firstMissions.length > 0,
+    JSON.stringify(runs.filter((r) => r.style === "basic" && r.potions === 0)
+      .map((r) => [r.name, Math.round(r.clearRate * 100)])));
 
   section("①'' 배치 — 마을은 안전하고, 깊을수록 세진다");
   const map = makeMap(loadWorld());

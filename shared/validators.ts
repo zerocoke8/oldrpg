@@ -73,6 +73,13 @@ export function makeActionSchemas(limits: { sayMaxLen: number; unparsedMaxLen: n
     // itemId 가 실제로 있는지, 가지고 있는지는 핸들러가 다시 본다.
     use_item: z.object({ type: z.literal("use_item"), itemId: z.string().max(64) }).strict(),
     promote: z.object({ type: z.literal("promote"), npcId: z.string().max(64) }).strict(),
+    // 실재하는 임무인지, 그 NPC 가 게시하는지, 자격이 되는지는 핸들러가 다시 본다.
+    accept_mission: z
+      .object({ type: z.literal("accept_mission"), npcId: z.string().max(64), missionId: z.string().max(64) })
+      .strict(),
+    turn_in: z
+      .object({ type: z.literal("turn_in"), npcId: z.string().max(64), missionId: z.string().max(64) })
+      .strict(),
     maxLen: { say: limits.sayMaxLen, unparsed: limits.unparsedMaxLen },
   };
 }

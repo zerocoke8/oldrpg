@@ -31,6 +31,7 @@ const STALE_PLAYER_MS = 30 * 24 * 60 * 60 * 1000;
 export function assertWorldData(map: GameMap, balance: Balance): void {
   for (const r of map.regions()) assertRegion(map, r, balance);
   assertDoors(map, balance);
+  assertMissions(map, balance);
 
   // ⑦ 적이 켜는 플래그는 선언돼 있어야 한다 (파일을 넘나드는 참조라 zod 가 못 본다).
   for (const [id, e] of Object.entries(balance.enemies)) {
@@ -174,6 +175,44 @@ function assertDoors(map: GameMap, balance: Balance): void {
           `${where}: 왕복인데 ${e.to.region} ${e.to.x},${e.to.y} 에서 ${OPPOSITE[e.dir]} 로 ` +
             `돌아오는 짝이 없다 — 들어가면 못 나온다.`,
         );
+      }
+    }
+  }
+}
+
+/* ⑩ 임무. 임무는 세 파일을 한꺼번에 가리킨다 — 게시하는 NPC(지역 파일),
+   목표가 되는 적과 보수 아이템(밸런스), 게시 조건 플래그(world.json).
+   그래서 어느 한 파일의 zod 도 이걸 볼 수 없다.
+
+   ★ 증상이 전부 '조용함' 이라 눈으로 못 잡는다: 없는 적을 목표로 두면 영영
+     0/1 이고, 없는 NPC 가 게시하면 아무 데서도 안 보이고, 길드가 아닌 사람이
+     게시하면 말은 걸리는데 목록이 비어 있다. */
+function assertMissions(map: GameMap, balance: Balance): void {
+  const enemyPlaced = new Set(map.regions().flatMap((r) => Object.values(r.enemies)));
+  for (const m of map.missions()) {
+    const where = `missions.json 의 ${m.id}`;
+    const npc = map.npc(m.npcId);
+    if (!npc) throw new Error(`${where}: 게시하는 NPC ${m.npcId} 가 없다.`);
+    /* 게시는 길드 업무다. 아니면 그 사람에게 말을 걸어도 목록이 비어 있고,
+       왜 안 보이는지가 어디에도 안 적힌다. */
+    if (!npc.guild) throw new Error(`${where}: ${m.npcId} 는 길드 업무를 보지 않는다.`);
+    if (m.requires !== null && !map.hasFlag(m.requires)) {
+      throw new Error(`${where}: 선언되지 않은 플래그 ${m.requires} 로 게시된다.`);
+    }
+    const top = balance.ranks[balance.ranks.length - 1]?.level ?? 0;
+    if (m.minRank > top) {
+      throw new Error(`${where}: ${m.minRank}등급을 요구하는데 최고 등급은 ${top} 이다 — 영영 못 받는다.`);
+    }
+    if (!(m.goal.enemyId in balance.enemies)) {
+      throw new Error(`${where}: 목표 ${m.goal.enemyId} 가 enemies.json 에 없다.`);
+    }
+    /* 정의만 있고 어디에도 배치되지 않은 적을 목표로 두면 영영 0/1 이다. */
+    if (!enemyPlaced.has(m.goal.enemyId)) {
+      throw new Error(`${where}: 목표 ${m.goal.enemyId} 가 어느 지역에도 배치돼 있지 않다 — 영영 못 끝낸다.`);
+    }
+    for (const rw of m.reward) {
+      if (!(rw.itemId in balance.items)) {
+        throw new Error(`${where}: 보수 ${rw.itemId} 가 items.json 에 없다.`);
       }
     }
   }

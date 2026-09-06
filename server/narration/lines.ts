@@ -141,6 +141,27 @@ export const lines = {
    *  "파수꾼을 쓰러뜨리면 열린다" 는 것 자체가 스포일러다. */
   topicClosed: "그 이야기에는 아무 말도 하지 않는다.",
 
+  // ── 임무 (마이그레이션 005) ──────────────────────────────────────────
+  /* ★ 전부 결정론이다. 임무는 전투 중에도 진행이 오르므로(적이 쓰러진 그
+     순간) 모델을 기다릴 수 없다 — 전투 문장과 같은 이유다 (규칙 4). */
+  noMissions: (name: string) => `${name}은(는) 임무를 게시하지 않는다.`,
+  /** 없는 임무, 그리고 '아직 게시되지 않은' 임무. 둘을 같은 문장으로 답한다 —
+   *  구별할 수 있으면 id 를 찔러 보는 것만으로 앞으로 나올 임무를 전부 알아낼
+   *  수 있다 (벽과 봉인된 문이 같은 ack 인 것과 같은 판단이다). */
+  noSuchMission: "그런 임무는 게시돼 있지 않다.",
+  /** 자격이 모자란다. 문의 등급과 같이, 무엇이 필요한지는 말해 준다. */
+  missionRank: (name: string, rank: string) => `${name}은(는) ${rank} 이상에게만 맡긴다.`,
+  missionTaken: (name: string) => `${name}은(는) 이미 맡고 있다.`,
+  missionNotTaken: (name: string) => `${name}을(를) 맡은 적이 없다.`,
+  missionDone: (name: string) => `${name}은(는) 이미 끝낸 일이다.`,
+  missionAccepted: (name: string, goal: number) => `${name}을(를) 맡았다. (0/${goal})`,
+  missionProgress: (name: string, now: number, goal: number) => `${name} (${now}/${goal})`,
+  missionGoalMet: (name: string) => `${name} — 할 일은 끝났다. 돌아가 보고할 것.`,
+  missionShort: (name: string, have: number, need: number) =>
+    `${name}은(는) 아직 끝나지 않았다. (${have}/${need})`,
+  missionCleared: (name: string, reward: string) => `${name} 완료. ${reward}를 받았다.`,
+  missionFailed: "임무 처리 중 무언가 잘못됐다.",
+
   // ── 복구 ──────────────────────────────────────────────────────────────
   /** resume 시 저장된 좌표가 벽 안이면(맵이 바뀌었으면) 스폰으로 이송한다. */
   displaced: "길이 무너져 있었다. 정신을 차려 보니 입구다.",

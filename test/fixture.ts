@@ -25,7 +25,72 @@ import type { MapData } from "../server/engine/map";
 import type { Balance, EnemyDef, ItemDef, SkillDef } from "../server/engine/enemies";
 import type { Mood } from "../server/narration/prompts";
 
+/** 픽스처의 임무. 운영의 missions.json 과 분리돼 있다 — 임무를 늘리거나
+ *  이름을 바꿔도 프로토콜·전투 검사는 그대로다.
+ *
+ *  세 가지를 일부러 갖췄다: 아무나 받는 것, 등급이 걸린 것, 플래그로 게시되는 것.
+ *  그래야 '게시 안 됨' 과 '자격 부족' 이 다른 길이라는 것을 검사할 수 있다. */
+const FIXTURE_MISSIONS = [
+  {
+    id: "m_pages",
+    npcId: "clerk",
+    name: "재의 낱장 정리",
+    brief: "재의 낱장 둘을 지울 것.",
+    minRank: 0,
+    requires: null,
+    goal: { kind: "slay" as const, enemyId: "ashen_pages", count: 2 },
+    reward: [{ itemId: "minor_potion", qty: 2 }],
+  },
+  {
+    id: "m_watcher",
+    npcId: "clerk",
+    name: "녹슨 감시자",
+    brief: "녹슨 감시자를 하나 지울 것.",
+    minRank: 2,
+    requires: null,
+    goal: { kind: "slay" as const, enemyId: "rusted_watcher", count: 1 },
+    reward: [{ itemId: "warden_shard", qty: 1 }],
+  },
+  {
+    /* ★ 게시 조건과 자격이 '둘 다' 걸린 임무. 하나만 걸린 임무로는
+       "게시를 자격보다 먼저 본다" 를 검사할 수 없다 — 둘 중 하나가 늘
+       통과해 버려서 순서를 바꿔도 답이 같다. */
+    id: "m_sealed",
+    npcId: "clerk",
+    name: "봉인 너머",
+    brief: "게시 조건과 자격이 둘 다 걸려 있다.",
+    minRank: 2,
+    requires: "guardian_slain",
+    goal: { kind: "slay" as const, enemyId: "shadow_warden", count: 1 },
+    reward: [{ itemId: "warden_shard", qty: 1 }],
+  },
+  {
+    /* ★ 게시하는 사람이 '다른' 임무. 접수원과 같은 방에 세워 둔다 —
+       다른 방에 두면 방 검사가 먼저 걸러서 "그 사람이 게시하는 것인가" 가
+       실제로 검사되지 않는다 (길드 검사에서 겪은 함정 그대로다). */
+    id: "m_broker",
+    npcId: "broker",
+    name: "중개인의 일",
+    brief: "중개인이 따로 게시하는 일.",
+    minRank: 0,
+    requires: null,
+    goal: { kind: "slay" as const, enemyId: "shadow_warden", count: 1 },
+    reward: [{ itemId: "minor_potion", qty: 1 }],
+  },
+  {
+    id: "m_after",
+    npcId: "clerk",
+    name: "파수꾼 이후",
+    brief: "파수꾼이 사라진 뒤에야 게시된다.",
+    minRank: 0,
+    requires: "guardian_slain",
+    goal: { kind: "slay" as const, enemyId: "ashen_pages", count: 1 },
+    reward: [{ itemId: "warden_shard", qty: 1 }],
+  },
+];
+
 export const FIXTURE_WORLD: MapData = {
+  "missions": FIXTURE_MISSIONS,
   "flags": { "guardian_slain": { "default": "false", "broadcast": true } },
   "spawn": {
     "region": "b1",
@@ -103,6 +168,16 @@ export const FIXTURE_WORLD: MapData = {
           "guild": true,
           "topics": [
             { "id": "greet", "label": null, "seed": "등급부터 확인한다", "requires": null }
+          ]
+        },
+        "broker": {
+          "at": "1,1",
+          "name": "중개인",
+          "persona": "접수대 옆에서 따로 일을 게시하는 사람",
+          "sensitiveFlags": [],
+          "guild": true,
+          "topics": [
+            { "id": "greet", "label": null, "seed": "장부에서 눈을 떼지 않는다", "requires": null }
           ]
         },
         "sweeper": {

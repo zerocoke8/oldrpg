@@ -136,6 +136,11 @@ export function reduce(st: UiState, m: ServerMsg | LocalMsg): UiState {
           ...(m.hp !== undefined ? { hp: m.hp } : {}),
           ...(m.maxHp !== undefined ? { maxHp: m.maxHp } : {}),
           ...(m.seen !== undefined ? { seen: m.seen } : {}),
+          /* 등급과 일지도 self 안이다. 스냅샷이 SelfState 를 통째로 갈아끼우고
+             델타가 필드만 덮으므로, 둘 다 같은 자리에 있어야 서로를 지우지
+             않는다. (가방·격자는 반대로 self 밖이다 — 아래 참조.) */
+          ...(m.rank !== undefined ? { rank: m.rank } : {}),
+          ...(m.missions !== undefined ? { missions: m.missions } : {}),
         },
         // 가방은 self 안이 아니라 UiState 최상단에 산다 — SelfState 를 통째로
         // 갈아끼우는 스냅샷 경로와 델타 경로가 서로를 지우지 않게 한다.

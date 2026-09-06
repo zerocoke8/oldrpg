@@ -65,6 +65,9 @@ function refuses(dir: string): string | null {
  *   b1 과 그 방이 있어야 npcs 표의 외래키가 살았다. 이제 NPC 가 지역 파일
  *   안에 있으므로 세계에 NPC 가 하나도 없어도 된다. */
 const TINY: MapData = {
+  /* 임무가 없는 세계다. 임무는 NPC 와 적을 함께 가리키므로, NPC 도 적도 없는
+     세계에서는 있을 수 없다 — 빈 배열이 그 사실의 표현이다. */
+  missions: [],
   /* 지역은 두 방뿐이지만 플래그는 실제 밸런스가 요구하는 것을 선언해야 한다 —
      적의 slainFlag 가 선언되지 않았으면 부팅이 거절한다 (아래 ⑤' 에서 본다). */
   flags: {

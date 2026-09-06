@@ -121,7 +121,11 @@ export type Action =
    *  동사인 이유: 플레이어가 하는 일이 "다음 등급을 신청한다" 하나이고,
    *  요구 조건이 비어 있느냐 아니냐는 데이터의 차이일 뿐이다.
    *  자격도 소지품도 서버가 다시 본다 — 클라이언트는 신청만 한다. */
-  | { type: "promote"; npcId: string };
+  | { type: "promote"; npcId: string }
+  /* 임무. 받는 것과 내는 것을 나눈 이유: 하나로 두면 "받자마자 낸다" 를
+     서버가 구별할 수 없고, 오조작이 조용히 성공한다. */
+  | { type: "accept_mission"; npcId: string; missionId: string }
+  | { type: "turn_in"; npcId: string; missionId: string };
 
 export interface Hello {
   t: "hello";
@@ -169,6 +173,8 @@ export interface SelfState {
   /** 길드 등급. 0 은 미등록. 이름은 서버가 붙인다 — 클라이언트가 숫자로
    *  문구를 조립하지 않는다 (프로토콜 불변식 1과 같은 이유). */
   rank: RankView;
+  /** 진행 중인 임무. 재접속해도 일지가 복원돼야 하므로 스냅샷이 싣는다. */
+  missions: MissionView[];
 }
 
 /** 길드 등급. 숫자와 이름이 함께 온다. */
@@ -232,6 +238,40 @@ export interface NpcBrief {
   guild?: boolean;
 }
 
+/** 일지에 실리는 임무 하나. 진행 중인 것만 실린다 — 끝낸 것까지 쌓이면
+ *  목록이 영원히 자라고, 일지는 '할 일' 이지 이력이 아니다. */
+export interface MissionView {
+  id: string;
+  name: string;
+  brief: string;
+  progress: number;
+  /** 목표 수. progress/goal 을 클라이언트가 그대로 그린다 (문구 조립이 아니라
+   *  숫자 두 개다 — 프로토콜 불변식 1을 어기지 않는다). */
+  goal: number;
+  /** 목표를 채웠는가. 제출하러 가야 한다는 뜻이다. */
+  done: boolean;
+}
+
+/** 게시된 임무 하나. NPC 에게 말을 걸었을 때 실린다.
+ *  아직 게시되지 않은(플래그가 안 켜진) 임무는 아예 오지 않는다 — 잠긴 대화
+ *  주제와 같은 이유로 스포일러이기 때문이다. */
+export interface MissionOffer {
+  id: string;
+  name: string;
+  brief: string;
+  /** 보수를 사람이 읽는 문장으로. 서버가 만든다 — 클라이언트가 아이템 이름과
+   *  수량을 조립하지 않는다. */
+  reward: string;
+  /** 받는 데 필요한 등급. 0 이면 아무나. */
+  minRank: number;
+  /** open 받을 수 있다 · locked 등급이 모자란다 · taken 진행 중 · complete 제출만 남았다.
+   *  ★ 등급이 모자라도 목록에는 나온다 (문의 minRank 와 같은 판단이다 —
+   *    무엇을 하면 되는지는 감출 이유가 없다). */
+  state: "open" | "locked" | "taken" | "complete";
+  progress: number;
+  goal: number;
+}
+
 /** 지금 열려 있는 대화 주제 하나. 잠긴 주제는 아예 오지 않는다 —
  *  "무엇을 물을 수 있는지" 자체가 세계의 상태이고, 스포일러가 될 수 있다. */
 export interface TopicView {
@@ -243,6 +283,8 @@ export interface TopicView {
 export interface DialogueView {
   npc: NpcBrief;
   topics: TopicView[];
+  /** 이 사람이 게시하는 임무. 게시 안 된 것과 이미 낸 것은 오지 않는다. */
+  missions: MissionOffer[];
 }
 
 /** 전투 중인 적. 구조화 데이터만 — 문장은 log 가 싣는다. */
@@ -404,6 +446,8 @@ export interface SelfPatch {
   seen?: RoomId[];
   /** 등급이 올랐다. */
   rank?: RankView;
+  /** 일지가 바뀌었다 (수락·진행·제출). 델타가 아니라 전부 — 가방과 같다. */
+  missions?: MissionView[];
   /** 지역이 바뀌었다. 새 지역의 격자 전체가 실린다.
    *
    *  ★ 여기 있는 것은 '지도' 이지 '위치' 가 아니다 — 위쪽 주석의 금지는

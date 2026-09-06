@@ -85,6 +85,25 @@ export function rootItems(st: UiState): MenuItem[] {
                   label: t.label,
                   action: { type: "ask", npcId: n.id, topic: t.id } as Action,
                 })),
+                /* 임무. 서버가 보낸 것만 — 아직 게시되지 않은 것은 애초에
+                   오지 않는다 (잠긴 주제와 같다). 자격이 모자란 것(locked)은
+                   오되 비활성이다: 무엇을 하면 되는지는 감출 이유가 없다. */
+                ...(st.dialogue.missions ?? []).map((m) => ({
+                  id: `mission:${m.id}`,
+                  label: m.name,
+                  action: (m.state === "complete"
+                    ? { type: "turn_in", npcId: n.id, missionId: m.id }
+                    : { type: "accept_mission", npcId: n.id, missionId: m.id }) as Action,
+                  note:
+                    m.state === "complete"
+                      ? "제출"
+                      : m.state === "taken"
+                        ? `${m.progress}/${m.goal}`
+                        : m.state === "locked"
+                          ? "자격 부족"
+                          : m.reward,
+                  disabled: m.state === "locked" || m.state === "taken",
+                })),
                 ...(n.guild
                   ? [{ id: "promote", label: "승급 신청", action: { type: "promote", npcId: n.id } as Action }]
                   : []),
@@ -109,6 +128,22 @@ export function rootItems(st: UiState): MenuItem[] {
         /* 쓸 수 없는 것(전리품)도 목록에는 둔다 — 가진 것을 숨기지 않는다.
            비활성이라 커서가 건너뛰고, 눌러도 서버가 문장으로 답한다. */
         disabled: !it.usable,
+      })),
+    });
+  }
+
+  /* 일지 — 맡은 것이 있을 때만. 가방과 같은 규칙이다. 전부 비활성이다:
+     읽는 곳이지 누르는 곳이 아니고, 제출은 게시한 사람 앞에서만 된다. */
+  const journal = st.self?.missions ?? [];
+  if (journal.length) {
+    items.push({
+      id: "journal",
+      label: "일지",
+      items: journal.map((m) => ({
+        id: `j:${m.id}`,
+        label: m.name,
+        note: m.done ? "보고" : `${m.progress}/${m.goal}`,
+        disabled: true,
       })),
     });
   }

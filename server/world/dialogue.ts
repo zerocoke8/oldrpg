@@ -12,7 +12,7 @@
 
 import type { RoomId } from "../../shared/ids";
 import { roomIdOf } from "../../shared/ids";
-import type { NpcBrief, TopicView } from "../../shared/protocol";
+import type { MissionOffer, NpcBrief, TopicView } from "../../shared/protocol";
 import { GREET } from "../engine/npcs";
 import type { World } from "../engine/world";
 import type { GameMap } from "../engine/map";
@@ -37,6 +37,10 @@ export function makeDialogue(
   npcText: NpcTextService,
   upgrades: UpgradeService,
   emit: Emit,
+  /** 그 사람이 그 NPC 에게서 지금 받을 수 있는 임무. 주입인 이유는 순환이다 —
+   *  world/missions 는 문장을 위해 lines 를, 기록을 위해 db 를 쓰고, 대화는
+   *  그중 아무것도 알 필요가 없다. 게시 여부·자격 판정은 전부 저쪽이 한다. */
+  offersFor: (s: Session, npcId: string) => MissionOffer[] = () => [],
 ): DialogueService {
   const npcsIn = (roomId: RoomId): NpcBrief[] =>
     map.npcsInRoom(roomId).map((n) => ({ id: n.id, name: n.name, ...(n.guild ? { guild: true } : {}) }));
@@ -86,7 +90,7 @@ export function makeDialogue(
     const npc = world.npc(npcId)!;
     emit.send(s, {
       t: "npc.dialogue",
-      dialogue: { npc: { id: npc.id, name: npc.name }, topics: topicsFor(npcId) },
+      dialogue: { npc: { id: npc.id, name: npc.name }, topics: topicsFor(npcId), missions: offersFor(s, npcId) },
     });
     say(s, npcId, GREET);
     return null;
@@ -102,7 +106,7 @@ export function makeDialogue(
     // 주제 목록을 함께 갱신한다 — 그 사이 세계가 바뀌어 새 주제가 열렸을 수 있다.
     emit.send(s, {
       t: "npc.dialogue",
-      dialogue: { npc: { id: npc.id, name: npc.name }, topics: topicsFor(npcId) },
+      dialogue: { npc: { id: npc.id, name: npc.name }, topics: topicsFor(npcId), missions: offersFor(s, npcId) },
     });
     say(s, npcId, topic);
     return null;

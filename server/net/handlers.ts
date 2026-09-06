@@ -33,6 +33,7 @@ import type { CombatService } from "../world/combat";
 import type { DialogueService } from "../world/dialogue";
 import type { InventoryService } from "../world/inventory";
 import type { GuildService } from "../world/guild";
+import type { MissionService } from "../world/missions";
 import { rankName } from "../engine/guild";
 import type { Balance } from "../engine/enemies";
 import type { Emit } from "./emit";
@@ -69,6 +70,7 @@ export interface Ctx {
   dialogue: DialogueService;
   inventory: InventoryService;
   guild: GuildService;
+  missions: MissionService;
   balance: Balance;
   clock: () => number;
   /** 종료 중인가. true 면 handleClose 가 아무 일도 하지 않는다 —
@@ -438,6 +440,18 @@ export function handleAction(
       action = p.data;
       break;
     }
+    case "accept_mission": {
+      const p = SCHEMAS.accept_mission.safeParse(raw);
+      if (!p.success) return reject(ctx, s, seq, "bad_args");
+      action = p.data;
+      break;
+    }
+    case "turn_in": {
+      const p = SCHEMAS.turn_in.safeParse(raw);
+      if (!p.success) return reject(ctx, s, seq, "bad_args");
+      action = p.data;
+      break;
+    }
     default:
       // 이 서버가 구현하지 않은 variant. 옛 서버가 새 클라이언트를 만나는
       // 경우가 정확히 이것이고, 크래시가 아니라 거절이어야 한다.
@@ -473,6 +487,14 @@ export function handleAction(
       return doWorldCommand(ctx, s, seq, () => ctx.combat.useItem(s, action.itemId));
     case "promote":
       return doWorldCommand(ctx, s, seq, () => ctx.guild.promote(s, action.npcId));
+    case "accept_mission":
+      return doWorldCommand(ctx, s, seq, () =>
+        ctx.missions.accept(s, action.npcId, action.missionId),
+      );
+    case "turn_in":
+      return doWorldCommand(ctx, s, seq, () =>
+        ctx.missions.turnIn(s, action.npcId, action.missionId),
+      );
   }
 }
 

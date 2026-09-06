@@ -36,10 +36,17 @@ const TICK = 100;
 
 /** 한 판. 실제 전투 루프와 같은 규칙으로 돈다 —
  *  전투원마다 nextActAt 이 있고, 100ms 틱에서 때가 된 쪽이 친다. */
-export function bout(enemy: EnemyDef, balance: Balance, style: Style, seed: number): Bout {
+export function bout(
+  enemy: EnemyDef,
+  balance: Balance,
+  style: Style,
+  seed: number,
+  /** 시작 체력. 임무처럼 '연달아 싸우는' 경우를 재려면 만피가 아니어야 한다. */
+  startHp = balance.player.maxHp,
+): Bout {
   const rng = makeRng(seed);
   const p = balance.player;
-  let playerHp = p.maxHp;
+  let playerHp = Math.min(startHp, p.maxHp);
   let enemyHp = enemy.maxHp;
   let guard = 0;
   let now = 0;
@@ -121,6 +128,77 @@ export function simulate(balance: Balance, runs = 200): Summary[] {
   return out;
 }
 
+/* ── 임무는 '연달아' 싸운다 ────────────────────────────────────────────
+   한 판 승률이 100%여도 임무가 깨진다는 것을 실제로 겪었다. 잔류 괴령은
+   혼자서는 100% 이기지만 남는 체력이 40% 라, 둘을 연달아 잡으라는 임무는
+   회복 없이는 두 번째에서 죽는다.
+
+   ★ 그래서 '한 판' 만 재는 표로는 임무를 검토할 수 없다. 곡선은 결국
+     '쉬지 않고 이어지는 판들' 의 이야기다. */
+
+export interface RunSummary {
+  id: string;
+  name: string;
+  style: Style;
+  /** 물약을 몇 개 들고 들어가는가. */
+  potions: number;
+  clearRate: number;
+  /** 끝까지 갔을 때 남은 체력 중앙값(%). */
+  medianHpPct: number;
+}
+
+/** 목표 수만큼 연달아 싸운다. 사이에 회복은 물약뿐이고, 체력이 절반 아래로
+ *  떨어지면 하나 마신다 (사람이 할 법한 판단). */
+export function runMission(
+  enemy: EnemyDef,
+  count: number,
+  balance: Balance,
+  style: Style,
+  potions: number,
+  seed: number,
+): { cleared: boolean; hpLeft: number } {
+  const p = balance.player;
+  const heal = Object.values(balance.items).find((i) => i.kind === "potion")?.heal ?? 0;
+  let hp = p.maxHp;
+  let left = potions;
+  for (let i = 0; i < count; i++) {
+    while (left > 0 && hp <= p.maxHp * 0.5) {
+      hp = Math.min(p.maxHp, hp + heal);
+      left--;
+    }
+    const b = bout(enemy, balance, style, seed + i * 7919, hp);
+    if (!b.win) return { cleared: false, hpLeft: 0 };
+    hp = b.hpLeft;
+  }
+  return { cleared: true, hpLeft: hp };
+}
+
+export function simulateMissions(balance: Balance, runs = 200): RunSummary[] {
+  const map = makeMap(loadWorld());
+  const out: RunSummary[] = [];
+  for (const m of map.missions()) {
+    const enemy = balance.enemies[m.goal.enemyId];
+    if (!enemy) continue;
+    for (const style of ["basic", "skilled"] as const) {
+      for (const potions of [0, 2]) {
+        const rs = Array.from({ length: runs }, (_, i) =>
+          runMission(enemy, m.goal.count, balance, style, potions, i * 2654435761 + 1),
+        );
+        const ok = rs.filter((r) => r.cleared);
+        out.push({
+          id: m.id,
+          name: `${m.name} (${enemy.name} x${m.goal.count})`,
+          style,
+          potions,
+          clearRate: ok.length / rs.length,
+          medianHpPct: Math.round((median(ok.map((r) => r.hpLeft)) / balance.player.maxHp) * 100),
+        });
+      }
+    }
+  }
+  return out;
+}
+
 function main(argv: string[]): void {
   const at = (f: string): string | undefined => {
     const i = argv.indexOf(f);
@@ -151,6 +229,19 @@ function main(argv: string[]): void {
     const es = Object.values(r.enemies);
     const names = es.map((id) => balance.enemies[id]?.name ?? `?${id}`);
     console.log(`${r.id.padEnd(9)} ${String(Object.keys(r.seeds).length).padStart(3)}방  적 ${String(es.length).padStart(2)}  ${names.join(", ") || "-"}`);
+  }
+
+  /* 임무는 연달아 싸운다. 한 판 승률 100%가 임무 완주를 뜻하지 않는다. */
+  console.log("\n임무 완주 (만피에서 시작, 사이에 회복은 물약뿐)");
+  console.log("─".repeat(72));
+  console.log("임무                              방식   물약   완주율   남은 체력");
+  for (const r of simulateMissions(balance, Number(at("--runs") ?? 200))) {
+    const bar = "█".repeat(Math.round(r.clearRate * 10)).padEnd(10, "·");
+    console.log(
+      `${r.name.padEnd(32)} ${(r.style === "basic" ? "기본" : "스킬").padEnd(5)} ` +
+        `${String(r.potions).padStart(3)}개  ${bar} ${String(Math.round(r.clearRate * 100)).padStart(3)}%  ` +
+        `${String(r.medianHpPct).padStart(3)}%`,
+    );
   }
 }
 
