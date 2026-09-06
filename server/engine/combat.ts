@@ -28,6 +28,9 @@ export interface SwingResult {
   readonly skill: SkillDef | null;
   /** 이 스윙으로 적이 죽었는가. */
   readonly lethal: boolean;
+  /** 치유·방어가 '남' 에게 갔으면 그 사람. 자기 자신이면 없다.
+   *  문장을 누구에게 어떻게 보낼지가 이걸로 갈린다 (문장 자체는 narration/). */
+  readonly toPlayerId?: PlayerId;
 }
 
 /** 플레이어의 한 스윙. 스킬이 예약돼 있으면 기본 공격을 '대신한다'. */
@@ -42,30 +45,46 @@ export function resolvePlayerSwing(
   /** 수치는 코드가 아니라 데이터가 소유한다 (content/balance/). 난수·시계와
    *  같은 이유로 주입받는다 — engine/ 은 파일도 DB 도 모른다. */
   balance: Balance,
+  /** 치유·방어를 받을 사람. 없으면 자기 자신이다.
+   *
+   *  ★ 이 인자 하나가 협동에 '역할' 을 만든다. 어그로가 '가장 많이 때린 사람'
+   *    이라 여럿이 붙으면 잘 때리는 쪽이 혼자 다 맞는데, 남을 살릴 수 없으면
+   *    약한 쪽은 도울 수단이 없고 강한 쪽은 도움받을 수 없다. 그러면 둘은
+   *    서로에게 '옆에 서 있는 추가 DPS' 이상이 못 된다.
+   *
+   *  ★ 누가 대상이 될 수 있는지는 여기서 보지 않는다 — 같은 전투인가,
+   *    그 스킬이 ally 인가는 호출자(world/combat.ts)가 다시 본다.
+   *    engine 은 세션도 전투 목록도 모른다. */
+  ally?: { readonly playerId: PlayerId; readonly hp: number; readonly maxHp: number },
 ): SwingResult {
   const skill = queuedSkillId ? (balance.skills[queuedSkillId] ?? null) : null;
+  /* 대상은 ally 가 주어졌고 그 스킬이 남에게 걸 수 있을 때만 바뀐다.
+     strike 는 대상을 무시한다 — 때리는 것은 언제나 적이다. */
+  const to = skill?.target === "ally" && ally ? ally : { playerId, hp: playerHp, maxHp: playerMaxHp };
 
   if (skill?.kind === "heal") {
     // 잃은 만큼만 회복한다 — max_hp CHECK 제약이 DB 에 있다.
     const rolled = rng.int(skill.power[0], skill.power[1]);
-    const amount = Math.min(rolled, playerMaxHp - playerHp);
+    const amount = Math.min(rolled, to.maxHp - to.hp);
     return {
-      effects: amount > 0 ? [{ type: "playerHeal", playerId, amount }] : [],
+      effects: amount > 0 ? [{ type: "playerHeal", playerId: to.playerId, amount }] : [],
       crit: false,
       amount,
       skill,
       lethal: false,
+      ...(to.playerId === playerId ? {} : { toPlayerId: to.playerId }),
     };
   }
 
   if (skill?.kind === "guard") {
     const percent = rng.int(skill.power[0], skill.power[1]);
     return {
-      effects: [{ type: "guard", playerId, percent }],
+      effects: [{ type: "guard", playerId: to.playerId, percent }],
       crit: false,
       amount: percent,
       skill,
       lethal: false,
+      ...(to.playerId === playerId ? {} : { toPlayerId: to.playerId }),
     };
   }
 
@@ -161,8 +180,18 @@ export interface EnemySwingResult {
   readonly amount: number;
   /** 방어 태세로 경감됐는가. */
   readonly guarded: boolean;
+  /** 예고 뒤의 큰 일격이었는가. */
+  readonly heavy: boolean;
   /** 이 스윙으로 대상이 쓰러졌는가. */
   readonly lethal: boolean;
+}
+
+/** 이번이 몸을 젖힐 차례인가. 호출자가 '예고 뒤로 몇 번 때렸는지' 를 센다.
+ *
+ *  ★ 순수하고 난수가 없다. 예고가 무작위면 방어 태세를 맞춰 쓸 수 없고,
+ *    그러면 '언제' 라는 축을 만들려던 이유가 사라진다 — 운으로 바뀐다. */
+export function windsUp(enemy: EnemyDef, swingsSinceWindup: number): boolean {
+  return enemy.windup !== null && swingsSinceWindup >= enemy.windup.everyNth;
 }
 
 /** 적의 한 스윙. 대상은 호출자가 pickTarget 으로 정해 넘긴다. */
@@ -172,8 +201,14 @@ export function resolveEnemySwing(
   targetHp: number,
   guardPercent: number,
   rng: Rng,
+  /** 예고 뒤의 일격인가. 호출자(world/combat.ts)가 예고를 기억한다 —
+   *  engine 은 전투가 몇 초째인지도, 무엇을 이미 보냈는지도 모른다. */
+  heavy = false,
 ): EnemySwingResult {
   let amount = rng.int(enemy.damage[0], enemy.damage[1]);
+  /* 배수를 먼저, 경감을 나중에. 반대로 하면 방어 태세가 '큰 일격의 절반' 이
+     아니라 '평범한 한 대의 절반' 만 막아 주고, 예고를 넣은 이유가 없어진다. */
+  if (heavy && enemy.windup) amount = Math.round(amount * enemy.windup.mult);
   const guarded = guardPercent > 0;
   if (guarded) amount = Math.max(1, Math.round((amount * (100 - guardPercent)) / 100));
   const dealt = Math.min(amount, targetHp);
@@ -182,6 +217,7 @@ export function resolveEnemySwing(
     targetId,
     amount: dealt,
     guarded,
+    heavy: heavy && enemy.windup !== null,
     lethal: dealt >= targetHp,
   };
 }

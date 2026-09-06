@@ -101,6 +101,15 @@ export const lines = {
       : `${enemy}의 일격. ${dmg}의 피해를 입었다.`,
   enemyHitOther: (enemy: string, who: string, dmg: number): string =>
     `${enemy}이(가) ${who}을(를) 후려친다. ${dmg}.`,
+  /* 예고와 그 뒤의 일격. 예고 줄이 없으면 큰 피해가 이유 없이 들어온 것이 되고,
+     막았다는 줄이 없으면 방어 태세를 쓴 값이 화면에 남지 않는다. */
+  enemyWindup: (enemy: string): string => `${enemy}이(가) 크게 몸을 젖힌다.`,
+  enemyHeavy: (enemy: string, dmg: number, guarded: boolean): string =>
+    guarded
+      ? `내리꽂히는 것을 비껴냈다. ${dmg}의 피해.`
+      : `${enemy}의 일격이 내리꽂힌다. ${dmg}의 피해를 입었다.`,
+  enemyHeavyOther: (enemy: string, who: string, dmg: number): string =>
+    `${enemy}의 일격이 ${who}에게 내리꽂힌다. ${dmg}.`,
   skillStrike: (skill: string, enemy: string, dmg: number): string =>
     `${skill}! ${enemy}에게 ${dmg}의 피해.`,
   skillHeal: (skill: string, amount: number): string =>
@@ -108,6 +117,20 @@ export const lines = {
   skillGuard: (skill: string, percent: number): string =>
     `${skill}. 다음 일격을 ${percent}% 흘려낼 수 있다.`,
   skillQueued: (skill: string): string => `${skill} 준비 — 다음 호흡에 나간다.`,
+  skillQueuedAt: (skill: string, who: string): string =>
+    `${who}에게 ${skill} 준비 — 다음 호흡에 나간다.`,
+  skillSelfOnly: (skill: string): string => `${skill}은(는) 자기에게만 쓸 수 있다.`,
+  skillNoAlly: "그 사람은 이 싸움에 없다.",
+  /* 남에게 건 치유·방어. 거는 쪽과 받는 쪽이 다른 문장을 듣는다 — 받는 쪽은
+     자기 체력이 왜 올랐는지 알아야 하고, 거는 쪽은 그게 닿았는지 알아야 한다. */
+  skillHealOther: (skill: string, who: string, amount: number): string =>
+    amount > 0 ? `${who}에게 ${skill}. ${amount} 회복시켰다.` : `${who}의 상처가 이미 아물어 있다.`,
+  skillHealedBy: (skill: string, who: string, amount: number): string =>
+    `${who}의 ${skill}. 체력이 ${amount} 회복되었다.`,
+  skillGuardOther: (skill: string, who: string, percent: number): string =>
+    `${who}에게 ${skill}. 다음 일격을 ${percent}% 흘려낸다.`,
+  skillGuardedBy: (skill: string, who: string, percent: number): string =>
+    `${who}가 앞을 막아선다. 다음 일격을 ${percent}% 흘려낼 수 있다.`,
   skillCooling: (skill: string, secs: number): string => `${skill}은(는) 아직 ${secs}초 남았다.`,
   /** 어그로가 옮겨간 순간. 실시간에서 이게 안 보이면 왜 맞는지 알 수 없다. */
   threatShift: (enemy: string, who: string): string => `${enemy}의 시선이 ${who}에게 옮겨간다.`,

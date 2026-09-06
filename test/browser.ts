@@ -247,6 +247,16 @@ async function main() {
   check("커맨드 창에 '싸우기' 가 떴다 (방에 적이 있다)",
     (await c.locator("button:has-text('싸우기')").count()) > 0);
 
+  /* B 도 같은 방으로 온다 — 아직 전투에 붙지는 않는다.
+     (3,3) -> (4,3) -> (5,3) -> (5,4) -> (5,5) -> (4,5) -> (3,5)
+     아래에서 '같은 방에 있어도 전투에 없으면 대상이 아니다' 를 볼 수 있게
+     C 가 교전을 시작하기 전에 미리 세워 둔다 — C 가 맞고 있는 시간을
+     늘리지 않으려는 것이기도 하다 (진짜 시계로 도는 절이다). */
+  for (const k of ["ArrowRight", "ArrowRight", "ArrowDown", "ArrowDown", "ArrowLeft", "ArrowLeft"]) {
+    await b.keyboard.press(k);
+    await sleep(300);
+  }
+
   // 5단계: 명령은 전부 커맨드 창 한 곳에 있다. 싸우기 -> 공격.
   await c.locator("button:has-text('싸우기')").first().click();
   await sleep(150);
@@ -280,20 +290,91 @@ async function main() {
     await c.locator("button:has-text('강타')").first().isDisabled());
   await c.screenshot({ path: join(SHOTS, "11-스킬.png") });
 
+  /* ★ 치유·방어의 대상 고르기. 혼자면 고를 것이 없어 예전처럼 즉시 나가고,
+     둘이 붙는 순간 '자기에게 / 상대' 가 열린다 — 메뉴는 상태의 순수 함수라
+     서버가 보낸 combat.allies 하나로 가지가 생긴다 (닫으라고 시킬 필요가
+     없는 것과 같은 이유). */
+  /* 혼자 붙어 있을 때는 고를 것이 없다 — 목록을 열지 않고 곧장 자기에게
+     나간다. B 는 같은 방에 서 있지만 전투에 없으므로 후보가 아니다
+     (서버가 combat.allies 를 전투원으로만 채운다). */
+  await c.locator("button:has-text('응급 치료')").first().click();
+  await sleep(900);
+  check("★ 혼자면 목록 없이 자기에게 나간다 (같은 방의 구경꾼은 후보가 아니다)",
+    (await c.locator("button:has-text('자기에게')").count()) === 0 &&
+      (await logText(c)).some((t) => t.startsWith("응급 치료 준비")),
+    JSON.stringify((await logText(c)).slice(-3)));
+
+  /* ★ 둘 다 손을 멈춘 채로 본다. 이 절은 진짜 시계로 돌기 때문에, 여기서
+     주고받은 만큼 파수꾼의 체력이 줄고 그것이 ⑪ 의 '언제 플래그가 켜지는가'
+     를 통째로 앞당긴다. 물러나도 전투에서 빠지지는 않는다 — 이미 준 피해는
+     그대로이고, 그래서 대상 후보로도 남는다. */
+  await c.locator("button:has-text('물러나기')").first().click();
+  await sleep(150);
+  await b.locator("button:has-text('싸우기')").first().click();
+  await sleep(150);
+  await b.locator("button:has-text('공격')").first().click();
+  await sleep(300);
+  await b.locator("button:has-text('물러나기')").first().click();
+  await sleep(200);
+  /* 이름은 서버가 지은 것이라 여기서 만들지 않는다 — 로스터 줄에서 읽는다. */
+  /* 마지막 로스터 줄 — B 는 스폰에서도 한 번 봤다 (거기 서 있던 것은 A 다). */
+  const roster = [...(await logText(b))].reverse().find((t) => t.includes("이곳에") && t.includes("서 있다"));
+  const allyName = (/이곳에\s*(.+?)\s*님이/.exec(roster ?? "")?.[1] ?? "").trim();
+  check("B 가 같은 전투에 붙었다", allyName.length > 0, JSON.stringify(roster));
+  await b.locator("button:has-text('응급 치료')").first().click();
+  await sleep(200);
+  check("★ 둘이 붙자 '응급 치료' 가 대상 목록을 연다 (즉시 나가지 않는다)",
+    (await b.locator("button:has-text('자기에게')").count()) > 0);
+  check("★ 목록에 같은 전투의 상대가 있다",
+    (await b.locator(`button:has-text("${allyName}")`).count()) > 0, allyName);
+  await b.screenshot({ path: join(SHOTS, "11b-대상고르기.png") });
+  await b.locator(`button:has-text("${allyName}")`).first().click();
+  await sleep(900);
+  check("★ 건 쪽은 '누구에게' 를 듣는다 (같은 skill 액션에 대상만 붙는다)",
+    (await logText(b)).some((t) => t.includes(allyName) && t.includes("회복")),
+    JSON.stringify((await logText(b)).slice(-3)));
+  check("★ 받은 쪽도 듣는다 — 어그로를 쥔 사람이 왜 버티는지가 화면에 있다",
+    (await logText(c)).some((t) => t.includes("응급 치료") && t.includes("회복되었다")),
+    JSON.stringify((await logText(c)).slice(-3)));
+  /* B 의 화살표를 이동으로 되돌린다. 버튼을 누른 순간 B 는 커맨드 모드이고,
+     모드가 하나뿐이라는 것이 이 게임의 규칙이다. */
+  await b.keyboard.press("Escape"); // 대상 목록 -> 싸우기
+  await sleep(120);
+  await b.keyboard.press("Escape"); // 싸우기 -> 최상위
+  await sleep(120);
+  await b.keyboard.press("Escape"); // 최상위 -> 필드
+  await sleep(120);
+  // C 를 다시 붙인다 — 아래 절이 '교전 중' 을 전제한다.
+  await c.locator("button:has-text('공격')").first().click();
+  await sleep(200);
+
   // 접힌 로그를 펼쳐 본다
   await c.locator("text=공방이 오갔다").first().click();
   await sleep(150);
   check("접힌 로그를 펼칠 수 있다", (await c.locator("text=접기").count()) > 0);
   await c.screenshot({ path: join(SHOTS, "12-로그-펼침.png") });
 
-  // 방을 벗어나 교전을 끊는다. (2,5) 도 guardian_slain 영향권이라
-  // 다음 절에서 C 는 'near' 를 받는다.
-  await c.keyboard.press("ArrowLeft");
+  /* 방을 벗어나 교전을 끊는다. (2,5) 도 guardian_slain 영향권이라
+     다음 절에서 C 는 'near' 를 받는다.
+
+     ★ D패드를 누른다. 화살표가 아니라 — C 는 지금 커맨드 창 안에 서 있고
+       (버튼을 눌러 들어왔다), 그 모드에서 ←는 이동이 아니라 '뒤로' 다.
+       화살표로 눌렀을 때 아래 두 검사가 통과한 것은 방을 나가서가 아니라
+       한 층 올라왔기 때문이었다 — 즉 '가지가 사라진다' 를 보고 있지 않았다.
+       D패드는 모드와 무관하게 이동이라, 커맨드 창 안에 선 채로 방을 나갈 수
+       있다. 그게 이 검사가 보려던 상황이다. */
+  await c.locator("button[aria-label='서쪽으로']").first().click();
   await sleep(400);
   check("걸어 나가니 전투 패널이 사라졌다",
     (await c.locator("button:has-text('물러나기')").count()) === 0);
   check("★ 서 있던 커맨드 경로도 최상위로 되돌아갔다 (가지가 사라졌다)",
     (await c.locator("button:has-text('살펴보기')").count()) > 0);
+
+  // B 를 스폰(3,3)으로 돌려놓는다 — 다음 절이 거기서 시작한다.
+  for (const k of ["ArrowRight", "ArrowRight", "ArrowUp", "ArrowUp", "ArrowLeft", "ArrowLeft"]) {
+    await b.keyboard.press(k);
+    await sleep(300);
+  }
 
   console.log("\n⑩ 4b단계 — NPC 대화 (말을 걸어야 나온다)");
   /* B 는 스폰(3,3). 제단지기의 방(3,1)까지: 좌 좌 상 상 우 우.

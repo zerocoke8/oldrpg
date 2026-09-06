@@ -14,15 +14,18 @@
  * ★ 왜 여러 번 도는가: 굴림이 난수라 한 번은 아무것도 말해 주지 않는다.
  *   시드를 바꿔 가며 돌리고 승률과 분포를 본다. */
 
-import { resolveEnemySwing, resolvePlayerSwing } from "../engine/combat";
+import { resolveEnemySwing, resolvePlayerSwing, windsUp } from "../engine/combat";
 import { makeRng } from "../engine/rng";
 import type { Balance, EnemyDef } from "../engine/enemies";
 import { loadBalance } from "../content/balance";
 import { makeMap } from "../engine/map";
 import { loadWorld } from "../content/world";
 
-/** 플레이어가 어떻게 싸우는가. '잘 하는 사람' 과 '안 쓰는 사람' 을 나눠 본다. */
-export type Style = "basic" | "skilled";
+/** 플레이어가 어떻게 싸우는가.
+ *  basic    스킬을 안 쓴다
+ *  skilled  체력을 보고 쓴다 (불린 하나짜리 전략)
+ *  reactive 예고를 보고 방어 태세를 맞춰 쓴다 — 예고가 만든 '언제' 축을 쓴다 */
+export type Style = "basic" | "skilled" | "reactive";
 
 export interface Bout {
   win: boolean;
@@ -53,6 +56,9 @@ export function bout(
   let pNext = 0;
   let eNext = enemy.swingMs; // 적은 한 박자 늦게 시작한다 (교전을 건 쪽이 먼저 친다)
   const cooldowns = new Map<string, number>();
+  // 예고 상태. 전투 루프(world/combat.ts)가 들고 있는 것과 같은 두 값이다.
+  let swingsSinceWindup = 0;
+  let charged = false;
 
   /** 스킬을 쓰는 사람의 판단. 체력이 낮으면 회복, 아니면 강타. */
   const pickSkill = (): string | null => {
@@ -61,6 +67,9 @@ export function bout(
     const heal = balance.skillList.find((s) => s.kind === "heal");
     const strike = balance.skillList.find((s) => s.kind === "strike");
     const guardSkill = balance.skillList.find((s) => s.kind === "guard");
+    /* ★ 예고를 보고 막는다. 이 한 줄이 reactive 와 skilled 의 전부다 —
+       두 표의 차이가 곧 '예고가 방어 태세에 값을 붙였는가' 다. */
+    if (style === "reactive" && charged && guardSkill && ready(guardSkill.id)) return guardSkill.id;
     if (heal && ready(heal.id) && playerHp <= p.maxHp * 0.45) return heal.id;
     if (guardSkill && ready(guardSkill.id) && playerHp <= p.maxHp * 0.3) return guardSkill.id;
     if (strike && ready(strike.id)) return strike.id;
@@ -84,10 +93,18 @@ export function bout(
       pNext = now + p.swingMs;
     }
     if (eNext <= now) {
-      const r = resolveEnemySwing(enemy, "p", playerHp, guard, rng);
-      guard = 0; // 한 번 쓰면 사라진다
-      playerHp -= r.amount;
-      if (playerHp <= 0) return { win: false, ms: now, hpLeft: 0 };
+      // 예고는 한 박자를 통째로 쓴다 — 전투 루프와 같은 규칙이다.
+      if (!charged && windsUp(enemy, swingsSinceWindup)) {
+        charged = true;
+        swingsSinceWindup = 0;
+      } else {
+        const r = resolveEnemySwing(enemy, "p", playerHp, guard, rng, charged);
+        if (!charged) swingsSinceWindup++;
+        charged = false;
+        guard = 0; // 한 번 쓰면 사라진다
+        playerHp -= r.amount;
+        if (playerHp <= 0) return { win: false, ms: now, hpLeft: 0 };
+      }
       eNext = now + enemy.swingMs;
     }
     now += TICK;
@@ -106,13 +123,17 @@ export interface Summary {
   medianHpPct: number;
 }
 
+/** 표에 쓰는 이름. 예고를 보고 막는 쪽은 '반응' 이다. */
+const styleLabel = (s: Style): string =>
+  s === "basic" ? "기본" : s === "skilled" ? "스킬" : "반응";
+
 const median = (xs: number[]): number =>
   xs.length === 0 ? 0 : [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)]!;
 
 export function simulate(balance: Balance, runs = 200): Summary[] {
   const out: Summary[] = [];
   for (const enemy of Object.values(balance.enemies)) {
-    for (const style of ["basic", "skilled"] as const) {
+    for (const style of ["basic", "skilled", "reactive"] as const) {
       const bouts = Array.from({ length: runs }, (_, i) => bout(enemy, balance, style, i * 2654435761 + 1));
       const wins = bouts.filter((b) => b.win);
       out.push({
@@ -179,7 +200,7 @@ export function simulateMissions(balance: Balance, runs = 200): RunSummary[] {
   for (const m of map.missions()) {
     const enemy = balance.enemies[m.goal.enemyId];
     if (!enemy) continue;
-    for (const style of ["basic", "skilled"] as const) {
+    for (const style of ["basic", "skilled", "reactive"] as const) {
       for (const potions of [0, 2]) {
         const rs = Array.from({ length: runs }, (_, i) =>
           runMission(enemy, m.goal.count, balance, style, potions, i * 2654435761 + 1),
@@ -214,7 +235,7 @@ function main(argv: string[]): void {
   for (const r of rows) {
     const bar = "█".repeat(Math.round(r.winRate * 10)).padEnd(10, "·");
     console.log(
-      `${r.name.padEnd(16)} ${(r.style === "basic" ? "기본" : "스킬").padEnd(6)} ` +
+      `${r.name.padEnd(16)} ${styleLabel(r.style).padEnd(6)} ` +
         `${bar} ${String(Math.round(r.winRate * 100)).padStart(3)}%  ` +
         `${String(r.medianSec).padStart(5)}s  ${String(r.medianHpPct).padStart(3)}%`,
     );
@@ -238,7 +259,7 @@ function main(argv: string[]): void {
   for (const r of simulateMissions(balance, Number(at("--runs") ?? 200))) {
     const bar = "█".repeat(Math.round(r.clearRate * 10)).padEnd(10, "·");
     console.log(
-      `${r.name.padEnd(32)} ${(r.style === "basic" ? "기본" : "스킬").padEnd(5)} ` +
+      `${r.name.padEnd(32)} ${styleLabel(r.style).padEnd(5)} ` +
         `${String(r.potions).padStart(3)}개  ${bar} ${String(Math.round(r.clearRate * 100)).padStart(3)}%  ` +
         `${String(r.medianHpPct).padStart(3)}%`,
     );

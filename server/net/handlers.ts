@@ -478,7 +478,7 @@ export function handleAction(
     case "attack":
       return doWorldCommand(ctx, s, seq, () => ctx.combat.attack(s));
     case "skill":
-      return doWorldCommand(ctx, s, seq, () => ctx.combat.skill(s, action.skillId));
+      return doWorldCommand(ctx, s, seq, () => ctx.combat.skill(s, action.skillId, action.targetId));
     case "stop":
       return doWorldCommand(ctx, s, seq, () => ctx.combat.stop(s));
     /* 대화도 전투와 같은 모양이다: "그런 이는 여기에 없다" 는 계약 위반이

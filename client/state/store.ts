@@ -221,6 +221,8 @@ export function reduce(st: UiState, m: ServerMsg | LocalMsg): UiState {
           ...(m.queuedSkill !== undefined ? { queuedSkill: m.queuedSkill } : {}),
           ...(m.queuedItem !== undefined ? { queuedItem: m.queuedItem } : {}),
           ...(m.skills !== undefined ? { skills: m.skills } : {}),
+          ...(m.allies !== undefined ? { allies: m.allies } : {}),
+          ...(m.winding !== undefined ? { winding: m.winding } : {}),
           ...(m.engaged !== undefined ? { engaged: m.engaged } : {}),
         },
       };

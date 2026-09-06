@@ -103,7 +103,9 @@ export type Action =
   /** 스킬을 예약한다. 다음 스윙(최대 0.5초)에 기본 공격을 '대신해' 발동한다.
    *  큐는 하나 — 다시 누르면 덮어쓴다(나중 입력이 이긴다).
    *  쿨다운은 서버가 강제한다. 클라이언트의 쿨다운 표시는 안내일 뿐이다. */
-  | { type: "skill"; skillId: string }
+  /* targetId 는 치유·방어를 남에게 걸 때만 쓴다. 없으면 자기 자신이고,
+     그래서 옛 클라이언트가 보낸 것도 그대로 돈다 (순수 가산). */
+  | { type: "skill"; skillId: string; targetId?: PlayerId }
   /** 교전을 끊는다. 방을 벗어나도 같은 효과다. */
   | { type: "stop" }
   /** NPC 에게 말을 건다. 인사(greet)를 듣고 열려 있는 주제 목록을 받는다. */
@@ -305,6 +307,11 @@ export interface SkillView {
   /** 쿨다운이 끝나기까지 남은 밀리초. 0 이면 지금 쓸 수 있다.
    *  절대 시각이 아니라 '남은 시간' 인 이유: 클라이언트 시계를 믿지 않는다. */
   readyInMs: number;
+  /** 누구에게 거는가. "ally" 면 커맨드 창이 대상 목록을 편다.
+   *  이것이 와이어에 있는 이유: skills.json 은 서버에만 있고, 클라이언트가
+   *  스킬 id 로 "mend 는 남에게 걸 수 있지" 를 알기 시작하면 수치 파일이
+   *  클라이언트 배포를 요구하게 된다. */
+  target: "self" | "ally";
 }
 
 /** 내가 지금 하고 있는 전투. 없으면 null. */
@@ -320,6 +327,15 @@ export interface CombatView {
   skills: SkillView[];
   /** 지금 적이 노리고 있는 사람. 누적 데미지가 가장 높은 사람이다. */
   targetId: PlayerId | null;
+  /** 적이 몸을 젖혀 두었다 — 다음 스윙이 큰 것이다.
+   *  문장(log)과 별도로 싣는 이유는 언제나처럼 같다: 화면이 상태를 그리는 데
+   *  로그를 파싱하지 않는다. 예고를 놓친 사람도 패널에서 볼 수 있어야 한다. */
+  winding: boolean;
+  /** 이 전투에 같이 붙어 있는 다른 사람들. 치유·방어의 대상 후보다.
+   *  같은 방의 '구경꾼' 은 여기 없다 — 전투에 없는 사람에게는 걸 수 없고,
+   *  서버가 그렇게 다시 판정한다(skillNoAlly). 목록을 넓게 주면 누르는
+   *  족족 거절당하는 항목이 생긴다. */
+  allies: PlayerBrief[];
 }
 
 /** 클라이언트에 공개되는 월드 플래그 하나.
@@ -576,6 +592,11 @@ export interface CombatUpdate {
   /** 쿨다운이 바뀐 스킬들. */
   skills?: SkillView[];
   engaged?: boolean;
+  /** 전투원이 드나들면 대상 후보가 달라진다. skills 와 같은 이유로 매 스윙
+   *  함께 실린다 — 한 방의 전투원 수만큼이라 아낄 바이트가 아니다. */
+  allies?: PlayerBrief[];
+  /** 예고가 켜졌거나 꺼졌다. */
+  winding?: boolean;
 }
 
 export interface CombatEnd {

@@ -62,7 +62,15 @@ export function makeActionSchemas(limits: { sayMaxLen: number; unparsedMaxLen: n
     attack: z.object({ type: z.literal("attack") }).strict(),
     // skillId 는 서버의 SKILLS 테이블에 있는지 핸들러가 다시 확인한다 —
     // 스키마는 '문자열이고 길이가 온당한가' 까지만 본다.
-    skill: z.object({ type: z.literal("skill"), skillId: z.string().max(32) }).strict(),
+    /* targetId 가 같은 전투의 사람인지, 그 스킬이 남에게 걸 수 있는지는
+       핸들러가 다시 본다 (아이템·NPC 와 같은 규칙). */
+    skill: z
+      .object({
+        type: z.literal("skill"),
+        skillId: z.string().max(32),
+        targetId: z.string().max(64).optional(),
+      })
+      .strict(),
     stop: z.object({ type: z.literal("stop") }).strict(),
     // npcId / topic 이 실제로 존재하고 '지금 열려 있는지' 는 핸들러가 다시 본다 —
     // 스키마는 형태만 본다 (charter 82줄: 서버가 전부 재검증한다).

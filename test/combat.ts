@@ -33,7 +33,7 @@ import { makeMap } from "../server/engine/map";
 /** 서버가 이 검사에서 실제로 부팅하는 것과 '같은' 세계 (test/fixture.ts). */
 const map = makeMap(FIXTURE_WORLD);
 const SPAWN = map.spawn;
-import { pickTarget } from "../server/engine/combat";
+import { pickTarget, resolveEnemySwing, resolvePlayerSwing, windsUp } from "../server/engine/combat";
 
 const PORT = 8906;
 const DB = join(tmpdir(), `mud-combat-${process.pid}.db`);
@@ -74,6 +74,10 @@ class Client {
   token: string | null = null;
   /** 접속 때 붙잡아 둔다 — clear() 가 welcome 을 지우기 때문이다. */
   id = "";
+  name = "";
+  /** 지금 체력. clear() 로 지워지지 않는다 — 진짜 클라이언트가 그렇듯,
+   *  받은 메시지를 상태에 접어 넣는다. 인박스를 세는 것과 다른 축이다. */
+  hp = -1;
   seq = 0;
   constructor(
     readonly label: string,
@@ -91,7 +95,10 @@ class Client {
       if (m.t === "welcome") {
         this.token = m.token;
         this.id = m.self.id;
+        this.name = m.self.name;
       }
+      if (m.t === "snapshot") this.hp = m.self.hp;
+      if (m.t === "self.patch" && m.hp !== undefined) this.hp = m.hp;
       if (m.t === "ping") this.ws.send(JSON.stringify({ t: "pong", nonce: m.nonce }));
     });
     this.seq = 0;
@@ -241,12 +248,16 @@ async function main() {
   check("물러났다고 알려준다", alice.texts("sys").some((t) => t.includes("물러났다")));
   check("engaged=false", alice.lastCombat()?.engaged === false);
   const enemyHpAtStop = alice.lastCombat()?.enemyHp ?? 0;
+  const myHpAtStop = alice.hp;
   alice.clear();
   await advance(1500);
   check("적 HP는 더 줄지 않았다 (내가 안 때리므로)",
     (alice.lastCombat()?.enemyHp ?? 0) === enemyHpAtStop);
+  /* 문장이 아니라 체력으로 본다. 어느 문장이 오는지는 그 사이에 예고가
+     끼었는지에 달려 있고(평범한 일격/내리꽂히는 일격), 그건 이 절이 보려는
+     것이 아니다 — 여기서 묻는 것은 "물러나도 계속 맞는가" 하나다. */
   check("그래도 적은 나를 때린다 (실시간이다)",
-    alice.logs("combat").some((l) => l.text.includes("일격")), JSON.stringify(alice.texts()));
+    alice.hp < myHpAtStop, `${myHpAtStop} -> ${alice.hp}`);
 
   await alice.actAndWait({ type: "attack" });
   check("다시 붙을 수 있다", alice.lastCombat()?.engaged === true);
@@ -392,13 +403,52 @@ async function main() {
     JSON.stringify(back?.combat.enemy));
   await erin.actAndWait({ type: "stop" });
 
-  section("⑩' 보스는 돌아오지 않는다");
-  // ⑦ 에서 파수꾼을 이미 쓰러뜨렸다. 아무리 기다려도 그 방은 비어 있어야 한다.
+  /* ★ '세계를 바꾸는가' 와 '돌아오는가' 는 다른 축이다.
+     한때 밸런스의 refine 이 그 둘을 묶어 "slainFlag 를 켜는 적은 respawnMs 를
+     가질 수 없다" 고 강제했다. 그래서 보스가 서버 수명 동안 한 번뿐이었고,
+     첫 플레이어가 잡고 나면 나머지 전원에게 임무 5개 중 2개와 적 6종 중
+     2종이 없는 게임이 됐다. 지금은 플래그가 '사건의 기록' 이고 존재는
+     리스폰 타이머가 정한다. */
+  section("⑩' 플래그와 리스폰은 다른 축이다");
+  // ⑦ 에서 파수꾼을 이미 쓰러뜨렸다. 픽스처의 파수꾼은 respawnMs 가 null 이다.
   await advance(120_000);
-  check("★ 파수꾼은 두 배의 시간이 지나도 돌아오지 않는다",
+  check("★ 돌아오지 않기로 한 적(respawnMs: null)은 두 배의 시간이 지나도 안 온다",
     server.combat.enemyIn("b1:3,5") === null);
+  check("플래그는 켜진 채다 (세계가 바뀐 사건이다)",
+    server.ctx.world.flagValue("guardian_slain") === true);
   check("반복되는 적은 같은 시간 뒤에 돌아와 있다",
     server.combat.enemyIn("b1:5,2") !== null);
+
+  /* 같은 적에게 리스폰을 주면 '플래그는 켜진 채로' 돌아와야 한다.
+     밸런스만 바꾼 다른 서버로 확인한다 — 이건 코드가 아니라 데이터의 결정이다. */
+  const DB3 = join(tmpdir(), `mud-combat-boss-${process.pid}.db`);
+  for (const f of [DB3, `${DB3}-wal`, `${DB3}-shm`]) rmSync(f, { force: true });
+  let clock3 = 1_000_000;
+  const respawning = {
+    ...BALANCE,
+    enemies: {
+      ...BALANCE.enemies,
+      shadow_warden: { ...BALANCE.enemies.shadow_warden!, respawnMs: 30_000 },
+    },
+  };
+  const srv3 = boot(DB3, PORT + 2, {
+    ...FIXTURE, balance: respawning, llm: "off",
+    combat: { now: () => clock3, manualTick: true, seedFor: () => 7, respawnMs: 30_000 },
+  });
+  const tick3 = (srv3.combat as unknown as { tick(): void }).tick.bind(srv3.combat);
+  check("(대조) 플래그를 켜기 전에는 당연히 있다", srv3.combat.enemyIn("b1:3,5") !== null);
+  srv3.events!.setFlag("guardian_slain", true);
+  for (let i = 0; i < 5; i++) { clock3 += 100; tick3(); }
+  /* ★ 같은 적, 같은 플래그, 같은 순간. 다른 것은 respawnMs 하나뿐이다.
+     위의 본 서버에서는 사라졌고 여기서는 남아 있다 — 그 차이가 곧
+     '플래그는 사건의 기록이고 존재는 타이머가 정한다' 는 뜻이다. */
+  check("★ 리스폰이 있는 적은 같은 플래그가 켜져도 사라지지 않는다",
+    srv3.combat.enemyIn("b1:3,5") !== null,
+    "respawnMs 만 다른 같은 적인데 본 서버에서는 사라졌다");
+  check("플래그 자체는 양쪽 다 켜져 있다 (사건은 기록된다)",
+    srv3.ctx.world.flagValue("guardian_slain") === true);
+  await srv3.close();
+  for (const f of [DB3, `${DB3}-wal`, `${DB3}-shm`]) rmSync(f, { force: true });
   erin.close();
 
   /* ── ⑩'' 쿨다운은 전투가 아니라 사람에게 붙어 있다 ──────────────────
@@ -487,8 +537,258 @@ async function main() {
   }
   check("★ 끝난 것도 듣는다 (아니면 '싸우기' 가 사라진 이유를 모른다)",
     fay.texts().some((t) => t.includes("쓰러뜨렸다")), JSON.stringify(fay.texts()));
+
+  /* ── ⑫ 치유·방어를 남에게 ───────────────────────────────────────────
+     ★ 어그로가 '가장 많이 때린 사람' 이라, 여럿이 붙으면 잘 때리는 쪽이
+       혼자 다 맞는다. 그런데 회복이 자기에게만 걸리면 맞는 쪽은 때리기를
+       멈춰야 살고, 안 맞는 쪽은 도울 방법이 없다 — 둘이 함께 있는 이유가
+       '옆에 선 추가 DPS' 뿐이었다는 뜻이다.
+       skills.json 의 target 한 칸과 resolvePlayerSwing 의 인자 하나가
+       그 자리에 역할을 만든다. */
+  section("⑫ 치유와 방어는 남에게 건다 (협동에 역할이 생긴다)");
+
+  /* 먼저 엔진에서. 효과가 '누구에게' 붙는지는 순수 함수의 반환값이라
+     서버를 띄우지 않고 볼 수 있다 — 그리고 이게 진짜 불변식이다
+     (문장은 res.toPlayerId 에서 나오므로, 문장만 보면 효과가 시전자에게
+     붙어 있어도 똑같이 읽힌다). */
+  const ally = { playerId: "p_other", hp: 10, maxHp: 100 };
+  const healed = resolvePlayerSwing(
+    "p_me", GUARD, 100, 50, 100, "mend", makeRng(1), BALANCE, ally);
+  check("★ 치유 효과가 시전자가 아니라 대상에게 붙는다",
+    healed.effects.some((e) => e.type === "playerHeal" && e.playerId === "p_other") &&
+      !healed.effects.some((e) => e.type === "playerHeal" && e.playerId === "p_me"),
+    JSON.stringify(healed.effects));
+  const braced = resolvePlayerSwing(
+    "p_me", GUARD, 100, 50, 100, "brace", makeRng(1), BALANCE, ally);
+  check("★ 방어 효과도 대상에게 붙는다",
+    braced.effects.some((e) => e.type === "guard" && e.playerId === "p_other"),
+    JSON.stringify(braced.effects));
+  check("대상이 없으면 자기 자신이다 (기존 경로가 그대로다)",
+    resolvePlayerSwing("p_me", GUARD, 100, 50, 100, "mend", makeRng(1), BALANCE)
+      .effects.some((e) => e.type === "playerHeal" && e.playerId === "p_me"));
+  /* 남에게 걸어도 '적을 때린 것' 은 아니다 — 위협은 오르지 않아야 한다.
+     오르면 살리려고 건 쪽이 다음 일격을 받는다. */
+  check("남을 치유해도 적을 때린 값은 없다", healed.amount > 0 && healed.skill?.kind === "heal");
+
+  /* 이제 와이어. 적이 돌아올 때까지 기다렸다가 둘이 함께 붙는다.
+     ★ 시계는 우리 손에 있고 적은 110 이므로, 둘이 붙어 있는 시간이 곧
+       예산이다 — 검사 사이의 advance 를 짧게 잡는다. 적이 먼저 죽으면
+       이 절의 검사들이 전부 '전투가 없다' 로 무너진다.
+     fay 가 먼저 붙어 어그로를 쥔다: hana 는 ⑪ 에서 이미 깎여 있으므로
+     여기서 더 맞을 필요가 없다 (치유가 보이려면 깎여 있기만 하면 된다). */
+  for (let i = 0; i < 400 && server.combat.enemyIn("b1:5,2") === null; i++) await advance(500);
+  fay.clear();
+  hana.clear();
+  await fay.actAndWait({ type: "attack" });
+  await advance(1500);
+  await hana.actAndWait({ type: "attack" });
+  await advance(300);
+
+  /* 대상 목록은 서버가 준다. 클라이언트가 스킬 id 로 "mend 는 남에게" 를
+     알기 시작하면 수치 파일이 클라이언트 배포를 요구하게 된다. */
+  const view = fay.of("combat.start").at(-1)?.combat;
+  check("★ 와이어의 스킬이 '누구에게 거는가' 를 싣는다",
+    view?.skills.find((v) => v.id === "mend")?.target === "ally" &&
+      view?.skills.find((v) => v.id === "heavy_strike")?.target === "self",
+    JSON.stringify(view?.skills));
+  check("★ 같은 전투의 사람이 대상 후보로 온다 (합류하면 늘어난다)",
+    (view?.allies ?? []).length === 0 &&
+      (fay.lastCombat()?.allies ?? []).some((a) => a.id === hana.id),
+    JSON.stringify([view?.allies, fay.lastCombat()?.allies]));
+
+  // 거절 둘. 둘 다 큐도 쿨다운도 건드리지 않는다 (서버가 먼저 돌려보낸다).
+  fay.clear();
+  await fay.actAndWait({ type: "skill", skillId: "heavy_strike", targetId: hana.id });
+  check("★ 자기에게만 쓰는 스킬은 남을 가리킬 수 없다",
+    fay.texts().some((t) => t.includes("자기에게만")), JSON.stringify(fay.texts()));
+  fay.clear();
+  await fay.actAndWait({ type: "skill", skillId: "mend", targetId: "p_ghost" });
+  check("★ 같은 전투에 없는 사람은 대상이 될 수 없다 (클라이언트를 믿지 않는다)",
+    fay.texts().some((t) => t.includes("이 싸움에 없다")), JSON.stringify(fay.texts()));
+
+  /* 회복이 누구에게 갔는지는 문장이 아니라 체력으로 본다 — 문장은
+     res.toPlayerId 에서 나오므로, 효과가 엉뚱한 사람에게 붙어도 똑같이
+     읽힌다. 여기서만 뚫리는 구멍이다. */
+  const before12 = { fay: fay.hp, hana: hana.hp };
+  fay.clear();
+  hana.clear();
+  await fay.actAndWait({ type: "skill", skillId: "mend", targetId: hana.id });
+  check("예약 문장이 '누구에게' 를 말한다",
+    fay.texts().some((t) => t.includes(hana.name) && t.includes("준비")), JSON.stringify(fay.texts()));
+  await advance(1000);
+  check("★ 건 쪽은 '회복시켰다' 를 듣는다",
+    fay.texts().some((t) => t.includes(hana.name) && t.includes("회복시켰다")),
+    JSON.stringify(fay.texts()));
+  check("★ 받은 쪽도 반드시 듣는다 (체력이 왜 올랐는지 모르면 화면에서 이유가 사라진다)",
+    hana.texts().some((t) => t.includes(fay.name) && t.includes("회복되었다")),
+    JSON.stringify(hana.texts()));
+  check("★ 실제로 오른 것은 받은 쪽의 체력이다 (시전자가 아니라)",
+    hana.hp > before12.hana && fay.hp <= before12.fay,
+    `hana=${before12.hana}->${hana.hp} fay=${before12.fay}->${fay.hp}`);
+
+  // 방어도 같은 모양. 받는 쪽이 '왜 덜 맞는지' 를 들어야 한다.
+  fay.clear();
+  hana.clear();
+  await hana.actAndWait({ type: "skill", skillId: "brace", targetId: fay.id });
+  await advance(1000);
+  check("★ 방어를 걸어 준 쪽과 받은 쪽이 서로 다른 문장을 듣는다",
+    hana.texts().some((t) => t.includes(fay.name) && t.includes("흘려낸다")) &&
+      fay.texts().some((t) => t.includes(hana.name) && t.includes("막아선다")),
+    JSON.stringify([hana.texts(), fay.texts()]));
+
+  /* ★ 예약과 발동 사이에 한 호흡이 있고, 그 사이에 세계가 바뀐다. 대상이
+     그 틈에 방을 나가면 자기에게 건다 — 스윙을 통째로 잃는 것보다 낫고,
+     '없는 사람에게 걸린' 상태는 존재해서는 안 된다.
+     (여기서 brace 를 쓰는 이유는 mend 가 아직 쿨다운이기 때문이다. 쿨다운은
+      사람에게 붙어 있어서 기다리는 동안 적이 먼저 죽는다 — ⑩''.) */
+  fay.clear();
+  hana.clear();
+  await fay.actAndWait({ type: "skill", skillId: "brace", targetId: hana.id });
+  await hana.actAndWait({ type: "move", dir: "south" }); // 전투에서 빠진다
+  fay.clear();
+  await advance(1000);
+  check("★ 대상이 그 사이에 빠지면 자기에게 건다 (스윙을 잃지 않는다)",
+    fay.texts().some((t) => t.includes("흘려낼 수 있다")) &&
+      !fay.texts().some((t) => t.includes(hana.name)),
+    JSON.stringify(fay.texts()));
+  check("빠진 사람은 대상 후보에서도 사라진다",
+    !(fay.lastCombat()?.allies ?? []).some((a) => a.id === hana.id),
+    JSON.stringify(fay.lastCombat()?.allies));
+
   fay.close();
   hana.close();
+
+  /* ── ⑬ 예고 동작 ────────────────────────────────────────────────────
+     ★ 무엇을 고치는가: 예고가 없으면 결정할 것이 "지금 체력이 낮은가"
+       하나뿐이다. 적의 피해가 매 스윙 고르게 들어오므로 방어 태세는 평균
+       한 대의 절반(≈2)만 막아 주고, 6초 쿨다운을 쓸 값이 없다 —
+       시뮬레이터가 승률 기여 1%p 로 재 주었다.
+       예고는 '언제' 라는 축을 만든다: 지금 막을 것인가, 한 대 더 때릴 것인가. */
+  section("⑬ 적이 크게 몸을 젖힌다 — '언제' 라는 축");
+
+  /* 먼저 엔진에서. 예고 주기에 난수가 없다는 것이 이 절의 전제다 —
+     무작위면 맞춰 쓸 수 없고, 그러면 '언제' 가 아니라 운이다. */
+  const w = GUARD.windup!;
+  check("예고 주기에 난수가 없다 (같은 횟수면 같은 답)",
+    [0, 1, 2, 3, 4].every((n) => windsUp(GUARD, n) === windsUp(GUARD, n)));
+  check("★ everyNth 번 때린 뒤에 몸을 젖힌다",
+    !windsUp(GUARD, w.everyNth - 1) && windsUp(GUARD, w.everyNth));
+  const noWind = { ...GUARD, windup: null };
+  check("예고가 없는 적은 아무리 때려도 젖히지 않는다",
+    [0, 1, 5, 50].every((n) => !windsUp(noWind, n)));
+
+  /* ★ 굴림 하나로 보면 안 된다. 배수와 경감의 '순서' 를 바꿔도 짝수 굴림에서는
+     같은 값이 나오기 때문이다 (round(r/2)*3 과 round(r*3/2) 는 r 이 짝수면
+     같다). 여러 굴림을 한꺼번에 본다. */
+  const PCT = 50;
+  const rolls = Array.from({ length: 30 }, (_, i) => i + 1).map((seed) => ({
+    plain: resolveEnemySwing(GUARD, "p", 999, 0, makeRng(seed)),
+    big: resolveEnemySwing(GUARD, "p", 999, 0, makeRng(seed), true),
+    bigBraced: resolveEnemySwing(GUARD, "p", 999, PCT, makeRng(seed), true),
+    none: resolveEnemySwing(noWind, "p", 999, 0, makeRng(seed), true),
+  }));
+  check("★ 예고 뒤의 일격은 배수만큼 크다",
+    rolls.every((r) => r.big.amount === Math.round(r.plain.amount * w.mult) && r.big.heavy),
+    JSON.stringify(rolls.slice(0, 4).map((r) => [r.plain.amount, r.big.amount])));
+  /* ★ 배수가 경감보다 먼저다. 반대로 하면 방어 태세가 '큰 일격의 절반' 이
+     아니라 '평범한 한 대의 절반' 만 막아 주고, 예고를 넣은 이유가 없어진다. */
+  check("★ 방어 태세는 '커진 뒤의' 값을 깎는다 (배수가 먼저)",
+    rolls.every((r) => r.bigBraced.amount === Math.max(1, Math.round((r.big.amount * (100 - PCT)) / 100))),
+    JSON.stringify(rolls.slice(0, 6).map((r) => [r.plain.amount, r.big.amount, r.bigBraced.amount])));
+  check("막아도 큰 일격은 평범한 한 대보다 아프다 (막는 것이 회피는 아니다)",
+    rolls.every((r) => r.bigBraced.amount >= r.plain.amount));
+  check("예고가 없는 적은 heavy 를 줘도 커지지 않는다",
+    rolls.every((r) => r.none.amount === r.plain.amount && !r.none.heavy));
+
+  /* 이제 와이어. 시계를 손에 쥔 새 서버에서 본다 — 본 서버의 파수꾼은
+     ⑦ 에서 이미 쓰러졌고 돌아오지 않는다. */
+  const DB4 = join(tmpdir(), `mud-combat-windup-${process.pid}.db`);
+  for (const f of [DB4, `${DB4}-wal`, `${DB4}-shm`]) rmSync(f, { force: true });
+  let clock4 = 2_000_000;
+  /* ★ 체력을 넉넉히 준 세계에서 본다. 이 절이 보려는 것은 '적의 박자' 이지
+     '죽는가' 가 아니다 — 40 짜리 몸으로 큰 일격 두 번을 지켜보려면 그 사이에
+     회복을 끼워야 하고, 그러면 검사가 회복의 사정에 얽힌다. */
+  const roomy = { ...BALANCE, player: { ...BALANCE.player, maxHp: 200 } };
+  const srv4 = boot(DB4, PORT + 3, {
+    ...FIXTURE,
+    balance: roomy,
+    llm: "off",
+    llmRenderer: fakeLlm,
+    combat: { now: () => clock4, manualTick: true, seedFor: () => 31, respawnMs: 50 },
+  });
+  const tick4 = (srv4.combat as unknown as { tick(): void }).tick.bind(srv4.combat);
+  const step4 = async (ms: number): Promise<void> => {
+    for (let i = 0; i < ms; i += 100) {
+      clock4 += 100;
+      tick4();
+    }
+    await sleep(30);
+  };
+
+  const iris = new Client("iris", PORT + 3);
+  await iris.connect(null);
+  await iris.walk(["west", "west", "south", "south"]);
+  await iris.walk(["east", "east"]); // 그림자 파수꾼 (3,5)
+  await iris.actAndWait({ type: "attack" });
+  /* 물러난다 — 적의 박자만 보기 위해서다. 물러나도 전투에서 빠지지는
+     않으므로 적은 계속 때린다 (④). */
+  await iris.actAndWait({ type: "stop" });
+  iris.clear();
+
+  /* 예고가 올 때까지 한 박자씩 민다. 시간으로 재면 swingMs 나 everyNth 를
+     건드리는 순간 이 검사가 조용히 무의미해진다. */
+  let hpAtWindup = iris.hp;
+  let sawWindup = false;
+  for (let i = 0; i < 20 && !sawWindup; i++) {
+    hpAtWindup = iris.hp;
+    await step4(GUARD.swingMs);
+    sawWindup = iris.texts().some((t) => t.includes("몸을 젖힌다"));
+  }
+  check("★ 예고가 문장으로 온다", sawWindup, JSON.stringify(iris.texts()));
+  check("★ 구조화 사실로도 온다 (화면이 로그를 파싱하지 않는다)",
+    iris.lastCombat()?.winding === true, JSON.stringify(iris.lastCombat()));
+  check("★ 예고 자체에는 피해가 없다 (반응할 한 박자를 내준다)",
+    iris.hp === hpAtWindup, `${hpAtWindup} -> ${iris.hp}`);
+
+  const hpBeforeHeavy = iris.hp;
+  iris.clear();
+  await step4(GUARD.swingMs);
+  const heavyDmg = hpBeforeHeavy - iris.hp;
+  check("★ 다음 일격이 크게 들어온다",
+    iris.texts().some((t) => t.includes("내리꽂힌다")), JSON.stringify(iris.texts()));
+  check("★ 큰 일격은 접히지 않는다 (kind:bad — 막았는지가 이 한 줄에 있다)",
+    iris.texts("bad").some((t) => t.includes("내리꽂힌다")), JSON.stringify(iris.texts("bad")));
+  check("★ 평범한 한 대보다 크다 (가장 센 평타보다도)",
+    heavyDmg > GUARD.damage[1], `${heavyDmg} vs 평타 최대 ${GUARD.damage[1]}`);
+  check("예고가 꺼졌다 (한 번 쓰면 사라진다)", iris.lastCombat()?.winding === false);
+
+  /* ★ 이 절의 요점. 예고를 보고 방어 태세를 걸면 큰 일격이 깎인다 —
+     그게 6초 쿨다운을 쓸 값이고, 시뮬레이터의 '반응' 표가 재는 것이다. */
+  iris.clear();
+  for (let i = 0; i < 20 && !iris.texts().some((t) => t.includes("몸을 젖힌다")); i++) {
+    await step4(GUARD.swingMs);
+  }
+  check("(대조) 예고가 다시 왔다", iris.texts().some((t) => t.includes("몸을 젖힌다")));
+  await iris.actAndWait({ type: "skill", skillId: "brace" });
+  /* 두 박자를 나눠 민다. 한 번에 밀면 큰 일격 뒤의 평타까지 같은 창에 들어와
+     '이번 일격이 얼마였나' 를 체력으로 잴 수 없다. */
+  await step4(PLAYER.swingMs); // 방어 태세가 나간다 (적은 아직 900ms 가 안 됐다)
+  const hpBeforeBraced = iris.hp;
+  iris.clear();
+  await step4(GUARD.swingMs - PLAYER.swingMs); // 큰 일격이 온다
+  check("★ 예고를 보고 막으면 비껴낸다",
+    iris.texts().some((t) => t.includes("비껴냈다")), JSON.stringify(iris.texts()));
+  /* 굴림이 난수라 '이번 것이 저번 것보다 작다' 는 보장할 수 없다 (막은 것도
+     안 막은 것도 범위가 겹친다). 대신 '막은 값의 범위 안에 있다' 를 본다 —
+     정확한 산술은 위의 엔진 검사가 이미 못 박아 두었다. */
+  const bracedDmg = hpBeforeBraced - iris.hp;
+  check("★ 막힌 값의 범위 안이다 (경감이 큰 일격에 닿았다)",
+    bracedDmg > 0 && bracedDmg <= Math.ceil((GUARD.damage[1] * w.mult) / 2),
+    `${bracedDmg} (안 막았을 때 ${heavyDmg}, 막은 값의 상한 ${Math.ceil((GUARD.damage[1] * w.mult) / 2)})`);
+
+  iris.close();
+  await srv4.close();
+  for (const f of [DB4, `${DB4}-wal`, `${DB4}-shm`]) rmSync(f, { force: true });
 
   /* ── ⑨ 부활 타이머를 잃어도 캐릭터가 굳지 않는다 ────────────────────
    *

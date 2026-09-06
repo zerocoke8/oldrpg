@@ -389,6 +389,7 @@ const raw: {
       "swingMs": 900,
       "slainFlag": "guardian_slain",
       "respawnMs": null,
+      "windup": { "everyNth": 3, "mult": 3 },
       "drops": [
         {
           "itemId": "warden_shard",
@@ -407,6 +408,7 @@ const raw: {
       "swingMs": 1100,
       "slainFlag": null,
       "respawnMs": 45000,
+      "windup": null,
       "drops": [
         {
           "itemId": "minor_potion",
@@ -425,6 +427,7 @@ const raw: {
       "swingMs": 950,
       "slainFlag": null,
       "respawnMs": 60000,
+      "windup": null,
       "drops": [
         {
           "itemId": "minor_potion",
@@ -437,6 +440,7 @@ const raw: {
   "skills": {
     "heavy_strike": {
       "name": "강타",
+      "target": "self",
       "cooldownMs": 4000,
       "kind": "strike",
       "power": [
@@ -446,6 +450,7 @@ const raw: {
     },
     "mend": {
       "name": "응급 치료",
+      "target": "ally",
       "cooldownMs": 8000,
       "kind": "heal",
       "power": [
@@ -455,6 +460,7 @@ const raw: {
     },
     "brace": {
       "name": "방어 태세",
+      "target": "ally",
       "cooldownMs": 6000,
       "kind": "guard",
       "power": [

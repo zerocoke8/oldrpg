@@ -14,7 +14,9 @@ export function Combat({ combat, selfId }: { combat: CombatView; selfId: string 
   const ratio = Math.max(0, Math.min(1, enemy.hp / enemy.maxHp));
 
   return (
-    <div style={{ ...win, padding: "8px 10px", borderColor: C.red }}>
+    /* 예고 중에는 테두리가 바뀐다. 로그 한 줄만으로는 0.9초 안에 눈에 들어오지
+       않고, 그 창이 곧 '방어 태세를 쓸 것인가' 를 결정하는 시간이다. */
+    <div style={{ ...win, padding: "8px 10px", borderColor: combat.winding ? C.gold : C.red }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <span style={{ fontSize: 13, color: C.red, width: 24 }}>敵</span>
         <div style={{ flex: 1, height: 10, background: "#0a0f2a", border: `1px solid ${C.dim}` }}>
@@ -39,6 +41,7 @@ export function Combat({ combat, selfId }: { combat: CombatView; selfId: string 
         ) : combat.targetId ? (
           <span style={{ color: C.dim }}> · 다른 사람을 노리고 있다</span>
         ) : null}
+        {combat.winding && <span style={{ color: C.gold }}> · 큰 것이 온다</span>}
         {!combat.engaged && <span style={{ color: C.gold }}> · 물러나 있음</span>}
         {combat.queuedSkill && <span style={{ color: C.gold }}> · 다음 호흡에 기술</span>}
         {combat.queuedItem && <span style={{ color: C.gold }}> · 다음 호흡에 아이템</span>}

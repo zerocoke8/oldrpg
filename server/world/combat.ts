@@ -24,7 +24,7 @@
 
 import type { PlayerId, RoomId } from "../../shared/ids";
 import { roomIdOf } from "../../shared/ids";
-import type { CombatView, EnemyView, SkillView } from "../../shared/protocol";
+import type { CombatView, EnemyView, PlayerBrief, SkillView } from "../../shared/protocol";
 import type { Balance, EnemyDef } from "../engine/enemies";
 import {
   pickTarget,
@@ -32,6 +32,7 @@ import {
   resolvePlayerSwing,
   rollDrops,
   sharers,
+  windsUp,
   type Effect,
 } from "../engine/combat";
 import { makeRng, type Rng } from "../engine/rng";
@@ -59,7 +60,7 @@ interface Fighter {
    *  스킬이든 아이템이든 나중 입력이 앞의 것을 덮어쓴다.
    *  와이어에는 queuedSkill / queuedItem 둘로 나뉘어 나가지만, 둘 다 채워지는
    *  일은 없다 (한 자리에서 파생되기 때문이다). */
-  queued: { kind: "skill" | "item"; id: string } | null;
+  queued: { kind: "skill" | "item"; id: string; targetId?: PlayerId } | null;
   /** skillId -> 쿨다운이 끝나는 시각 (단조 ms). */
   /** 스킬 쿨다운은 Fighter 가 아니라 플레이어에 산다 (아래 cooldownsOf).
    *  여기 두면 전투에서 빠지는 것만으로 전부 리셋된다. */
@@ -79,6 +80,10 @@ interface Combat {
   /** 누적 피해 = 위협. 적은 이게 가장 큰 사람을 노린다. */
   threat: Map<PlayerId, number>;
   targetId: PlayerId | null;
+  /** 예고 뒤로 평범하게 몇 번 때렸는가. 예고가 나가면 0 으로 돌아간다. */
+  swingsSinceWindup: number;
+  /** 몸을 젖혀 두었다 — 다음 스윙이 큰 것이다. */
+  charged: boolean;
   rng: Rng;
   seq: number;
 }
@@ -86,7 +91,9 @@ interface Combat {
 export interface CombatService {
   /** 이 방의 적과 교전을 시작한다(멱등). 실패하면 이유 문장을 돌려준다. */
   attack(s: Session): string | null;
-  skill(s: Session, skillId: string): string | null;
+  /** targetId 는 치유·방어를 남에게 걸 때만 쓴다. 같은 전투인지, 그 스킬이
+   *  남에게 걸 수 있는지는 이 함수가 다시 본다 — 클라이언트를 믿지 않는다. */
+  skill(s: Session, skillId: string, targetId?: PlayerId): string | null;
   stop(s: Session): string | null;
   /** 아이템을 쓴다. 전투 중이면 다음 스윙에 예약된다. */
   useItem(s: Session, itemId: string): string | null;
@@ -159,10 +166,18 @@ export function makeCombat(
     const id = map.region(roomId.slice(0, sep))?.enemies[coord];
     const def = id ? balance.enemies[id] : undefined;
     if (!def) return null;
-    // 이미 죽은 적은 없는 것과 같다. 죽음의 '소유자' 가 둘로 나뉜다:
-    //   보스        — 월드 플래그 (영속. 세계가 바뀐 사건이다)
-    //   반복되는 적 — 리스폰 대기 (메모리. 돌아올 때까지만 없다)
-    if (def.slainFlag !== null && events.isFlagOn(def.slainFlag)) return null;
+    /* 이미 죽은 적은 없는 것과 같다. 죽음의 '소유자' 가 둘로 나뉜다:
+         돌아오지 않는 적 — 월드 플래그 (영속. 세계가 바뀐 사건이다)
+         돌아오는 적      — 리스폰 대기 (메모리. 돌아올 때까지만 없다)
+
+       ★ 플래그를 켜는 적이 곧 '돌아오지 않는 적' 은 아니다. 그 둘은 다른
+         축이다 — 플래그는 '세계가 바뀌었다' 를, 리스폰은 '그 적이 지금
+         있는가' 를 말한다. respawnMs 가 있으면 타이머가 존재를 정하고,
+         플래그는 그 사건이 있었다는 기록으로만 남는다.
+         (한때 묶여 있었고, 그래서 보스가 서버 수명 동안 한 번뿐이었다.) */
+    if (def.respawnMs === null && def.slainFlag !== null && events.isFlagOn(def.slainFlag)) {
+      return null;
+    }
     if (downed.has(roomId)) return null;
     return def;
   }
@@ -198,7 +213,19 @@ export function makeCombat(
       id: sk.id,
       name: sk.name,
       readyInMs: Math.max(0, (cooldownsOf(f.playerId).get(sk.id) ?? 0) - t),
+      target: sk.target,
     }));
+  }
+
+  /** 나를 뺀 같은 전투의 사람들. 치유·방어의 대상 후보. */
+  function alliesOf(c: Combat, playerId: PlayerId): PlayerBrief[] {
+    const out: PlayerBrief[] = [];
+    for (const other of c.fighters.keys()) {
+      if (other === playerId) continue;
+      const s = sessionOf(other);
+      if (s) out.push(s.brief);
+    }
+    return out;
   }
 
   function viewFor(playerId: PlayerId): CombatView | null {
@@ -214,6 +241,8 @@ export function makeCombat(
       queuedItem: f.queued?.kind === "item" ? f.queued.id : null,
       skills: skillViews(f, now()),
       targetId: c.targetId,
+      winding: c.charged,
+      allies: alliesOf(c, playerId),
     };
   }
 
@@ -272,8 +301,10 @@ export function makeCombat(
         // 아낄 만한 바이트도 아니다.
         targetId: c.targetId,
         queuedSkill: f.queued?.kind === "skill" ? f.queued.id : null,
-      queuedItem: f.queued?.kind === "item" ? f.queued.id : null,
+        queuedItem: f.queued?.kind === "item" ? f.queued.id : null,
         skills: skillViews(f, t),
+        allies: alliesOf(c, f.playerId),
+        winding: c.charged,
         engaged: f.engaged,
       });
     });
@@ -335,6 +366,8 @@ export function makeCombat(
         def,
         hp: def.maxHp,
         nextActAt: now() + def.swingMs,
+        swingsSinceWindup: 0,
+        charged: false,
         fighters: new Map(),
         threat: new Map(),
         targetId: null,
@@ -379,7 +412,7 @@ export function makeCombat(
     return null;
   }
 
-  function skill(s: Session, skillId: string): string | null {
+  function skill(s: Session, skillId: string, targetId?: PlayerId): string | null {
     const def = balance.skills[skillId];
     if (!def) return lines.unknownSkill;
     const roomId = inCombat.get(s.playerId);
@@ -388,18 +421,28 @@ export function makeCombat(
     if (!c || !f) return lines.notInCombat;
     if (s.hp <= 0) return lines.defeated;
 
+    /* ★ 대상은 서버가 다시 본다. 클라이언트가 보낸 id 는 신뢰하지 않는다 —
+       같은 전투에 있어야 하고, 그 스킬이 남에게 걸 수 있어야 한다.
+       자기 자신을 가리켰으면 대상이 없는 것과 같다. */
+    let aim: PlayerId | undefined;
+    if (targetId && targetId !== s.playerId) {
+      if (def.target !== "ally") return lines.skillSelfOnly(def.name);
+      if (!c.fighters.has(targetId)) return lines.skillNoAlly;
+      aim = targetId;
+    }
+
     const t = now();
     const ready = cooldownsOf(s.playerId).get(skillId) ?? 0;
     if (ready > t) return lines.skillCooling(def.name, Math.ceil((ready - t) / 1000));
 
     // 나중 입력이 이긴다 — 큐는 하나뿐이다.
-    f.queued = { kind: "skill", id: skillId };
+    f.queued = { kind: "skill", id: skillId, ...(aim ? { targetId: aim } : {}) };
     // 교전을 껐더라도 스킬을 쓰면 다시 붙는다 (스킬만 쓰고 싶을 이유가 없다).
     if (!f.engaged) {
       f.engaged = true;
       f.nextActAt = t + f.swingMs;
     }
-    emit.log(s, "sys", lines.skillQueued(def.name));
+    emit.log(s, "sys", aim ? lines.skillQueuedAt(def.name, nameOf(aim)) : lines.skillQueued(def.name));
     pushUpdate(c);
     return null;
   }
@@ -523,6 +566,11 @@ export function makeCombat(
           continue;
         }
         const skillId = queued?.kind === "skill" ? queued.id : null;
+        /* 대상이 예약된 뒤 방을 떠났을 수 있다 — 그 사이에 빠졌으면 자기에게
+           건다. 여기서 다시 보는 이유가 그것이다 (예약과 발동 사이에 0.5초가
+           있고, 그 사이에 세계가 바뀐다). */
+        const aimId = queued?.kind === "skill" ? queued.targetId : undefined;
+        const aimSession = aimId && c.fighters.has(aimId) ? sessionOf(aimId) : undefined;
         const res = resolvePlayerSwing(
           f.playerId,
           c.def,
@@ -532,6 +580,7 @@ export function makeCombat(
           skillId,
           c.rng,
           balance,
+          aimSession ? { playerId: aimSession.playerId, hp: aimSession.hp, maxHp: aimSession.maxHp } : undefined,
         );
         if (skillId && res.skill) cooldownsOf(f.playerId).set(skillId, t + res.skill.cooldownMs);
 
@@ -558,11 +607,24 @@ export function makeCombat(
         const ts = target ? sessionOf(target) : undefined;
         if (ts && ts.hp > 0) {
           const f = c.fighters.get(target!)!;
-          const res = resolveEnemySwing(c.def, target!, ts.hp, f.guardPercent, c.rng);
-          f.guardPercent = 0; // 한 번 쓰면 사라진다
-          applyEffects(res.effects, c);
-          narrateEnemySwing(c, res.targetId, res.amount, res.guarded);
-          if (res.lethal) defeat(c, res.targetId);
+          /* ★ 예고는 한 박자를 통째로 쓴다 — 그 스윙에는 피해가 없다.
+             '예고와 동시에 때린다' 로 두면 반응할 시간이 0 이고, 예고는
+             일격 뒤에 붙는 설명문이 된다. 한 박자를 내주는 대신 배수로
+             돌려받는다 (windup.mult). */
+          if (!c.charged && windsUp(c.def, c.swingsSinceWindup)) {
+            c.charged = true;
+            c.swingsSinceWindup = 0;
+            narrateWindup(c);
+          } else {
+            const heavy = c.charged;
+            const res = resolveEnemySwing(c.def, target!, ts.hp, f.guardPercent, c.rng, heavy);
+            c.charged = false;
+            if (!heavy) c.swingsSinceWindup++;
+            f.guardPercent = 0; // 한 번 쓰면 사라진다
+            applyEffects(res.effects, c);
+            narrateEnemySwing(c, res.targetId, res.amount, res.guarded, res.heavy);
+            if (res.lethal) defeat(c, res.targetId);
+          }
         }
       }
 
@@ -586,16 +648,35 @@ export function makeCombat(
       if (!s) continue;
       const mine = other.playerId === f.playerId;
       if (res.skill) {
+        /* ★ 남에게 건 치유·방어는 받는 사람이 반드시 들어야 한다. 자기 체력이
+           왜 올랐는지, 왜 다음 일격을 덜 맞는지 모르면 그건 화면에서 이유가
+           사라지는 것이다 (어그로가 옮겨간 순간을 알리는 것과 같은 이유).
+           그 밖의 사람에게는 여전히 안 보낸다 — 로그를 채울 가치가 없다. */
+        const toMe = res.toPlayerId === other.playerId;
         if (!mine) {
           if (res.skill.kind === "strike") {
             emit.log(s, "good", lines.allyHit(myName, c.def.name, res.amount));
+          } else if (toMe && res.skill.kind === "heal") {
+            // 0 회복은 받는 쪽에게 아무 일도 아니다 — 거는 쪽만 "이미 아물어
+            // 있다" 를 듣는다. 여기서 알리면 "체력이 0 회복되었다" 가 된다.
+            if (res.amount > 0) emit.log(s, "good", lines.skillHealedBy(res.skill.name, myName, res.amount));
+          } else if (toMe && res.skill.kind === "guard") {
+            emit.log(s, "good", lines.skillGuardedBy(res.skill.name, myName, res.amount));
           }
-          continue; // 남의 힐/방어는 로그를 채울 가치가 없다
+          continue;
         }
-        if (res.skill.kind === "heal") emit.log(s, "good", lines.skillHeal(res.skill.name, res.amount));
-        else if (res.skill.kind === "guard")
-          emit.log(s, "good", lines.skillGuard(res.skill.name, res.amount));
-        else emit.log(s, "good", lines.skillStrike(res.skill.name, c.def.name, res.amount));
+        const aimName = res.toPlayerId ? nameOf(res.toPlayerId) : null;
+        if (res.skill.kind === "heal") {
+          emit.log(s, "good", aimName
+            ? lines.skillHealOther(res.skill.name, aimName, res.amount)
+            : lines.skillHeal(res.skill.name, res.amount));
+        } else if (res.skill.kind === "guard") {
+          emit.log(s, "good", aimName
+            ? lines.skillGuardOther(res.skill.name, aimName, res.amount)
+            : lines.skillGuard(res.skill.name, res.amount));
+        } else {
+          emit.log(s, "good", lines.skillStrike(res.skill.name, c.def.name, res.amount));
+        }
         continue;
       }
       // 평범한 타격 — 연속되면 클라이언트가 접는다. 치명타는 good 이라 접히지 않는다.
@@ -610,15 +691,40 @@ export function makeCombat(
     void skillId;
   }
 
-  function narrateEnemySwing(c: Combat, targetId: PlayerId, dmg: number, guarded: boolean): void {
+  function narrateEnemySwing(
+    c: Combat,
+    targetId: PlayerId,
+    dmg: number,
+    guarded: boolean,
+    heavy: boolean,
+  ): void {
     const who = nameOf(targetId);
     toCombat(c, (s) => {
+      /* 큰 일격은 kind:"bad" 다 — 접히면 안 된다. 예고를 보고 막았는지
+         아닌지가 이 한 줄에 있고, 그것이 접힌 덩어리에 섞이면 예고를 넣은
+         이유가 화면에서 사라진다. */
       if (s.playerId === targetId) {
-        emit.log(s, guarded ? "good" : "combat", lines.enemyHit(c.def.name, dmg, guarded));
+        emit.log(
+          s,
+          heavy ? (guarded ? "good" : "bad") : guarded ? "good" : "combat",
+          heavy ? lines.enemyHeavy(c.def.name, dmg, guarded) : lines.enemyHit(c.def.name, dmg, guarded),
+        );
       } else {
-        emit.log(s, "combat", lines.enemyHitOther(c.def.name, who, dmg));
+        emit.log(
+          s,
+          heavy ? "bad" : "combat",
+          heavy
+            ? lines.enemyHeavyOther(c.def.name, who, dmg)
+            : lines.enemyHitOther(c.def.name, who, dmg),
+        );
       }
     });
+  }
+
+  /** 몸을 젖혔다. 이 한 줄이 '언제' 라는 축의 전부다 — 구조화 사실은
+   *  combat.update{winding} 이 따로 나른다 (문장과 상태는 언제나 분리한다). */
+  function narrateWindup(c: Combat): void {
+    toCombat(c, (s) => emit.log(s, "bad", lines.enemyWindup(c.def.name)));
   }
 
   function announceThreat(c: Combat): void {

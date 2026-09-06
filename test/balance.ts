@@ -77,11 +77,34 @@ async function main() {
   section("①' 난이도 — 이길 수 없는 적도, 생각 없이 이기는 보스도 없다");
   const sim = simulate(b, 120);
   const skilled = sim.filter((r) => r.style === "skilled");
+  const reactive = sim.filter((r) => r.style === "reactive");
   const basic = sim.filter((r) => r.style === "basic");
-  for (const r of skilled) {
-    check(`${r.name}: 스킬을 쓰면 이길 수 있다 (${Math.round(r.winRate * 100)}%)`,
+  /* '제대로 싸우는 사람' 의 기준이 예고를 보는 쪽(reactive)으로 옮겨 갔다.
+     스킬만 쓰는 쪽에도 바닥을 둔다 — 예고를 놓친 것이 곧 죽음이면 그건
+     깊이가 아니라 암기다. */
+  for (const r of reactive) {
+    check(`${r.name}: 제대로 싸우면 이길 수 있다 (${Math.round(r.winRate * 100)}%)`,
       r.winRate >= 0.6, `${Math.round(r.winRate * 100)}% · ${r.medianSec}s`);
   }
+  for (const r of skilled) {
+    check(`${r.name}: 예고를 놓쳐도 절망적이지는 않다 (${Math.round(r.winRate * 100)}%)`,
+      r.winRate >= 0.35, `${Math.round(r.winRate * 100)}%`);
+  }
+  /* ★ 예고가 값을 만드는가. 이 검사가 없으면 예고는 '화면에 한 줄 더' 일
+     뿐이다 — 실제로 예고를 넣기 전의 방어 태세가 승률 기여 1%p 였고,
+     한 판 표만 봐서는 그것을 알 수 없었다. */
+  const windupIds = Object.values(b.enemies).filter((e) => e.windup !== null).map((e) => e.id);
+  check("★ 예고를 가진 적이 있다 (없으면 아래 검사가 공회전한다)", windupIds.length > 0);
+  const gains = windupIds.map((id) => ({
+    id,
+    gain: (reactive.find((r) => r.id === id)?.winRate ?? 0) -
+      (skilled.find((r) => r.id === id)?.winRate ?? 0),
+  }));
+  check("★ 예고를 보고 막는 것이 승률로 돌아온다 (방어 태세에 값이 붙었다)",
+    gains.some((g) => g.gain >= 0.15),
+    JSON.stringify(gains.map((g) => [g.id, Math.round(g.gain * 100)])));
+  /* '보스' = 세계를 바꾸는 적. 돌아오는가와는 다른 축이다 — 한때 그 둘이
+     묶여 있었고(refine), 그래서 보스가 서버 수명 동안 한 번뿐이었다. */
   const bosses = Object.values(b.enemies).filter((e) => e.slainFlag !== null).map((e) => e.id);
   for (const id of bosses) {
     const bs = basic.find((r) => r.id === id)!;
@@ -99,8 +122,8 @@ async function main() {
      위의 표만 봤으면 초록불이었다. */
   section("①* 임무 — 받을 수 있는 일은 끝낼 수 있어야 한다");
   const runs = simulateMissions(b, 120);
-  for (const r of runs.filter((x) => x.style === "skilled" && x.potions === 2)) {
-    check(`${r.name}: 스킬과 물약이면 끝낼 수 있다 (${Math.round(r.clearRate * 100)}%)`,
+  for (const r of runs.filter((x) => x.style === "reactive" && x.potions === 2)) {
+    check(`${r.name}: 제대로 싸우고 물약이 있으면 끝낼 수 있다 (${Math.round(r.clearRate * 100)}%)`,
       r.clearRate >= 0.6, `${Math.round(r.clearRate * 100)}%`);
   }
   /* 첫 임무는 아무것도 모르는 사람이 받는다. 여기서 죽으면 그게 첫인상이다. */
@@ -165,7 +188,6 @@ async function main() {
     ["확률이 1을 넘는 드랍", "enemies", (d) => {
       (d.husk_specimen as Record<string, unknown>).drops = [{ itemId: "stabilizer", qty: 1, chance: 1.5 }];
     }, "chance"],
-    ["★ 보스인데 리스폰한다", "enemies", (d) => { (d.proliferant as Record<string, unknown>).respawnMs = 1000; }, "보스"],
     ["★ 없는 아이템을 떨어뜨린다", "enemies", (d) => {
       (d.husk_specimen as Record<string, unknown>).drops = [{ itemId: "없는물약", qty: 1, chance: 1 }];
     }, "선언되지 않은 아이템"],
@@ -174,6 +196,14 @@ async function main() {
     ["trophy 인데 heal 이 있다", "items", (d) => { (d.research_log as Record<string, unknown>).heal = 5; }, "heal"],
     ["치명타 확률이 1을 넘는다", "player", (d) => { d.critChance = 2; }, "critChance"],
     ["스킬 종류가 오타", "skills", (d) => { (d.mend as Record<string, unknown>).kind = "healz"; }, "kind"],
+    ["예고 배수가 1 이하 (커지지 않는 '큰 일격')", "enemies", (d) => {
+      (d.proliferant as Record<string, unknown>).windup = { everyNth: 3, mult: 1 };
+    }, "mult"],
+    /* ★ 예고는 '반응할 한 박자' 가 전부다. 그 박자가 플레이어 스윙보다 짧으면
+       예고를 보고도 아무것도 못 한다 — 깊이가 아니라 그냥 더 센 적이 된다. */
+    ["★ 반응할 수 없이 짧은 예고", "enemies", (d) => {
+      (d.proliferant as Record<string, unknown>).swingMs = 200;
+    }, "반응할 수 없이 짧다"],
   ];
   for (const [label, file, mutate, needle] of cases) {
     const why = refuses(broken(file, mutate));

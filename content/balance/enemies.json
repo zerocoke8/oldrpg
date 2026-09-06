@@ -63,6 +63,7 @@
     "swingMs": 1000,
     "slainFlag": null,
     "respawnMs": 75000,
+    "windup": { "everyNth": 3, "mult": 2.5 },
     "drops": [
       {
         "itemId": "stabilizer",
@@ -85,7 +86,8 @@
     ],
     "swingMs": 1000,
     "slainFlag": "journal_recovered",
-    "respawnMs": null,
+    "respawnMs": 120000,
+    "windup": { "everyNth": 3, "mult": 2.5 },
     "drops": [
       {
         "itemId": "research_log",
@@ -103,7 +105,8 @@
     ],
     "swingMs": 1000,
     "slainFlag": "proliferant_slain",
-    "respawnMs": null,
+    "respawnMs": 300000,
+    "windup": { "everyNth": 3, "mult": 2.5 },
     "drops": [
       {
         "itemId": "dark_shard",

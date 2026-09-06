@@ -47,10 +47,33 @@ export function rootItems(st: UiState): MenuItem[] {
     const fight: MenuItem[] = [{ id: "attack", label: "공격", action: { type: "attack" } }];
     for (const sk of combat?.skills ?? []) {
       const cooling = sk.readyInMs > 0;
+      /* ★ 남에게 걸 수 있는 스킬은 '자기에게' 를 먼저 둔 대상 목록을 편다.
+         후보는 서버가 보낸 combat.allies — 같은 전투의 사람들이다. 혼자면
+         목록이 자기 하나뿐이라 펴 봐야 의미가 없어서, 그때는 예전처럼
+         고르는 즉시 자기에게 건다. 그래야 솔로 플레이가 한 번 더 눌리지
+         않는다.
+         action 은 두 갈래 모두 같은 모양이다 (charter 79-80줄) — 대상이
+         붙는 것뿐이고, 유효성은 어차피 서버가 다시 본다. */
+      const allies = sk.target === "ally" ? (combat?.allies ?? []) : [];
       fight.push({
         id: `skill:${sk.id}`,
         label: sk.name,
-        action: { type: "skill", skillId: sk.id },
+        ...(allies.length
+          ? {
+              items: [
+                {
+                  id: "self",
+                  label: "자기에게",
+                  action: { type: "skill", skillId: sk.id } as Action,
+                },
+                ...allies.map((a) => ({
+                  id: `at:${a.id}`,
+                  label: a.name,
+                  action: { type: "skill", skillId: sk.id, targetId: a.id } as Action,
+                })),
+              ],
+            }
+          : { action: { type: "skill", skillId: sk.id } as Action }),
         disabled: cooling,
         ...(cooling
           ? { note: `${Math.ceil(sk.readyInMs / 1000)}` }

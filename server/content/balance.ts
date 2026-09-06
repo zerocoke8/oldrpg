@@ -41,6 +41,8 @@ const zPlayer = z
 const zSkill = z
   .object({
     name: z.string().min(1),
+    /** 'ally' 면 같은 전투의 다른 사람에게도 걸 수 있다. 적지 않으면 'self'. */
+    target: z.enum(["self", "ally"]).default("self"),
     cooldownMs: z.number().int().nonnegative(),
     kind: z.enum(["strike", "heal", "guard"]),
     power: range,
@@ -76,15 +78,36 @@ const zEnemy = z
     swingMs: z.number().int().positive(),
     slainFlag: z.string().min(1).nullable(),
     respawnMs: z.number().int().positive().nullable(),
+    /* 예고 동작. 없으면 그냥 계속 때리는 적이다 — 약한 적까지 몸을 젖히면
+       '큰 것이 온다' 가 배경 소음이 된다. */
+    windup: z
+      .object({
+        everyNth: z.number().int().positive(),
+        mult: z.number().gt(1),
+      })
+      .strict()
+      .nullable()
+      .default(null),
     drops: z.array(zDrop),
   })
-  .strict()
-  /* 세계를 바꾸는 적은 돌아오지 않는다. 파수꾼이 되살아나는데 guardian_slain 이
-     켜진 채 남으면, 그 플래그를 선언한 방들의 묘사가 "파수꾼이 사라진 뒤" 인
-     채로 파수꾼과 마주 보게 된다. */
-  .refine((e) => !(e.slainFlag !== null && e.respawnMs !== null), {
-    message: "slainFlag 를 켜는 적(보스)은 respawnMs 를 가질 수 없다",
-  });
+  .strict();
+/* ★ 한때 여기 refine 이 있었다: "slainFlag 를 켜는 적은 respawnMs 를 가질 수
+   없다." 이유는 옳았다 — 파수꾼이 되살아나는데 flag 가 켜진 채면 그 플래그를
+   선언한 방들의 묘사가 "사라진 뒤" 인 채로 파수꾼과 마주 본다.
+
+   그런데 그 조항은 **두 개의 다른 축을 하나로 묶고 있었다**:
+
+     세계가 영구히 바뀌었다   — 플래그. 한 방향이고 되돌아가지 않는다
+     그 적이 영구히 사라졌다  — 존재. 리스폰 타이머가 정한다
+
+   묶어 둔 대가는 컸다. 보스가 서버 수명 동안 한 번뿐이라, 첫 플레이어가 잡고
+   나면 나머지 전원에게 임무 5개 중 2개와 적 6종 중 2종이 없는 게임이 됐다.
+
+   푸는 방법은 refine 을 지우는 것이 아니라 **두 축을 실제로 분리하는 것**이다:
+     · world/combat.ts 의 enemyIn 이 respawnMs 가 있는 적은 플래그로 지우지 않는다
+     · moods/<플래그>.md 는 '지금 없다' 가 아니라 '그런 일이 있었다' 를 쓴다
+       (그 문장은 적이 돌아온 뒤에도 참이어야 한다)
+   뒤엣것은 기계가 볼 수 없어서 briefs/README.md 의 저작 규칙으로 갔다. */
 
 const zRank = z
   .object({
@@ -143,6 +166,15 @@ export function loadBalance(dir = process.env.MUD_BALANCE ?? DEFAULT_DIR): Balan
       if (!(d.itemId in items)) {
         throw new Error(`enemies.json: ${id} 가 선언되지 않은 아이템 ${d.itemId} 를 떨어뜨린다.`);
       }
+    }
+    /* ★ 예고는 '반응할 한 박자' 를 내주는 것이 전부다. 그 박자가 플레이어의
+       스윙보다 짧으면 예고를 보고도 아무것도 못 하고, 예고는 일격 뒤에 붙는
+       설명문이 된다 — 그러면 이건 깊이가 아니라 그냥 더 센 적이다. */
+    if (e.windup !== null && e.swingMs < player.swingMs) {
+      throw new Error(
+        `enemies.json: ${id} 의 예고가 반응할 수 없이 짧다 ` +
+          `(적 ${e.swingMs}ms < 플레이어 ${player.swingMs}ms).`,
+      );
     }
   }
 
