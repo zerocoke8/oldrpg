@@ -5,9 +5,16 @@
  * engine/ 에 두면 문구를 고칠 때마다 '진실을 계산하는 코드'를 건드리게 된다.
  * 2단계에 이 문장들 중 일부가 LLM 출력으로 바뀌어도 engine/ 은 그대로다.
  *
- * 이 파일은 순수하다 — 상태를 읽지도 쓰지도 않고 문자열만 만든다. */
+ * ★ 여기 있는 것은 '틀' 이다. 세계가 어떤 곳인지를 말하는 부분(부활 지점의
+ *   감촉, "어둠 속에서" 같은 텍스처)은 prompts/voice.ko.md 가 소유한다 —
+ *   charter 139줄대로, 코드에 박아 두면 세계를 갈아끼울 때 그 문장만 옛
+ *   세계에 남는다. 실제로 그랬다.
+ *
+ * 이 파일은 상태를 읽지도 쓰지도 않는다. 부팅에 voice 를 한 번 읽어 틀에
+ * 끼울 뿐이고, 그 뒤로는 문자열만 만든다. */
 
 import type { Dir } from "../../shared/ids";
+import { loadVoice } from "./prompts";
 
 /** 방위의 한국어 이름. Dir 는 shared/ 소유이고 그 '표시'만 여기 있다. */
 const DIR_KO: Readonly<Record<Dir, string>> = {
@@ -18,6 +25,14 @@ const DIR_KO: Readonly<Record<Dir, string>> = {
 };
 
 export const dirKo = (d: Dir): string => DIR_KO[d];
+
+/* 부팅에 한 번. 요청마다 디스크를 때리지 않는다 (prompts.ts 와 같은 규칙). */
+const voice = loadVoice();
+const fill = (tpl: string, vars: Record<string, string>): string => {
+  let out = tpl;
+  for (const [k, v] of Object.entries(vars)) out = out.split(`{{${k}}}`).join(v);
+  return out;
+};
 
 export const lines = {
   welcome: "화살표로 이동, Enter로 살펴보기. 다른 탭을 열면 두 번째 모험가가 된다.",
@@ -42,10 +57,10 @@ export const lines = {
   entered: (name: string, fromDir: Dir | null): string =>
     fromDir
       ? `${name} 님이 ${dirKo(fromDir)}에서 들어왔다.`
-      : `${name} 님이 어둠 속에서 나타났다.`,
+      : fill(voice.appear, { name }),
   /** 상대가 '내 방에서' 나갔다. toDir 이 null 이면 접속이 끊긴 것이다. */
   left: (name: string, toDir: Dir | null): string =>
-    toDir ? `${name} 님이 ${dirKo(toDir)}으로 사라졌다.` : `${name} 님이 어둠 속으로 사라졌다.`,
+    toDir ? `${name} 님이 ${dirKo(toDir)}으로 사라졌다.` : fill(voice.vanish, { name }),
   /** 내가 들어간 방에 이미 서 있던 사람들. Phase A 에서 나간다 —
    *  room.occupants 에서 순수 파생되므로 await 가 필요 없다. */
   roster: (names: readonly string[]): string =>
@@ -65,11 +80,11 @@ export const lines = {
      (무기 x 적 x 결과) 키로 미리 생성해 둔 문장 풀(room_text 와 같은 패턴).
      그때도 여기 있는 문장이 폴백으로 남는다. */
   /** 방에 들어섰을 때. 아직 교전은 아니다 — 실시간이라 '먼저 치는' 선택이 있다. */
-  enemyHere: (enemy: string): string => `${enemy}이(가) 어둠 속에서 이쪽을 향해 서 있다.`,
+  enemyHere: (enemy: string): string => fill(voice.enemyHere, { enemy }),
   /** 반복되는 적이 돌아왔다. 지금 그 방에 '서 있는' 사람에게 가는 문장이라
    *  반드시 결정론이어야 한다 — charter 63줄대로 방 묘사는 다시 그리지 않고,
    *  이 한 줄과 구조화 상태(hasEnemy)만 나간다. */
-  enemyReturns: (enemy: string): string => `${enemy}이(가) 어둠 속에서 다시 모습을 갖춘다.`,
+  enemyReturns: (enemy: string): string => fill(voice.enemyReturns, { enemy }),
   engage: (enemy: string): string => `${enemy}이(가) 이쪽을 노려본다. 교전이 시작됐다.`,
   /** 같은 방에 서 있는데 싸우지는 않는 사람에게. 합류할 계기는 이 한 줄뿐이다. */
   engagedBy: (who: string, enemy: string): string => `${who}이(가) ${enemy}에게 달려든다.`,
@@ -101,9 +116,9 @@ export const lines = {
   slainByOther: (who: string, enemy: string): string => `${who}이(가) ${enemy}을(를) 쓰러뜨렸다.`,
   defeated: "시야가 어두워진다... 당신은 쓰러졌다.",
   defeatedOther: (who: string): string => `${who}이(가) 쓰러졌다.`,
-  respawn: "차가운 돌바닥의 감촉에 정신이 든다. 입구로 끌려와 있었다.",
+  respawn: voice.respawn,
   disengage: (enemy: string): string => `${enemy}에게서 물러났다.`,
-  fled: (enemy: string): string => `${enemy}을(를) 뒤로하고 어둠 속으로 빠져나왔다.`,
+  fled: (enemy: string): string => fill(voice.fled, { enemy }),
   noEnemy: "여기에는 맞설 것이 없다.",
   alreadyEngaged: "이미 교전 중이다.",
   notInCombat: "지금은 싸우고 있지 않다.",
@@ -133,6 +148,12 @@ export const lines = {
    *  나르지 않는다 (그건 say 의 구조화 필드다). 방에 NPC 가 둘 이상이 되면
    *  이름이 없는 대사는 누가 말했는지 알 수 없다. */
   npcSays: (name: string, text: string): string => `${name}: "${text}"`,
+  /** 폴백일 때. 씨앗은 설계상 3인칭 지문이다("이름을 묻지 않고 등급부터
+   *  확인한다") — 그걸 따옴표에 넣으면 인물이 자기를 3인칭으로 서술하는
+   *  문장이 된다. LLM 경로는 그 씨앗을 실제 발화로 옮기므로 맞고, 폴백만
+   *  틀렸다. 그런데 규칙 4 때문에 플레이어가 **먼저 보는 것은 늘 폴백**이고,
+   *  키가 없으면 그게 영구적이다. 그래서 폴백은 지문으로 세운다. */
+  npcAside: (name: string, text: string): string => `${name} — ${text}`,
   /** 방에 들어섰을 때. '있다' 고만 알린다 — 말을 걸어야 대사가 나온다.
    *  지나가기만 하는 방에서 생성이 돌지 않고, 방 묘사가 대사에 묻히지도 않는다. */
   npcHere: (name: string): string => `${name}이(가) 이곳에 있다.`,
@@ -170,7 +191,7 @@ export const lines = {
 
   // ── 복구 ──────────────────────────────────────────────────────────────
   /** resume 시 저장된 좌표가 벽 안이면(맵이 바뀌었으면) 스폰으로 이송한다. */
-  displaced: "길이 무너져 있었다. 정신을 차려 보니 입구다.",
+  displaced: voice.displaced,
 } as const;
 
 /** 기본 이름. id 파생이라 실질 충돌이 없다 — players.name 에 UNIQUE 를 걸지

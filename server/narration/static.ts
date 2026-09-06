@@ -31,18 +31,24 @@ const pickBySeed = (seed: string, pool: readonly string[]): string => {
 /** 그 방이 '선언한' 플래그만 투영되어 들어온다. 전체 월드 플래그를 받는
  *  경로는 존재하지 않는다 (charter 45줄). */
 export function moodTextFor(
-  req: RoomTextRequest,
+  req: { readonly seed: string; readonly flags: RoomTextRequest["flags"] },
   moods: ReadonlyMap<string, Mood>,
-  pick: (m: Mood) => string,
+  /** 씨앗을 함께 받는다 — 후보가 여럿인 절(fallback)을 방마다 고르게 하려고.
+   *  지시문처럼 후보가 하나인 절은 씨앗을 무시하면 된다. */
+  pick: (m: Mood, seed: string) => string,
 ): string {
   return req.flags
     .filter(([, v]) => v === true)
     .map(([k]) => moods.get(k))
     .filter((m): m is Mood => Boolean(m))
-    .map(pick)
+    .map((m) => pick(m, req.seed))
     .filter(Boolean)
     .join(" ");
 }
+
+/** 후보가 없으면 빈 문자열. 있으면 씨앗으로 고른 하나. */
+export const fromPool = (seed: string, pool: readonly string[]): string =>
+  pool.length ? pickBySeed(seed, pool) : "";
 
 export function makeStaticRenderer(
   moods: ReadonlyMap<string, Mood>,
@@ -52,7 +58,7 @@ export function makeStaticRenderer(
   tones: ReadonlyMap<string, Tone> = new Map(),
 ): RoomTextRenderer {
   return async (req: RoomTextRequest): Promise<RoomTextResult> => {
-    const mood = moodTextFor(req, moods, (m) => m.fallback);
+    const mood = moodTextFor(req, moods, (m, seed) => fromPool(seed, m.fallback));
     /* 지역은 이미 roomId 안에 있다 ("d6town:4,7"). 그래서 이 파일이 지역을
        아는 데 계약(RoomTextRequest)을 한 글자도 바꿀 필요가 없다. */
     const pool = tones.get(regionOfRoomId(req.roomId))?.room;
@@ -71,11 +77,10 @@ export function makeStaticRenderer(
  *  씨앗을 그대로 한 문장으로 세운다. */
 export function makeStaticNpcRenderer(moods: ReadonlyMap<string, Mood>, tails: Tails): NpcLineRenderer {
   return async (req: NpcLineRequest): Promise<RoomTextResult> => {
-    const mood = req.flags
-      .filter(([, v]) => v === true)
-      .map(([k]) => moods.get(k)?.fallback)
-      .filter((x): x is string => Boolean(x))
-      .join(" ");
+    /* ★ 방과 '다른' 절을 읽는다. 같은 문장을 쓰면 인물이 자기 대사 자리에서
+       세계를 서술한다 — 인도자에게 인사했는데 사람이 아니라 나레이션이
+       돌아왔다. npc_fallback 이 비면 아무것도 안 붙고 꼬리만 남는다. */
+    const mood = moodTextFor(req, moods, (m, seed) => fromPool(seed, m.npcFallback));
     return {
       text: `${req.seed}. ${mood || pickBySeed(req.seed, tails.npc)}`,
       source: "fallback",

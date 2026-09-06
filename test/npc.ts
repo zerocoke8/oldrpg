@@ -127,7 +127,10 @@ class Client {
     return text;
   }
   lastNpcLine(): string | undefined {
-    const last = this.logs("npc").filter((l) => l.text.includes(":")).at(-1);
+    /* ★ 콜론으로 구별하지 않는다. npcHere("…이(가) 이곳에 있다")도 kind:"npc"
+       이고, 폴백 대사는 이제 지문 틀이라 콜론이 없다. 대사에는 source 가
+       실리고 '있다' 알림에는 안 실린다 — 그게 의미로 구별하는 자리다. */
+    const last = this.logs("npc").filter((l) => l.source !== undefined).at(-1);
     return last && this.finalTextFor(last.id);
   }
   clear(): void {
@@ -186,13 +189,20 @@ async function main() {
     JSON.stringify(dlg.dialogue));
 
   const greetLog = await alice.until<Extract<ServerMsg, { t: "log" }>>(
-    (m) => m.t === "log" && m.kind === "npc" && m.text.startsWith("제단지기: "),
+    (m) => m.t === "log" && m.kind === "npc" && m.text.startsWith("제단지기"),
   );
   check("인사 대사가 log{kind:'npc'} 로 온다", greetLog.kind === "npc", greetLog.text);
   check("★ 처음 받은 것은 폴백이다 (모델을 기다리지 않았다)",
     greetLog.source === "fallback", String(greetLog.source));
   check("폴백도 씨앗에서 렌더링된 문장이다",
     greetLog.text.includes(keeper.topics[0]!.seed.slice(0, 12)), greetLog.text);
+  /* ★ 씨앗은 설계상 3인칭 지문이다 ("낯선 이를 흘깃 보고는…"). 그걸 따옴표에
+     넣으면 인물이 자기를 3인칭으로 서술하는 문장이 된다 — npc 프롬프트가
+     "지문·행동 묘사를 넣지 마세요" 라고 못박은 그것이다. LLM 경로는 씨앗을
+     실제 발화로 옮기므로 맞고, 폴백만 틀렸었다. 규칙 4 때문에 플레이어가
+     먼저 보는 것은 늘 폴백이고, 키가 없으면 그게 영구적이다. */
+  check("★ 폴백은 따옴표에 들어가지 않는다 (3인칭 지문을 대사로 세우지 않는다)",
+    !greetLog.text.includes('"') && greetLog.text.startsWith("제단지기 — "), greetLog.text);
 
   await server.upgrades.idle();
   await sleep(80);
@@ -203,6 +213,10 @@ async function main() {
       replaced.text.startsWith("제단지기: ") &&
       replaced.text.includes("[이전]"),
     `${replaced?.source} ${replaced?.text}`);
+  /* ★ 교체되는 것은 언제나 LLM 이 쓴 '실제 발화' 이므로 따옴표 쪽이다.
+     지문 틀로 교체하면 생성이 성공했는데도 대사가 지문으로 남는다. */
+  check("★ 확정본은 따옴표에 들어간다 (지문 -> 대사로 바뀐다)",
+    (replaced?.text ?? "").includes('"'), String(replaced?.text));
   check("DB 에도 확정본이 고정됐다 (규칙 2: 그 시점부터 모두에게 동일)",
     lineRow("greet")?.source === "llm", JSON.stringify(lineRow("greet")));
 

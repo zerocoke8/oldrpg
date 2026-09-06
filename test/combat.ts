@@ -27,6 +27,7 @@ import { PROTOCOL_VERSION, type ServerMsg } from "../shared/protocol";
 import type { RoomTextRequest } from "../shared/narration";
 import type { Dir } from "../shared/ids";
 import { makeRng } from "../server/engine/rng";
+import { lines } from "../server/narration/lines";
 import { makeMap } from "../server/engine/map";
 
 /** 서버가 이 검사에서 실제로 부팅하는 것과 '같은' 세계 (test/fixture.ts). */
@@ -373,7 +374,7 @@ async function main() {
   erin.clear();
   await advance(30_000); // 누적 50초 > 45초
   check("★ 돌아왔다 — 결정론 문장 한 줄",
-    erin.texts("bad").some((t) => t.includes("잿빛 종잇장이(가) 어둠 속에서 다시 모습을 갖춘다.")),
+    erin.texts("bad").some((t) => t === lines.enemyReturns("잿빛 종잇장")),
     JSON.stringify(erin.texts()));
   check("★ 방 묘사를 다시 그리지 않는다 (charter 63줄)",
     erin.logs("narr").length === 0, JSON.stringify(erin.texts("narr")));
@@ -551,7 +552,7 @@ async function main() {
   check("DB 도 같이 갱신됐다 (메모리만 고치지 않는다)",
     srv2.ctx.q.playerByTokenHash.get(sha256(carolToken))?.hp === revivedSelf.hp);
   check("부활 문장이 한 번 나간다",
-    carol2.texts("sys").filter((t) => t.includes("차가운 돌바닥")).length === 1,
+    carol2.texts("sys").filter((t) => t === lines.respawn).length === 1,
     JSON.stringify(carol2.texts("sys")));
 
   carol2.clear();
@@ -582,7 +583,7 @@ async function main() {
   await dave2.connect(daveToken);
   await sleep(600); // 옛 부활 타이머가 지나가도록
   check("★ 이중 부활이 나지 않는다 (에폭이 옛 타이머를 무효화한다)",
-    dave2.texts("sys").filter((t) => t.includes("차가운 돌바닥")).length === 1,
+    dave2.texts("sys").filter((t) => t === lines.respawn).length === 1,
     JSON.stringify(dave2.texts("sys")));
   const daveRow = srv2.ctx.q.playerByTokenHash.get(sha256(daveToken));
   check("체력도 한 번만 적용됐다", daveRow?.hp === Math.max(1, Math.floor((daveRow?.max_hp ?? 0) / 2)),

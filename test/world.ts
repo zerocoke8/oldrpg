@@ -14,9 +14,10 @@ import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import WebSocket from "ws";
-import { loadWorld } from "../server/content/world";
+import { loadWorld, loadBrief } from "../server/content/world";
 import { makeMap, seedIdOf, type MapData } from "../server/engine/map";
-import { loadTones } from "../server/narration/prompts";
+import { loadMoods, loadTones, loadVoice } from "../server/narration/prompts";
+import { lines } from "../server/narration/lines";
 import { npcSeedId } from "../server/engine/npcs";
 import { boot } from "../server/index";
 import { PROTOCOL_VERSION, type ServerMsg } from "../shared/protocol";
@@ -121,6 +122,44 @@ async function main() {
       t.room.length >= 2, String(t.room.length));
   }
 
+  /* ── 세계의 목소리 ──────────────────────────────────────────────────
+     charter 139줄: 코드에 프로즈를 박아 두면 세계관을 갈아끼울 때 그 문장만
+     옛 세계에 남는다. 실제로 그랬다 — 세계관을 바꾼 뒤에도 부활 문장은
+     "차가운 돌바닥의 감촉에 정신이 든다. 입구로 끌려와 있었다" 였는데,
+     부활 지점은 대공동 6구역의 광장이다. */
+  section("①″ 세계가 자기에 대해 쓰는 문장은 파일에 있다");
+  /* 주석은 뺀다 — 왜 이 문장들이 여기 없어야 하는지 설명하려면 그 문장을
+     인용해야 하고, 인용까지 금지하면 그 이유를 적을 수 없다. */
+  const src = readFileSync("server/narration/lines.ts", "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/.*$/gm, "");
+  for (const ghost of ["차가운 돌바닥", "어둠 속에서", "어둠 속으로", "길이 무너져", "입구로 끌려와"]) {
+    check(`★ lines.ts 의 코드에 옛 세계의 프로즈가 없다: "${ghost}"`, !src.includes(ghost));
+  }
+  check("voice.ko.md 가 읽힌다", loadVoice().respawn.length > 0);
+
+  /* 무드도 지역 톤과 같다: 후보가 하나면 그 플래그를 선언한 방이 전부 같은
+     문장으로 끝난다. 격리 구역 열두 방을 다 돌면 같은 한 줄을 열두 번 읽었다. */
+  const realMoods = loadMoods();
+  check("★ 무드가 실제로 배선돼 있다", realMoods.size > 0, String(realMoods.size));
+  for (const [flag, m] of realMoods) {
+    check(`moods/${flag}: 방 꼬리 후보가 둘 이상이다`, m.fallback.length >= 2,
+      String(m.fallback.length));
+    check(`moods/${flag}: 대사 지시가 방 지시와 다르다`, m.npcPrompt !== m.prompt,
+      "같으면 대사 작가가 방 묘사용 지시를 받는다 — 사람이 나레이션을 한다");
+  }
+  check("★ 치환이 실제로 된다", lines.enemyHere("증식체").includes("증식체") &&
+    !lines.enemyHere("증식체").includes("{{"), lines.enemyHere("증식체"));
+
+  /* ── 브리프의 개요 ──────────────────────────────────────────────────
+     개요는 방 씨앗을 쓸 때 참고할 '공통의 사실' 이다. 없으면 방을 더 뚫는
+     순간 기존 방들과 서로를 모르는 문장이 나온다. 여섯 개가 전부 null 이었다. */
+  section("①‴ 지역마다 개요가 있다 (방을 더 뚫어도 같은 장소로 이어진다)");
+  for (const r of map.regions()) {
+    const b = loadBrief(r.id);
+    check(`${r.id}: 브리프에 개요가 있다`, (b.overview ?? "").trim().length >= 100,
+      `${(b.overview ?? "").length}자 — 없으면 authorRegion 이 모델로 새로 만든다`);
+  }
   section("② 씨앗은 한 글자도 바뀌지 않았다 (규칙 3)");
   /* seed_id 는 내용 파생이다 — 하나라도 어긋나면 그 방의 생성된 텍스트가
      전부 날아간다.

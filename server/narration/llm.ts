@@ -152,11 +152,9 @@ export function makeLlmNpcRenderer(
 
   return async (req: NpcLineRequest): Promise<RoomTextResult> => {
     try {
-      const mood = req.flags
-        .filter(([, v]) => v === true)
-        .map(([k]) => moods.get(k)?.prompt)
-        .filter((x): x is string => Boolean(x))
-        .join(" ");
+      /* ★ 대사 작가에게는 npcPrompt 를 준다. prompt 는 "…직후의 공기를 담아라"
+         같은 방 묘사용 지시문이라, 그걸 주면 사람이 아니라 나레이션이 나온다. */
+      const mood = moodTextFor(req, moods, (m) => m.npcPrompt);
       const res = await client.messages.create({
         model,
         max_tokens: maxTokens,

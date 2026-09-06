@@ -135,9 +135,12 @@ async function main() {
   await b.waitForSelector("text=석조 교차로", { timeout: 15_000 });
   await sleep(500);
 
-  console.log("\n② 같은 방 — 'OO 님이 ... 나타났다'");
+  console.log("\n② 같은 방 — 남이 들어온 것이 보인다");
   const aLog = await logText(a);
-  const entered = aLog.find((t) => t.includes("나타났다"));
+  /* 문구 자체를 붙들지 않는다 — 세계가 자기에 대해 쓰는 문장은
+     prompts/voice.ko.md 가 소유하고 세계를 갈아끼우면 함께 갈린다.
+     "님이" 는 틀 쪽이라 lines.ts 에 남는다. */
+  const entered = aLog.find((t) => t.includes("님이"));
   check("A 화면에 입장 메시지가 떴다", Boolean(entered), JSON.stringify(aLog));
   console.log(`       "${entered ?? ""}"`);
 
@@ -301,7 +304,15 @@ async function main() {
   }
   await sleep(LLM_MS + 500);
   /** 화면에 남아 있는 대사 줄. 앞에 '새로 생성됨' 뱃지가 붙을 수 있다. */
-  const npcLines = async () => (await logText(b)).filter((t) => t.includes("제단지기: "));
+  /* 폴백 대사는 지문 틀("제단지기 — …")이고 승급된 확정본은 따옴표 틀
+     ("제단지기: …")이다. 화자 이름으로만 고른다 — 틀 자체가 바뀌는 것이
+     여기서 검사하려는 것이 아니다 (그건 test/npc.ts 가 본다). */
+  /* 폴백 대사는 지문 틀("제단지기 — …")이고 승급된 확정본은 따옴표 틀
+     ("제단지기: …")이다. 화자 뒤에 오는 구분자로만 고른다 — 앞에는 '새로
+     생성됨' 뱃지 텍스트가 붙으므로 줄 첫머리에 고정할 수 없고, "…이(가)
+     이곳에 있다" 는 구분자가 없어 걸리지 않는다. */
+  const npcLines = async () =>
+    (await logText(b)).filter((t) => /제단지기\s*[—:]/.test(t));
   /** badges() 는 c 의 화면을 센다. B 의 화면에는 이쪽을 쓴다. */
   const bBadges = () => b.locator("text=새로 생성됨").count();
 

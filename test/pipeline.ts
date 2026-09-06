@@ -24,7 +24,7 @@ const FIXTURE = { world: FIXTURE_WORLD, balance: FIXTURE_BALANCE, moods: FIXTURE
 import { PROTOCOL_VERSION, type ServerMsg } from "../shared/protocol";
 import type { RoomTextRenderer, RoomTextRequest } from "../shared/narration";
 import type { Dir } from "../shared/ids";
-import { loadNpcPrompt, loadRoomPrompt, loadTails, regionOfRoomId, type Tone } from "../server/narration/prompts";
+import { loadNpcPrompt, loadRoomPrompt, loadTails, regionOfRoomId, type Mood, type Tone } from "../server/narration/prompts";
 import { makeStaticNpcRenderer, makeStaticRenderer } from "../server/narration/static";
 import { makeLlmNpcRenderer, makeLlmRenderer, type AnthropicLike } from "../server/narration/llm";
 
@@ -332,6 +332,46 @@ async function main() {
   check("꼬리가 빈 톤도 전역으로 떨어진다", globalTails.includes(emptyTone), emptyTone);
   check("같은 방은 늘 같은 꼬리다 (폴백도 캐시에 기록된다)",
     (await ask("b1:1,1")) === (await ask("b1:1,1")));
+
+  /* ── 무드: 방과 NPC 는 다른 목소리다 ────────────────────────────────
+     ★ 한때 둘이 같은 절을 읽었다. 그래서 인도자에게 인사하면 사람이 아니라
+       나레이션이 돌아왔고 — npc 프롬프트가 "지문·행동 묘사를 넣지 마세요"
+       라고 못박은 그것이다 — 격리 구역 열두 방이 같은 한 줄로 끝났다. */
+  const MOODS = new Map<string, Mood>([
+    ["guardian_slain", {
+      prompt: "방 지시",
+      fallback: ["방 꼬리 하나.", "방 꼬리 둘.", "방 꼬리 셋."],
+      npcPrompt: "대사 지시",
+      npcFallback: ["인물 꼬리."],
+      label: null, near: null, far: null,
+    }],
+  ]);
+  const roomR = makeStaticRenderer(MOODS, loadTails());
+  const npcR = makeStaticNpcRenderer(MOODS, loadTails());
+  const ON = [["guardian_slain", true]] as const;
+  const roomOut = (await roomR({
+    roomId: "b1:1,1", stateHash: "h", seed: "방씨앗", seedId: "s", flags: ON,
+  })).text;
+  const npcOut = (await npcR({
+    npcId: "n", topic: "t", stateHash: "h", npcName: "아무개",
+    persona: "p", seed: "대사씨앗", seedId: "s", flags: ON,
+  })).text;
+  check("★ 방은 fallback 을 읽는다", roomOut.includes("방 꼬리"), roomOut);
+  check("★ NPC 는 npc_fallback 을 읽는다 (방과 같은 문장을 쓰지 않는다)",
+    npcOut.includes("인물 꼬리") && !npcOut.includes("방 꼬리"), npcOut);
+  /* 후보가 하나면 그 플래그를 선언한 방이 전부 같은 문장으로 끝난다. */
+  const outs = new Set<string>();
+  for (const seed of ["가", "나", "다", "라", "마", "바", "사", "아"]) {
+    outs.add((await roomR({ roomId: "b1:1,1", stateHash: "h", seed, seedId: "s", flags: ON })).text
+      .replace(seed, ""));
+  }
+  check("★ 후보가 여럿이면 방마다 다른 문장으로 끝난다",
+    outs.size >= 2, JSON.stringify([...outs]));
+
+  /* 대사 작가에게 가는 지시도 방 것과 다르다 — prompt 는 "…직후의 공기를
+     담아라" 같은 방 묘사용이라, 그대로 주면 사람이 나레이션을 한다. */
+  check("★ NPC 프롬프트의 mood 는 npc_prompt 다",
+    MOODS.get("guardian_slain")!.npcPrompt === "대사 지시");
   check("mood 에 prompt/fallback 두 절이 있다",
     Boolean(moods.get("guardian_slain")?.prompt) && Boolean(moods.get("guardian_slain")?.fallback));
 

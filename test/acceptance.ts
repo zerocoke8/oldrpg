@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import WebSocket from "ws";
 import { boot } from "../server/index";
+import { lines } from "../server/narration/lines";
 import { FIXTURE_WORLD, FIXTURE_BALANCE, FIXTURE_MOODS } from "./fixture";
 
 /** 모든 boot() 가 같은 고정 세계를 쓴다 — 운영 콘텐츠가 바뀌어도 검사는 그대로다. */
@@ -155,8 +156,8 @@ async function main() {
   const enter = await alice.until<Extract<ServerMsg, { t: "room.enter" }>>((m) => m.t === "room.enter");
   const bobName = enter.player.name;
   check("Alice 가 room.enter 를 받았다", enter.player.id.length > 0);
-  check(`Alice 로그에 "${bobName} 님이 ... 나타났다"`,
-    alice.logs("presence").some((l) => l.text.includes(bobName) && l.text.includes("나타났다")),
+  check(`Alice 로그에 새로 접속한 사람의 등장이 뜬다`,
+    alice.logs("presence").some((l) => l.text === lines.entered(bobName, null)),
     JSON.stringify(alice.logs("presence").map((l) => l.text)));
 
   // ── ①' 인수 조건 1: 미니맵에 상대가 보인다 ──────────────────────────
@@ -312,8 +313,10 @@ async function main() {
   check("presence.leave 가 왔다", alice.of("presence.leave").length === 1);
   check("같은 방이므로 room.leave 도 왔다 (toDir=null)",
     alice.of("room.leave")[0]?.toDir === null);
-  check(`로그: "${carolName} 님이 어둠 속으로 사라졌다."`,
-    alice.logs("presence").some((l) => l.text === `${carolName} 님이 어둠 속으로 사라졌다.`),
+  /* 문구 자체를 붙들지 않는다 — 세계를 갈아끼우면 이 문장은 함께 갈린다
+     (prompts/voice.ko.md). 검사가 보는 것은 '그 사람이 사라진 것을 알린다' 다. */
+  check(`로그: 접속이 끊긴 사람의 퇴장을 알린다`,
+    alice.logs("presence").some((l) => l.text === lines.left(carolName, null)),
     JSON.stringify(alice.logs("presence").map((l) => l.text)));
 
   // ── ⑩ 프로토콜 방어 ─────────────────────────────────────────────────

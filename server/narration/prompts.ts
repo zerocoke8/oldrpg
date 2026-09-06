@@ -155,6 +155,40 @@ export function loadTails(version = "tails.ko"): Tails {
   return { room, npc };
 }
 
+/** 세계가 자기 자신에 대해 쓰는 문장들. prompts/voice.ko.md 한 파일.
+ *
+ *  ★ lines.ts 에 있는 것은 '틀' 이다 ("{적}에게 {n}의 피해를 주었다").
+ *    여기 있는 것은 세계가 어떤 곳인지를 말하는 부분이라, 세계를 갈아끼우면
+ *    함께 갈려야 한다 (charter 139줄). 실제로 세계관을 바꾼 뒤에도 부활
+ *    문장이 "차가운 돌바닥" 인 채로 남아 있었다 — 부활 지점은 광장이다. */
+export interface Voice {
+  readonly appear: string;
+  readonly vanish: string;
+  readonly enemyHere: string;
+  readonly enemyReturns: string;
+  readonly fled: string;
+  readonly respawn: string;
+  readonly displaced: string;
+}
+
+export function loadVoice(version = "voice.ko"): Voice {
+  const s = sections(readFileSync(join(PROMPTS, `${version}.md`), "utf8"));
+  const need = (name: string): string => {
+    const v = (s[name] ?? "").trim();
+    if (!v) throw new Error(`${version}.md 에 '# ${name}' 절이 있어야 한다`);
+    return v;
+  };
+  return {
+    appear: need("appear"),
+    vanish: need("vanish"),
+    enemyHere: need("enemy_here"),
+    enemyReturns: need("enemy_returns"),
+    fled: need("fled"),
+    respawn: need("respawn"),
+    displaced: need("displaced"),
+  };
+}
+
 /** 지역 하나가 프로즈에 하는 일 전부. prompts/tones/<regionId>.md 한 파일.
  *
  *  ★ 왜 필요한가: 방 프롬프트의 system 절이 "어둡고 축축한 지하 던전 톤" 을
@@ -208,10 +242,25 @@ export const regionOfRoomId = (roomId: string): string => {
 
 /** 플래그 하나가 프로즈에 하는 일 전부. prompts/moods/<flag>.md 한 파일. */
 export interface Mood {
-  /** LLM 에게 주는 톤 지시 (2단계). */
+  /** LLM 에게 주는 톤 지시 (2단계). '방' 묘사용이다. */
   readonly prompt: string;
-  /** LLM 없이(또는 실패 시) 방 묘사 뒤에 붙는 결정론적 한 문장. */
-  readonly fallback: string;
+  /** LLM 없이(또는 실패 시) 방 묘사 뒤에 붙는 결정론적 한 문장.
+   *
+   *  ★ 후보가 여럿이다. 하나면 그 플래그를 선언한 방이 전부 같은 문장으로
+   *    끝난다 — 격리 구역 열두 방을 다 돌면 같은 한 줄을 열두 번 읽었다.
+   *    씨앗 해시로 고르므로 방마다 고정이다 (tails.ko.md 와 같은 규칙). */
+  readonly fallback: readonly string[];
+  /** 대사 작가에게 주는 톤 지시. 없으면 prompt 로 떨어진다.
+   *
+   *  ★ 왜 나뉘어야 하는가: prompt 는 "…직후의 공기를 담아라" 같은 **방 묘사용
+   *    지시문**이다. 그걸 대사 작가에게 주면 사람이 아니라 나레이션이 나온다 —
+   *    npc 프롬프트가 "지문·행동 묘사를 넣지 마세요" 라고 못박은 바로 그것이다. */
+  readonly npcPrompt: string;
+  /** NPC 대사의 결정론 폴백에 붙는 것. 없으면 아무것도 안 붙는다.
+   *
+   *  ★ 방과 같은 문장을 쓰면 인물이 자기 대사 자리에서 세계를 서술한다.
+   *    비워 두는 편이 낫다 — 인물은 그 일에 대해 '자기 주제' 로 말한다. */
+  readonly npcFallback: readonly string[];
   /** 켜졌을 때 상태창에 뜨는 표시 문구. 없으면 상태창에 뜨지 않는다. */
   readonly label: string | null;
   /** 플래그가 켜지는 '순간' 영향받는 방에 서 있는 사람에게 (3단계). */
@@ -228,9 +277,14 @@ export function loadMoods(): Map<string, Mood> {
   for (const f of readdirSync(dir)) {
     if (!f.endsWith(".md")) continue;
     const s = sections(readFileSync(join(dir, f), "utf8"));
+    /* 빈 줄로 나눈 각 덩어리가 후보다 (tails.ko.md 와 같은 규칙). */
+    const pool = (name: string): string[] =>
+      (s[name] ?? "").split(/\n\s*\n/).map((x) => x.trim()).filter(Boolean);
     out.set(f.replace(/\.md$/, ""), {
       prompt: s.prompt ?? "",
-      fallback: s.fallback ?? "",
+      fallback: pool("fallback"),
+      npcPrompt: s.npc_prompt ?? s.prompt ?? "",
+      npcFallback: pool("npc_fallback"),
       label: s.label || null,
       near: s.near || null,
       far: s.far || null,

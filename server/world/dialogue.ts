@@ -74,10 +74,15 @@ export function makeDialogue(
         if (roomIdOf(s.pos) !== npc.roomId) return;
         // source 를 함께 싣는다: 방 묘사와 같은 규칙이고, 클라이언트의
         // "새로 생성됨" 뱃지가 대사에도 그대로 붙는다.
-        const say = (t: string) => lines.npcSays(npc.name, t);
-        const logId = emit.log(s, "npc", say(text), { source });
-        // ★ 틀을 함께 넘긴다. 안 그러면 승급된 순간 "제단지기:" 가 사라진다.
-        upgrades.watch({ kind: "npc", npcId, topic, stateHash }, source, s, logId, say);
+        /* 폴백은 지문으로, 생성된 대사는 따옴표로. 씨앗은 설계상 3인칭
+           지문이라 폴백을 따옴표에 넣으면 인물이 자기를 3인칭으로 서술한다
+           ("접수원: \"이름을 묻지 않고 등급부터 확인한다.\""). */
+        const spoken = (t: string) => lines.npcSays(npc.name, t);
+        const aside = (t: string) => lines.npcAside(npc.name, t);
+        const logId = emit.log(s, "npc", source === "fallback" ? aside(text) : spoken(text), { source });
+        /* ★ 틀을 함께 넘긴다. 안 그러면 승급된 순간 "제단지기:" 가 사라진다.
+           교체되는 것은 언제나 LLM 문장이므로 따옴표 쪽이다. */
+        upgrades.watch({ kind: "npc", npcId, topic, stateHash }, source, s, logId, spoken);
       })
       .catch((err: unknown) => {
         console.error(`[dialogue] ${npcId}/${topic}`, err);

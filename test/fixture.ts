@@ -501,7 +501,12 @@ export const FIXTURE_BALANCE: Balance = {
 export const FIXTURE_MOODS: ReadonlyMap<string, Mood> = new Map<string, Mood>([
   ["guardian_slain", {
     prompt: "이 구역을 지키던 그림자 파수꾼은 방금 쓰러졌다.\n위협이 사라진 직후의 느슨한 정적을 담아라.",
-    fallback: "위협이 사라진 뒤의 느슨한 정적이 감돈다.",
+    /* 후보가 둘이다 — 하나면 그 플래그를 선언한 방이 전부 같은 문장으로 끝난다. */
+    fallback: ["위협이 사라진 뒤의 느슨한 정적이 감돈다.", "지키던 것이 없어진 자리가 유난히 넓다."],
+    /* 대사 작가에게 주는 지시는 방 묘사용과 다르다 (사람이 나레이션을 하면 안 된다). */
+    npcPrompt: "파수꾼이 쓰러진 것을 이 사람은 이미 알고 있다. 그 사실이 말투에 배어 있다.",
+    /* NPC 폴백에는 아무것도 안 붙인다 — 인물은 그 일에 대해 '자기 주제' 로 말한다. */
+    npcFallback: [],
     label: "파수꾼 처치됨",
     near: "주변의 공기가 달라졌다. 지나온 길이 예전 같지 않을 것이다.",
     far: "멀리서 무언가 무너지는 소리가 길게 이어지다 잦아든다.",
