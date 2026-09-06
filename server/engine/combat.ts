@@ -85,7 +85,11 @@ export function resolvePlayerSwing(
 
   const effects: Effect[] = [{ type: "enemyDamage", amount: dealt }];
   // 적이 죽으면 월드 플래그를 켠다 — 3단계의 재렌더링 경로가 여기서 시작된다.
-  if (lethal) effects.push({ type: "flag", key: enemy.slainFlag, value: true });
+  // 플래그가 없는 적(반복되는 적)은 세계를 바꾸지 않는다. 그쪽의 '죽음' 은
+  // 월드 플래그가 아니라 world/combat.ts 의 리스폰 대기가 소유한다.
+  if (lethal && enemy.slainFlag !== null) {
+    effects.push({ type: "flag", key: enemy.slainFlag, value: true });
+  }
 
   return { effects, crit, amount: dealt, skill, lethal };
 }

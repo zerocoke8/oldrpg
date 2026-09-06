@@ -54,6 +54,10 @@ export const lines = {
      그때도 여기 있는 문장이 폴백으로 남는다. */
   /** 방에 들어섰을 때. 아직 교전은 아니다 — 실시간이라 '먼저 치는' 선택이 있다. */
   enemyHere: (enemy: string): string => `${enemy}이(가) 어둠 속에서 이쪽을 향해 서 있다.`,
+  /** 반복되는 적이 돌아왔다. 지금 그 방에 '서 있는' 사람에게 가는 문장이라
+   *  반드시 결정론이어야 한다 — charter 63줄대로 방 묘사는 다시 그리지 않고,
+   *  이 한 줄과 구조화 상태(hasEnemy)만 나간다. */
+  enemyReturns: (enemy: string): string => `${enemy}이(가) 어둠 속에서 다시 모습을 갖춘다.`,
   engage: (enemy: string): string => `${enemy}이(가) 이쪽을 노려본다. 교전이 시작됐다.`,
   /** 평범한 타격. kind:"combat" 으로 나가고 클라이언트가 연속된 것을 접는다. */
   hit: (enemy: string, dmg: number): string => `${enemy}에게 ${dmg}의 피해를 주었다.`,

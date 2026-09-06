@@ -112,6 +112,16 @@ export function makeCombat(
   const combats = new Map<RoomId, Combat>();
   /** playerId -> roomId. 한 사람은 한 전투에만 있다. */
   const inCombat = new Map<PlayerId, RoomId>();
+  /** 쓰러진 '반복되는 적' -> 돌아올 시각(단조 시계).
+   *
+   *  ★ 메모리다. 표를 만들지 않는 이유는 전투 중 HP 와 같다 — 재시작하면
+   *    전부 살아 있고 그것이 정직하다. 영속화하면 크래시마다 청소해야 할
+   *    거짓 행이 생긴다. 보스의 사망만 영속(월드 플래그)이고, 그건 세계가
+   *    바뀐 사건이라 살아남아야 한다.
+   *  ★ setTimeout 이 아니라 틱이 소유한다. 주입된 시계 위에서 돌아야
+   *    테스트가 손으로 시간을 밀 수 있고, 타이머 하나에 상태를 걸었다가
+   *    그것을 잃는 실패 모드(부활 결함)를 되풀이하지 않는다. */
+  const downed = new Map<RoomId, number>();
   let timer: NodeJS.Timeout | null = null;
 
   /* ── 헬퍼 ─────────────────────────────────────────────────────────── */
@@ -123,8 +133,31 @@ export function makeCombat(
     const coord = roomId.slice(roomId.indexOf(":") + 1);
     const def = ENEMIES[coord];
     if (!def) return null;
-    // 이미 죽은 적은 없는 것과 같다. 사망은 월드 플래그가 소유한다.
-    return events.isFlagOn(def.slainFlag) ? null : def;
+    // 이미 죽은 적은 없는 것과 같다. 죽음의 '소유자' 가 둘로 나뉜다:
+    //   보스        — 월드 플래그 (영속. 세계가 바뀐 사건이다)
+    //   반복되는 적 — 리스폰 대기 (메모리. 돌아올 때까지만 없다)
+    if (def.slainFlag !== null && events.isFlagOn(def.slainFlag)) return null;
+    if (downed.has(roomId)) return null;
+    return def;
+  }
+
+  /** 돌아올 때가 됐다. 지금 그 방에 서 있는 사람에게 무엇을 보낼 것인가가
+   *  이 절의 유일한 설계 결정이다.
+   *
+   *  ★ 방 묘사를 다시 그리지 않는다 (charter 63줄: "지금 그 방에 서 있는
+   *    플레이어의 화면을 갈아치우지 않는다"). 3단계가 log.replace 를 쓰지
+   *    않는 것과 같은 이유다. 나가는 것은 두 가지뿐이다 —
+   *      결정론 문장 한 줄 (narration/lines.ts. 모델을 기다리지 않는다)
+   *      구조화 상태 갱신 (hasEnemy. 커맨드 창의 '싸우기' 가 다시 선다) */
+  function respawnEnemy(roomId: RoomId): void {
+    downed.delete(roomId);
+    const def = enemyIn(roomId);
+    if (!def) return; // 그 사이 보스 플래그가 켜졌다거나 — 조용히 넘어간다
+    emit.toRoom(roomId, null, (s) => {
+      emit.log(s, "bad", lines.enemyReturns(def.name));
+      onRoomChanged?.(s);
+    });
+    maybeStopTimer();
   }
 
   const enemyView = (c: Combat): EnemyView => ({
@@ -361,6 +394,11 @@ export function makeCombat(
 
   function tick(): void {
     const t = now();
+    // 돌아올 때가 된 적부터. 전투가 하나도 없어도 이 루프는 돌아야 하므로
+    // maybeStopTimer 가 downed 를 함께 본다.
+    for (const [roomId, readyAt] of [...downed]) {
+      if (readyAt <= t) respawnEnemy(roomId);
+    }
     for (const c of [...combats.values()]) {
       if (c.hp <= 0) continue;
 
@@ -496,8 +534,15 @@ export function makeCombat(
         s.playerId === killerId ? lines.slain(c.def.name) : lines.slainByOther(killer, c.def.name),
       );
     });
-    // applyEffects 가 이미 flag 를 켰다 (3단계 파이프라인이 돌고 있다).
+    /* 보스라면 applyEffects 가 이미 flag 를 켰다 (3단계 파이프라인이 돌고 있다).
+       반복되는 적이라면 여기서 돌아올 시각을 적는다 — endCombat '전에' 적어야
+       maybeStopTimer 가 틱을 끄지 않는다. */
+    if (c.def.respawnMs !== null) downed.set(c.roomId, now() + c.def.respawnMs);
     endCombat(c, "victory");
+    /* 적이 사라진 것도 방의 구조화 상태 변화다 — 돌아온 것과 대칭이다.
+       이걸 빼면 서 있는 사람의 커맨드 창에 '싸우기' 가 남아 있다가, 누르면
+       "여기에는 맞설 것이 없다" 는 답을 듣는다. 여기서도 묘사는 보내지 않는다. */
+    emit.toRoom(c.roomId, null, (s) => onRoomChanged?.(s));
   }
 
   function defeat(c: Combat, playerId: PlayerId): void {
@@ -549,6 +594,9 @@ export function makeCombat(
 
   /** 부활 후 방 묘사를 다시 보내기 위해 index.ts 가 꽂는다 (순환 회피). */
   let onRespawn: ((s: Session) => void) | null = null;
+  /** 방의 '구조화 상태' 만 다시 보낸다 (room.describe). onRespawn 과 달리
+   *  방 묘사(log{narr})는 보내지 않는다 — 서 있는 화면을 갈아치우지 않는다. */
+  let onRoomChanged: ((s: Session) => void) | null = null;
 
   /* ── 타이머 ───────────────────────────────────────────────────────── */
 
@@ -558,7 +606,7 @@ export function makeCombat(
     timer.unref?.();
   }
   function maybeStopTimer(): void {
-    if (timer && combats.size === 0) {
+    if (timer && combats.size === 0 && downed.size === 0) {
       clearInterval(timer);
       timer = null;
     }
@@ -576,6 +624,7 @@ export function makeCombat(
       timer = null;
       combats.clear();
       inCombat.clear();
+      downed.clear();
     },
     activeCount: () => combats.size,
     // 테스트가 틱을 손으로 돌린다.
@@ -583,5 +632,12 @@ export function makeCombat(
     setOnRespawn(fn: (s: Session) => void) {
       onRespawn = fn;
     },
-  } as CombatService & { tick?: () => void; setOnRespawn(fn: (s: Session) => void): void };
+    setOnRoomChanged(fn: (s: Session) => void) {
+      onRoomChanged = fn;
+    },
+  } as CombatService & {
+    tick?: () => void;
+    setOnRespawn(fn: (s: Session) => void): void;
+    setOnRoomChanged(fn: (s: Session) => void): void;
+  };
 }

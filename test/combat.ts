@@ -317,6 +317,79 @@ async function main() {
   check("attack 액션 타입에 피해량 필드 자체가 없다 (표현 불가능하게)",
     !JSON.stringify(Object.keys({ type: "attack" })).includes("damage"));
 
+  /* ── ⑩ 반복되는 적 ──────────────────────────────────────────────────
+   *
+   * 파수꾼 하나뿐이면 '한 번 죽이면 끝' 인 세계다 — guardian_slain 이 DB 영속이라
+   * 늦게 접속한 사람은 전투를 영영 보지 못했다. 그래서 적이 두 종류로 나뉜다:
+   *   보스        플래그를 켠다. 돌아오지 않는다 (세계가 바뀐 사건이다)
+   *   반복되는 적 세계를 바꾸지 않는다. 시간이 지나면 돌아온다
+   *
+   * ★ 이 절의 핵심은 '돌아온 것을 어떻게 알리는가' 다. charter 63줄 —
+   *   지금 그 방에 서 있는 사람의 화면을 갈아치우지 않는다. */
+  section("⑩ 반복되는 적은 돌아온다 — 묘사를 다시 그리지 않고");
+  const erin = new Client("erin");
+  await erin.connect(null);
+  // (3,3) -> 서쪽 고리를 돌아 (4,1). 5,2 의 적을 지나가지 않는 경로다.
+  await erin.walk(["west", "west", "north", "north", "east", "east", "east"]);
+  await sleep(40);
+  check("잿빛 종잇장이 서 있다",
+    erin.texts("bad").some((t) => t.includes("잿빛 종잇장") && t.includes("서 있다")),
+    JSON.stringify(erin.texts("bad").slice(-2)));
+  check("방 상태에 적이 있다고 실린다",
+    erin.of("room.describe").at(-1)?.room.hasEnemy === true);
+
+  erin.clear();
+  await erin.actAndWait({ type: "attack" });
+  for (let i = 0; i < 120 && !erin.texts("good").some((t) => t.includes("흩어진다")); i++) {
+    await advance(500);
+  }
+  check("쓰러뜨렸다", erin.texts("good").some((t) => t.includes("흩어진다")),
+    JSON.stringify(erin.texts("good").slice(-2)));
+  check("★ 세계를 바꾸지 않는다 (반복되는 적은 플래그를 켜지 않는다)",
+    server.ctx.q.allFlags.all().every((f) => f.key !== "ashen_pages"),
+    JSON.stringify(server.ctx.q.allFlags.all()));
+  check("적이 사라진 것도 구조화 상태로 간다 (커맨드 창의 '싸우기' 가 내려간다)",
+    erin.of("room.describe").at(-1)?.room.hasEnemy === false,
+    JSON.stringify(erin.of("room.describe").at(-1)?.room));
+
+  erin.clear();
+  await advance(20_000); // 아직 45초가 되지 않았다
+  check("돌아올 때가 되기 전에는 조용하다", erin.logs().length === 0,
+    JSON.stringify(erin.texts()));
+  await erin.actAndWait({ type: "attack" });
+  check("그동안은 없는 것과 같다",
+    erin.texts("sys").some((t) => t.includes("맞설 것이 없다")), JSON.stringify(erin.texts("sys")));
+
+  erin.clear();
+  await advance(30_000); // 누적 50초 > 45초
+  check("★ 돌아왔다 — 결정론 문장 한 줄",
+    erin.texts("bad").some((t) => t.includes("잿빛 종잇장이(가) 어둠 속에서 다시 모습을 갖춘다.")),
+    JSON.stringify(erin.texts()));
+  check("★ 방 묘사를 다시 그리지 않는다 (charter 63줄)",
+    erin.logs("narr").length === 0, JSON.stringify(erin.texts("narr")));
+  check("★ log.replace 도 보내지 않는다", erin.of("log.replace").length === 0);
+  check("구조화 상태만 갱신된다 (hasEnemy 가 다시 true)",
+    erin.of("room.describe").at(-1)?.room.hasEnemy === true,
+    JSON.stringify(erin.of("room.describe").at(-1)?.room));
+
+  erin.clear();
+  await erin.actAndWait({ type: "attack" });
+  await advance(100);
+  const back = erin.of("combat.start").at(-1);
+  check("다시 싸울 수 있고 체력이 가득 차 있다",
+    back?.combat.enemy.hp === back?.combat.enemy.maxHp && back?.combat.enemy.name === "잿빛 종잇장",
+    JSON.stringify(back?.combat.enemy));
+  await erin.actAndWait({ type: "stop" });
+
+  section("⑩' 보스는 돌아오지 않는다");
+  // ⑦ 에서 파수꾼을 이미 쓰러뜨렸다. 아무리 기다려도 그 방은 비어 있어야 한다.
+  await advance(120_000);
+  check("★ 파수꾼은 두 배의 시간이 지나도 돌아오지 않는다",
+    server.combat.enemyIn("b1:3,5") === null);
+  check("반복되는 적은 같은 시간 뒤에 돌아와 있다",
+    server.combat.enemyIn("b1:5,2") !== null);
+  erin.close();
+
   /* ── ⑨ 부활 타이머를 잃어도 캐릭터가 굳지 않는다 ────────────────────
    *
    * 부활은 world/combat.ts 의 메모리 setTimeout 하나뿐이라 두 경로로 유실된다:

@@ -171,6 +171,13 @@ export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
     emit.send(s, { t: "room.describe", room: presence.roomView(s.pos, s) });
     enqueueRoomText(ctx, s, roomIdOf(s.pos));
   });
+  /* 적이 돌아왔다 = 그 방의 '구조화 상태' 가 바뀌었다. 묘사는 보내지 않는다 —
+     서 있는 사람의 화면을 갈아치우지 않는 것이 charter 63줄이다. */
+  (
+    combatSvc as unknown as { setOnRoomChanged(fn: (s: Session) => void): void }
+  ).setOnRoomChanged((s) => {
+    emit.send(s, { t: "room.describe", room: presence.roomView(s.pos, s) });
+  });
 
   const wss = startServer(ctx, port);
 
