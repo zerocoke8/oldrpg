@@ -31,11 +31,20 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /** 화면에 실제로 렌더된 로그 줄들. DOM 에서 읽는다 — 와이어가 아니라. */
 const logText = (p: Page) => p.locator("p").allInnerTexts();
 
-/** 상태창이 말하는 지금 좌표. 화면에서 읽는다 — 와이어가 아니라. */
+/** 상태창이 말하는 지금 좌표. 화면에서 읽는다 — 와이어가 아니라.
+ *  지역 이름을 고정하지 않는다 — 지역이 여럿이므로. */
 async function posOf(p: Page): Promise<string> {
   const t = await p.locator("body").innerText();
-  const m = /지하 1층 · (\d+),(\d+)/.exec(t);
+  const m = / · (\d+),(\d+) · /.exec(t);
   return m ? `${m[1]},${m[2]}` : "?";
+}
+
+/** 상태창이 말하는 지금 지역 이름. 클라이언트가 격자를 실제로 갈아 끼웠는지는
+ *  이 한 줄로만 화면에서 확인할 수 있다. */
+async function regionNameOf(p: Page): Promise<string> {
+  const t = await p.locator("body").innerText();
+  const m = /([^\n·]+) · \d+,\d+ · /.exec(t);
+  return m ? m[1]!.trim() : "?";
 }
 
 /** 미니맵에서 '다른 플레이어' 테두리가 칠해진 칸의 인덱스. */
@@ -623,6 +632,51 @@ async function main() {
   await s360.screenshot({ path: join(SHOTS, "21-모바일-작은-화면.png") });
   await tiny.close();
   await phone.close();
+
+  console.log("\n⑰ 지역 다중화 — 봉인된 문을 지나면 지도가 통째로 바뀐다");
+  /* A 를 그대로 쓴다. guardian_slain 은 ⑪ 에서 이미 켜졌으므로 문이 열려 있다 —
+     '파수꾼을 쓰러뜨리면 장소를 얻는다' 가 화면에서 성립한다.
+     (새 캐릭터를 만들지 않는 이유는 IP 당 신규 생성 예산이 5명이고 이미 다 썼기
+      때문이다. 그 예산도 이 파일이 검증하는 성질 중 하나다.) */
+  await a.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  /* ⑮ 가 가방 메뉴를 열어 둔 채 끝났다. 커맨드 모드에서는 화살표가 메뉴
+     커서지 이동이 아니다 — 탐색 모드로 돌아올 때까지 Esc 를 누른다. */
+  for (let i = 0; i < 4 && (await a.locator("text=Esc 커맨드").count()) === 0; i++) {
+    await a.keyboard.press("Escape");
+    await sleep(150);
+  }
+  check("탐색 모드로 돌아왔다 (화살표가 다시 이동이다)",
+    (await a.locator("text=Esc 커맨드").count()) > 0);
+  check("A 는 아직 지하 1층에 있다", (await regionNameOf(a)) === "지하 1층",
+    await regionNameOf(a));
+  const b1Cells = await a.locator('div[style*="grid-template-columns"] > div').count();
+  check("미니맵은 7x7 이다 (지하 1층)", b1Cells === 49, String(b1Cells));
+
+  // (1,4) -> (1,5) -> ... -> (5,5). 파수꾼이 있던 (3,5)를 지나간다.
+  for (const k of ["ArrowDown", "ArrowRight", "ArrowRight", "ArrowRight", "ArrowRight"]) {
+    await a.keyboard.press(k);
+    await sleep(280);
+  }
+  check("문 앞(5,5)에 섰다", (await posOf(a)) === "5,5", await posOf(a));
+  await a.screenshot({ path: join(SHOTS, "23-문-앞.png") });
+
+  await a.keyboard.press("ArrowRight");
+  await sleep(700);
+  check("★ 상태창의 지역 이름이 바뀌었다 (self.patch{region} 이 화면까지 왔다)",
+    (await regionNameOf(a)) === "봉인된 서고", await regionNameOf(a));
+  check("좌표도 새 지역의 것이다", (await posOf(a)) === "1,3", await posOf(a));
+  const b2Cells = await a.locator('div[style*="grid-template-columns"] > div').count();
+  check("★ 미니맵이 통째로 5x5 로 바뀌었다", b2Cells === 25, String(b2Cells));
+  check("새 지역의 묘사가 왔다",
+    (await logText(a)).some((t) => t.includes("봉인된 문의 안쪽")),
+    JSON.stringify((await logText(a)).slice(-2)));
+  await a.screenshot({ path: join(SHOTS, "24-다른-지역.png") });
+
+  /* 돌아가는 문에는 조건이 없다 — 한 번 열린 길은 닫히지 않는다. */
+  await a.keyboard.press("ArrowLeft");
+  await sleep(700);
+  check("반대편 문으로 돌아온다", (await regionNameOf(a)) === "지하 1층", await regionNameOf(a));
+  check("들어왔던 칸이다", (await posOf(a)) === "5,5", await posOf(a));
 
   await browser.close();
   await vite.close();

@@ -169,7 +169,15 @@ export function makeQueries(db: Db) {
     ),
     /** 위치·안개·최종접속을 한 트랜잭션으로. 이동 핫패스의 유일한 쓰기다.
      *  WAL + synchronous=NORMAL 에서 준비된 문 하나는 수십 마이크로초다. */
+    /** 이동의 핫패스. seen 을 쓰지 않는다 — 대부분의 걸음은 이미 밟아 본 칸으로
+     *  가고, 거기서 seen 배열 전체를 직렬화하는 것은 방 수에 비례하는 낭비다
+     *  (지역 하나가 50방이고 지역이 스무 개면 걸음마다 1000개짜리 JSON 이다). */
     commitMove: db.prepare(
+      `UPDATE players SET region = @region, x = @x, y = @y, last_seen_at = @now
+       WHERE id = @id`,
+    ),
+    /** 처음 밟는 칸일 때만. 안개가 넓어지는 순간에만 seen 이 실린다. */
+    commitMoveSeen: db.prepare(
       `UPDATE players SET region = @region, x = @x, y = @y, seen = @seen, last_seen_at = @now
        WHERE id = @id`,
     ),

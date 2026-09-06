@@ -78,7 +78,7 @@ export function makePresence(
         seen: [...self.seen],
         items: itemsOf(self.playerId),
       },
-      region: regionView(),
+      region: regionView(self.pos.region),
       room: roomView(self.pos, self),
       presence: visiblePresence(self),
       world: publicFlags(),
@@ -156,6 +156,12 @@ export function makePresence(
     }
 
     // ── 3. 이동자 자신 ────────────────────────────────────────────────
+    /* 지역이 바뀌었으면 새 격자를 room.describe '보다 먼저' 보낸다.
+       순서가 뒤집히면 클라이언트가 한 프레임 동안 옛 지역의 격자 위에
+       새 좌표를 찍는다 — 미니맵의 점이 벽 안에 들어가 있거나 아예 밖으로 나간다. */
+    if (from.region !== to.region) {
+      emit.send(self, { t: "self.patch", region: regionView(to.region) });
+    }
     emit.send(self, { t: "room.describe", room: roomView(to, self) });
     if (fromRoom !== toRoom) sendRoster(self, toRoom);
   }

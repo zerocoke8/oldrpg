@@ -200,7 +200,7 @@ export function handleHello(
     seen = new Set(JSON.parse(row.seen) as RoomId[]);
     seen.add(roomIdOf(pos));
     if (displaced || revived) {
-      ctx.q.commitMove.run({ ...pos, seen: JSON.stringify([...seen]), now, id: playerId });
+      ctx.q.commitMoveSeen.run({ ...pos, seen: JSON.stringify([...seen]), now, id: playerId });
       if (revived) ctx.q.setPlayerHp.run(hp, now, playerId);
     } else {
       ctx.q.touchPlayer.run(now, playerId);
@@ -483,13 +483,19 @@ function doWorldCommand(
 
 function doMove(ctx: Ctx, s: Session, seq: number, dir: Dir): void {
   const from = s.pos;
-  const result = resolveMove(from, dir);
+  /* 봉인된 문이 열렸는지는 DB 가 아는 사실이다. 엔진은 db/ 를 모르므로
+     읽는 함수를 넘긴다 — 난수·시계·밸런스와 같은 주입 방식이다. */
+  const result = resolveMove(from, dir, (key) => ctx.world.flagValue(key) === true);
 
   if (!result.ok) {
-    // 벽은 엔진이 계산한 정상적 결정론 결과, 즉 '세계의 진실' 이지
-    // 클라이언트 계약 위반이 아니다 (규칙 1). 그래서 error 가 아니라 ack 다.
+    /* 벽은 엔진이 계산한 정상적 결정론 결과, 즉 '세계의 진실' 이지
+       클라이언트 계약 위반이 아니다 (규칙 1). 그래서 error 가 아니라 ack 다.
+
+       ★ 이유는 둘 다 "blocked" 하나로 나간다. 와이어에서 벽과 잠긴 문을
+         구별할 수 있으면, 클라이언트가 사방으로 이동을 찔러 보는 것만으로
+         지도에 없는 문의 위치를 전부 알아낼 수 있다. 차이는 문장에만 있다. */
     ctx.emit.send(s, { t: "ack", seq, ok: false, reason: "blocked", pos: s.pos });
-    ctx.emit.log(s, "sys", lines.blocked);
+    ctx.emit.log(s, "sys", result.reason === "sealed" ? lines.sealed : lines.blocked);
     return;
   }
 
@@ -501,14 +507,21 @@ function doMove(ctx: Ctx, s: Session, seq: number, dir: Dir): void {
   // ★ DB 커밋이 먼저, 메모리 갱신이 나중.
   //   반대 순서면 "DB 와 메모리는 절대 어긋나지 않는다"에 보상 경로가 없다.
   try {
-    ctx.q.commitMove.run({
-      region: to.region,
-      x: to.x,
-      y: to.y,
-      seen: JSON.stringify([...nextSeen]),
-      now: ctx.clock(),
-      id: s.playerId,
-    });
+    const now = ctx.clock();
+    // 처음 밟는 칸일 때만 seen 을 직렬화한다. 대부분의 걸음은 이미 아는 칸이고,
+    // 거기서 배열 전체를 다시 쓰는 것은 방 수에 비례하는 낭비다.
+    if (isNewlySeen) {
+      ctx.q.commitMoveSeen.run({
+        region: to.region,
+        x: to.x,
+        y: to.y,
+        seen: JSON.stringify([...nextSeen]),
+        now,
+        id: s.playerId,
+      });
+    } else {
+      ctx.q.commitMove.run({ region: to.region, x: to.x, y: to.y, now, id: s.playerId });
+    }
   } catch (err) {
     console.error("[commitMove]", err);
     // 액션에 귀속 가능한 실패이므로 error 가 아니라 ack 다 —

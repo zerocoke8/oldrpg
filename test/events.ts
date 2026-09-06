@@ -17,7 +17,7 @@ import { boot } from "../server/index";
 import { PROTOCOL_VERSION, type ServerMsg } from "../shared/protocol";
 import type { RoomTextRequest } from "../shared/narration";
 import type { Dir } from "../shared/ids";
-import { SENSITIVE, REGION } from "../server/engine/map";
+import { SPAWN, regionOf } from "../server/engine/map";
 
 const PORT = 8904;
 const DB = join(tmpdir(), `mud-events-${process.pid}.db`);
@@ -134,9 +134,9 @@ async function main() {
   const ev = server.events;
 
   const AFFECTED = new Set(
-    Object.entries(SENSITIVE)
+    Object.entries(regionOf(SPAWN.region)!.sensitive)
       .filter(([, flags]) => flags.includes("guardian_slain"))
-      .map(([k]) => `${REGION}:${k}`),
+      .map(([k]) => `${SPAWN.region}:${k}`),
   );
 
   // ── 준비: Alice 는 영향받는 방으로, Bob 은 스폰에 남는다 ─────────────

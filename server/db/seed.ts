@@ -7,19 +7,21 @@
  * room_text 는 여기서 건드리지 않는다 (첫 입장 때 lazy 기록). */
 
 import {
+  allRegions,
   allRooms,
   contentHash,
   MAX_SENSITIVE,
-  SEEDS,
+  regionOf,
+  SPAWN,
   WORLD_FLAGS,
   WORLD_FLAG_DEFAULTS,
   declHashOf,
   tileAt,
-  ENEMY_AT,
-  H,
-  W,
   walkable,
+  walkableAt,
+  type RegionDef,
 } from "../engine/map";
+import { DELTA, OPPOSITE } from "../../shared/ids";
 import type { Balance } from "../engine/enemies";
 import { NPCS } from "../engine/npcs";
 import type { Db } from "./open";
@@ -37,40 +39,124 @@ const STALE_PLAYER_MS = 30 * 24 * 60 * 60 * 1000;
  *    빠뜨리면 아무 소리 없이 무명의 방이 하나 생긴다.
  *    부팅에서 죽는 편이 조용히 틀린 세계로 도는 것보다 낫다. */
 export function assertWorldData(balance: Balance): void {
-  // ① 걷는 칸에는 전부 씨앗이 있다 (침묵 폴백 금지).
+  for (const r of allRegions()) assertRegion(r, balance);
+  assertDoors();
+
+  // ⑦ 적이 켜는 플래그는 선언돼 있어야 한다 (파일을 넘나드는 참조라 zod 가 못 본다).
+  for (const [id, e] of Object.entries(balance.enemies)) {
+    if (e.slainFlag !== null && !(e.slainFlag in WORLD_FLAGS)) {
+      throw new Error(`enemies.json: ${id} 가 선언되지 않은 플래그 ${e.slainFlag} 를 켠다.`);
+    }
+  }
+
+  // ⑧ 스폰은 걸을 수 있는 칸이어야 한다. 아니면 모든 신규 플레이어가 벽 안에서 시작한다.
+  if (!walkableAt(SPAWN)) {
+    throw new Error(`SPAWN ${SPAWN.region} ${SPAWN.x},${SPAWN.y} 이 벽이다 (engine/map.ts).`);
+  }
+}
+
+function assertRegion(r: RegionDef, balance: Balance): void {
+  // ① 모든 줄의 길이가 같다. 들쭉날쭉하면 x 범위가 y 마다 달라져 미니맵과 어긋난다.
+  const widths = new Set(r.tiles.map((t) => t.length));
+  if (widths.size !== 1) {
+    throw new Error(`지역 ${r.id}: 타일 줄 길이가 제각각이다 (${[...widths].join(" ")}).`);
+  }
+  const w = r.tiles[0]?.length ?? 0;
+  const h = r.tiles.length;
+
+  // ② 걷는 칸에는 전부 씨앗이 있다 (침묵 폴백 금지).
   const seedless: string[] = [];
-  for (let y = 0; y < H; y++) {
-    for (let x = 0; x < W; x++) {
-      if (walkable(x, y) && !SEEDS[`${x},${y}`]) seedless.push(`${x},${y}`);
+  const walkables = new Set<string>();
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (!walkable(r.id, x, y)) continue;
+      walkables.add(`${x},${y}`);
+      if (!r.seeds[`${x},${y}`]) seedless.push(`${x},${y}`);
     }
   }
   if (seedless.length) {
     throw new Error(
-      `씨앗이 없는 칸: ${seedless.join(" ")} — SEEDS 에 추가하거나 벽으로 막을 것. ` +
+      `지역 ${r.id}: 씨앗이 없는 칸 ${seedless.join(" ")} — seeds 에 추가하거나 벽으로 막을 것. ` +
         `묘사는 (씨앗 + 플래그)의 함수이므로 씨앗 없는 방은 존재할 수 없다.`,
     );
   }
+  // 반대 방향도 본다. 벽 자리에 씨앗을 써두면 영영 읽히지 않는다 — 오타의 흔한 모양이다.
+  for (const k of Object.keys(r.seeds)) {
+    if (!walkables.has(k)) throw new Error(`지역 ${r.id}: 벽인 칸 ${k} 에 씨앗이 있다.`);
+  }
+  for (const k of Object.keys(r.sensitive)) {
+    if (!walkables.has(k)) throw new Error(`지역 ${r.id}: 벽인 칸 ${k} 이 플래그를 선언했다.`);
+  }
 
-  // ② 'E' 타일과 적 '배치' 는 양방향으로 짝이 맞는다.
-  const tiles = new Set<string>();
-  for (let y = 0; y < H; y++) {
-    for (let x = 0; x < W; x++) if (tileAt(x, y) === "E") tiles.add(`${x},${y}`);
-  }
-  for (const k of tiles) {
-    if (!ENEMY_AT[k]) throw new Error(`'E' 타일 ${k} 에 적이 배치되지 않았다 (engine/map.ts 의 ENEMY_AT).`);
-  }
-  for (const [k, id] of Object.entries(ENEMY_AT)) {
-    if (!tiles.has(k)) throw new Error(`적 ${id} 가 'E' 가 아닌 칸 ${k} 에 배치됐다 (engine/map.ts).`);
-    // ③ 배치된 적이 실제로 정의돼 있는가. 오타 하나가 '영영 안 나오는 적' 이 된다.
-    if (!(id in balance.enemies)) {
-      throw new Error(`${k} 에 배치된 ${id} 가 content/balance/enemies.json 에 없다.`);
+  // ③ 선언된 플래그가 실제로 존재하는가. 오타 하나가 '영영 안 바뀌는 방' 이 된다.
+  for (const [k, decl] of Object.entries(r.sensitive)) {
+    for (const f of decl) {
+      if (!(f in WORLD_FLAGS)) {
+        throw new Error(`지역 ${r.id} ${k}: 선언되지 않은 플래그 ${f} 를 sensitive 에 적었다.`);
+      }
     }
   }
 
-  // ④ 적이 켜는 플래그는 선언돼 있어야 한다 (파일을 넘나드는 참조라 zod 가 못 본다).
-  for (const [id, e] of Object.entries(balance.enemies)) {
-    if (e.slainFlag !== null && !(e.slainFlag in WORLD_FLAGS)) {
-      throw new Error(`enemies.json: ${id} 가 선언되지 않은 플래그 ${e.slainFlag} 를 켠다.`);
+  // ④ 'E' 타일과 적 '배치' 는 양방향으로 짝이 맞는다.
+  const eTiles = new Set<string>();
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) if (tileAt(r.id, x, y) === "E") eTiles.add(`${x},${y}`);
+  }
+  for (const k of eTiles) {
+    if (!r.enemies[k]) throw new Error(`지역 ${r.id}: 'E' 타일 ${k} 에 적이 배치되지 않았다.`);
+  }
+  for (const [k, id] of Object.entries(r.enemies)) {
+    if (!eTiles.has(k)) throw new Error(`지역 ${r.id}: 적 ${id} 가 'E' 가 아닌 칸 ${k} 에 배치됐다.`);
+    // ⑤ 배치된 적이 실제로 정의돼 있는가. '어디에' 와 '무엇인가' 가 갈라져 있으므로
+    //    이 참조는 파일을 넘나든다 — zod 가 못 보고 여기서만 잡힌다.
+    if (!(id in balance.enemies)) {
+      throw new Error(`지역 ${r.id} ${k} 에 배치된 ${id} 가 content/balance/enemies.json 에 없다.`);
+    }
+  }
+}
+
+/** ⑥ 지역 간 문. 오타 하나가 '들어갔다 못 나오는 지역' 이나 '아무 데도 없는 지역'
+ *  을 만든다 — 어느 쪽이든 플레이어가 갇히고 나서야 알게 된다. */
+function assertDoors(): void {
+  for (const r of allRegions()) {
+    for (const e of r.exits) {
+      const where = `지역 ${r.id} 의 출구 ${e.at} ${e.dir}`;
+      const [ax, ay] = e.at.split(",").map(Number);
+      if (ax === undefined || ay === undefined || Number.isNaN(ax) || Number.isNaN(ay)) {
+        throw new Error(`${where}: at 이 "x,y" 형식이 아니다.`);
+      }
+      // 출발 칸은 걸을 수 있어야 한다 — 아무도 설 수 없는 칸의 문은 존재하지 않는 문이다.
+      if (!walkable(r.id, ax, ay)) throw new Error(`${where}: 출발 칸이 벽이다.`);
+      // 그 방향은 벽이어야 한다. 걸어갈 수 있는 칸을 가리키면 같은 키 입력에
+      // 두 가지 뜻이 생긴다 (한 칸 이동인가 지역 이동인가).
+      const d = DELTA[e.dir];
+      if (walkable(r.id, ax + d.dx, ay + d.dy)) {
+        throw new Error(`${where}: 그 방향이 벽이 아니다 — 한 칸 이동과 뜻이 겹친다.`);
+      }
+      const dst = regionOf(e.to.region);
+      if (!dst) throw new Error(`${where}: 목적지 지역 ${e.to.region} 이 없다.`);
+      if (!walkableAt(e.to)) {
+        throw new Error(`${where}: 목적지 ${e.to.region} ${e.to.x},${e.to.y} 이 벽이다.`);
+      }
+      if (e.requires !== null && !(e.requires in WORLD_FLAGS)) {
+        throw new Error(`${where}: 선언되지 않은 플래그 ${e.requires} 를 requires 로 쓴다.`);
+      }
+      if (e.oneWay) continue;
+      // 왕복이라고 선언했으면 반대편에 짝이 있어야 한다. 없으면 갇힌다.
+      const back = dst.exits.find(
+        (b) =>
+          b.at === `${e.to.x},${e.to.y}` &&
+          b.dir === OPPOSITE[e.dir] &&
+          b.to.region === r.id &&
+          b.to.x === ax &&
+          b.to.y === ay,
+      );
+      if (!back) {
+        throw new Error(
+          `${where}: 왕복인데 ${e.to.region} ${e.to.x},${e.to.y} 에서 ${OPPOSITE[e.dir]} 로 ` +
+            `돌아오는 짝이 없다 — 들어가면 못 나온다.`,
+        );
+      }
     }
   }
 }

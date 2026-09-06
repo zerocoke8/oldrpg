@@ -37,8 +37,15 @@ export function Minimap(props: {
 
   const tile = (x: number, y: number): string => region.tiles[y]?.[x] ?? "#";
 
+  /* 격자와 예측 위치가 같은 지역인가. 문을 지나는 순간 ack(새 좌표)와
+     self.patch(새 격자)가 서로 다른 메시지로 오므로, 한 프레임 동안 옛
+     격자 위에 새 지역의 좌표가 얹힐 수 있다. 그 프레임에는 점을 그리지
+     않는다 — 벽 안에 박힌 점을 보여주는 것보다 잠깐 없는 편이 낫다. */
+  const sameRegion = at.region === region.id;
+
   /** 그 칸이 지금 위치의 상하좌우인가. 맞으면 그 방향을 돌려준다. */
   const dirTo = (x: number, y: number): Dir | null => {
+    if (!sameRegion) return null;
     const dx = x - at.x;
     const dy = y - at.y;
     if (dx === 0 && dy === -1) return "north";
@@ -69,7 +76,7 @@ export function Minimap(props: {
       >
         {Array.from({ length: region.height }).flatMap((_, y) =>
           Array.from({ length: region.width }).map((__, x) => {
-            const here = x === at.x && y === at.y;
+            const here = sameRegion && x === at.x && y === at.y;
             const guests = othersAt.get(`${x},${y}`) ?? [];
             const dir = dirTo(x, y);
             return (

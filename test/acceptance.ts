@@ -18,7 +18,7 @@ import WebSocket from "ws";
 import { boot } from "../server/index";
 import { PROTOCOL_VERSION, type ServerMsg } from "../shared/protocol";
 import { GRACE_MS } from "../server/net/session";
-import { SEEDS, SPAWN, walkable } from "../server/engine/map";
+import { regionOf, SPAWN, walkable } from "../server/engine/map";
 import type { Dir } from "../shared/ids";
 
 const PORT = 8899;
@@ -129,10 +129,10 @@ async function main() {
      막는다" 를 듣는다. 자연어를 전부 검사할 수는 없지만, 그 거짓 주장의
      모양만큼은 기계로 잡을 수 있다. */
   const spawnExits = ([[0, -1], [0, 1], [1, 0], [-1, 0]] as const).filter(([dx, dy]) =>
-    walkable(SPAWN.x + dx, SPAWN.y + dy),
+    walkable(SPAWN.region, SPAWN.x + dx, SPAWN.y + dy),
   ).length;
   check("스폰의 실제 출구는 둘이다 (동·서)", spawnExits === 2, String(spawnExits));
-  const spawnSeed = SEEDS[`${SPAWN.x},${SPAWN.y}`] ?? "";
+  const spawnSeed = regionOf(SPAWN.region)?.seeds[`${SPAWN.x},${SPAWN.y}`] ?? "";
   check("★ 스폰 씨앗이 네 방향을 주장하지 않는다 (맵과 어긋나면 안 된다)",
     !spawnSeed.includes("네 방향") && !spawnSeed.includes("사방"), spawnSeed);
   check("무너진 남북 통로를 문장이 설명한다",

@@ -34,7 +34,7 @@ import {
   type Effect,
 } from "../engine/combat";
 import { makeRng, type Rng } from "../engine/rng";
-import { ENEMY_AT, SPAWN } from "../engine/map";
+import { regionOf, SPAWN } from "../engine/map";
 import type { Queries } from "../db/queries";
 import { lines } from "../narration/lines";
 import type { Emit } from "../net/emit";
@@ -146,9 +146,11 @@ export function makeCombat(
   const nameOf = (id: PlayerId): string => sessionOf(id)?.brief.name ?? "누군가";
 
   function enemyIn(roomId: RoomId): EnemyDef | null {
-    const coord = roomId.slice(roomId.indexOf(":") + 1);
+    const sep = roomId.indexOf(":");
+    const coord = roomId.slice(sep + 1);
     // 배치(맵)와 정의(밸런스)가 두 단계로 갈라져 있다. 짝은 부팅에서 검증된다.
-    const id = ENEMY_AT[coord];
+    // 배치는 지역마다 따로다 — 같은 좌표가 지역마다 다른 적을 가리킨다.
+    const id = regionOf(roomId.slice(0, sep))?.enemies[coord];
     const def = id ? balance.enemies[id] : undefined;
     if (!def) return null;
     // 이미 죽은 적은 없는 것과 같다. 죽음의 '소유자' 가 둘로 나뉜다:
@@ -634,7 +636,7 @@ export function makeCombat(
       const hp = Math.max(1, Math.floor(cur.maxHp / 2));
       const seen = new Set(cur.seen).add(roomIdOf(SPAWN));
       try {
-        q.commitMove.run({
+        q.commitMoveSeen.run({
           region: SPAWN.region,
           x: SPAWN.x,
           y: SPAWN.y,

@@ -140,6 +140,8 @@ export function reduce(st: UiState, m: ServerMsg | LocalMsg): UiState {
         // 가방은 self 안이 아니라 UiState 최상단에 산다 — SelfState 를 통째로
         // 갈아끼우는 스냅샷 경로와 델타 경로가 서로를 지우지 않게 한다.
         ...(m.items !== undefined ? { items: m.items } : {}),
+        // 지역이 바뀌었다. 격자도 self 밖에 산다 (같은 이유).
+        ...(m.region !== undefined ? { region: m.region } : {}),
       };
 
     // presence 계열 — join 은 player.id 기준 '멱등 upsert', leave 는
