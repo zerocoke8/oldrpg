@@ -16,7 +16,7 @@ import { makeMap, type MapData } from "./engine/map";
 import { World } from "./engine/world";
 import { makeStaticNpcRenderer, makeStaticRenderer } from "./narration/static";
 import { makeLlmNpcRenderer, makeLlmRenderer } from "./narration/llm";
-import { loadMoods } from "./narration/prompts";
+import { loadMoods, loadTails, type Mood } from "./narration/prompts";
 import { makeRoomTextService } from "./world/roomText";
 import { makeNpcTextService } from "./world/npcText";
 import { makeDialogue } from "./world/dialogue";
@@ -82,6 +82,9 @@ export interface BootOptions {
   /** NPC 대사의 가짜 렌더러. 방과 따로인 이유: 4b 테스트는 대사만 승급시키고
    *  방 묘사는 폴백으로 두고 싶다 (그 반대도 마찬가지). */
   llmNpcRenderer?: NpcLineRenderer;
+  /** 플래그별 톤·문장을 갈아끼운다. 지정하지 않으면 narration/prompts/moods/ 를 읽는다.
+   *  세계·밸런스와 같은 이유의 주입이다 — 검사가 운영 문구에 매달리지 않게. */
+  moods?: ReadonlyMap<string, Mood>;
   /** 큐 옵션 (테스트에서 동시성/쿨다운을 조인다). */
   queue?: QueueOptions;
   /** 전투 옵션 (테스트가 시계와 시드를 손에 쥔다). */
@@ -136,9 +139,10 @@ export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
      폴백 렌더러는 '플레이어의 경로' 에 있고, LLM 렌더러는 '백그라운드 큐' 에만
      있다. 이 분리가 규칙 4를 코드 구조로 만든 것이다 — 요청 경로에 모델
      호출이 아예 없으므로 실수로 기다리게 만들 방법이 없다. */
-  const moods = loadMoods();
-  const fallbackRenderer = makeStaticRenderer(moods);
-  const fallbackNpcRenderer = makeStaticNpcRenderer(moods);
+  const moods = options.moods ?? loadMoods();
+  const tails = loadTails();
+  const fallbackRenderer = makeStaticRenderer(moods, tails);
+  const fallbackNpcRenderer = makeStaticNpcRenderer(moods, tails);
 
   /* 실물 호출은 '명시적으로 끄지 않았고' + '키가 있을 때' 만 켜진다.
      끔이 우선한다 — 키의 존재가 조용히 네트워크를 여는 일이 없어야 한다. */

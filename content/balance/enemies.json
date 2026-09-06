@@ -1,29 +1,38 @@
 {
-  "shadow_warden": {
-    "name": "그림자 파수꾼",
-    "maxHp": 200,
-    "damage": [2, 5],
-    "swingMs": 900,
-    "slainFlag": "guardian_slain",
-    "respawnMs": null,
-    "drops": [{ "itemId": "warden_shard", "qty": 1, "chance": 1 }]
-  },
-  "ashen_pages": {
-    "name": "잿빛 종잇장",
+  "husk_specimen": {
+    "name": "풀려난 검체",
     "maxHp": 70,
     "damage": [1, 3],
     "swingMs": 1100,
     "slainFlag": null,
     "respawnMs": 45000,
-    "drops": [{ "itemId": "minor_potion", "qty": 1, "chance": 0.5 }]
+    "drops": [{ "itemId": "stabilizer", "qty": 1, "chance": 0.5 }]
   },
-  "rusted_watcher": {
-    "name": "녹슨 감시자",
+  "static_wraith": {
+    "name": "잔류 괴령",
     "maxHp": 110,
     "damage": [2, 4],
     "swingMs": 950,
     "slainFlag": null,
     "respawnMs": 60000,
-    "drops": [{ "itemId": "minor_potion", "qty": 1, "chance": 0.8 }]
+    "drops": [{ "itemId": "stabilizer", "qty": 1, "chance": 0.8 }]
+  },
+  "archivist": {
+    "name": "기록실의 괴령",
+    "maxHp": 150,
+    "damage": [2, 4],
+    "swingMs": 1000,
+    "slainFlag": "journal_recovered",
+    "respawnMs": null,
+    "drops": [{ "itemId": "research_log", "qty": 1, "chance": 1 }]
+  },
+  "proliferant": {
+    "name": "증식체",
+    "maxHp": 220,
+    "damage": [3, 6],
+    "swingMs": 900,
+    "slainFlag": "proliferant_slain",
+    "respawnMs": null,
+    "drops": [{ "itemId": "dark_shard", "qty": 1, "chance": 1 }]
   }
 }

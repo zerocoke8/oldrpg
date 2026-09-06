@@ -220,7 +220,7 @@ async function main() {
   // 사람이 손으로 붙여 둔 구조. 도구가 이걸 건드리면 안 된다.
   const before = regionOf(dir, "bt");
   before.enemies = {};
-  before.sensitive = { [Object.keys(before.seeds)[0]!]: ["guardian_slain"] };
+  before.sensitive = { [Object.keys(before.seeds)[0]!]: ["journal_recovered"] };
   before.npcs = {};
   before.exits = [];
   before.seeds = {};
@@ -267,7 +267,7 @@ async function main() {
   check("남은 칸을 채웠다", r5.missing.length === 0, JSON.stringify(r5.missing));
   const map = makeMap(loadWorld(dir));
   check("loadWorld 가 새 지역을 읽는다", Boolean(map.region("bt")));
-  check("기존 지역도 그대로다", Boolean(map.region("b1")) && Boolean(map.region("b2")));
+  check("기존 지역도 그대로다", Boolean(map.region("d6")) && Boolean(map.region("ue001")));
   let bootError = "";
   try {
     assertWorldData(map, loadBalance());

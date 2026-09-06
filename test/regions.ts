@@ -15,17 +15,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import WebSocket from "ws";
 import { boot } from "../server/index";
+import { FIXTURE_WORLD, FIXTURE_BALANCE, FIXTURE_MOODS } from "./fixture";
+
+/** 지역 메커니즘(문·안개·관심영역) 검사다 — 게임 내용과 무관해야 한다. */
+const FIXTURE = { world: FIXTURE_WORLD, balance: FIXTURE_BALANCE, moods: FIXTURE_MOODS } as const;
 import { PROTOCOL_VERSION, type ServerMsg } from "../shared/protocol";
 import type { Dir } from "../shared/ids";
 import { makeMap } from "../server/engine/map";
-import { loadWorld } from "../server/content/world";
 
 /** 실제 content/world/ 를 읽은 맵. 테스트는 서버가 부팅에서 쓰는 것과
  *  같은 데이터를 봐야 한다 — 별도의 테스트 세계를 만들면 검사는 통과하는데
  *  운영 데이터는 틀린 상황이 생긴다. */
-const map = makeMap(loadWorld());
+const map = makeMap(FIXTURE_WORLD);
 import { assertWorldData } from "../server/db/seed";
-import { loadBalance } from "../server/content/balance";
 
 /** DB 는 토큰의 sha256 만 갖는다 (server/net/handlers.ts 와 같은 공식). */
 const sha256 = (t: string) => createHash("sha256").update(t, "utf8").digest("hex");
@@ -115,9 +117,9 @@ class Client {
 
 async function main() {
   for (const f of [DB, `${DB}-wal`, `${DB}-shm`]) rmSync(f, { force: true });
-  const server = boot(DB, PORT, { llm: "off" });
+  const server = boot(DB, PORT, { ...FIXTURE, llm: "off" });
   const ev = server.events;
-  const balance = loadBalance();
+  const balance = FIXTURE_BALANCE;
 
   // ── ① 지역 데이터 자체 ──────────────────────────────────────────────
   section("① 지역 정의 — 부팅 검증이 실제로 무엇을 잡는가");
@@ -239,7 +241,7 @@ async function main() {
 
   // ── ③ 플래그가 문을 연다 ────────────────────────────────────────────
   section("③ 플래그가 문을 연다 — 지역 이동");
-  ev.setFlag("guardian_slain", true);
+  ev.setFlag("journal_recovered", true);
   await sleep(60);
   alice.clear();
   const ack = await alice.step("east");

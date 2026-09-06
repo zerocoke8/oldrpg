@@ -11,6 +11,10 @@ import { join } from "node:path";
 import { chromium, type Page } from "playwright";
 import { createServer as createVite } from "vite";
 import { boot } from "../server/index";
+import { FIXTURE_WORLD, FIXTURE_BALANCE, FIXTURE_MOODS } from "./fixture";
+
+/** 모든 boot() 가 같은 고정 세계를 쓴다 — 운영 콘텐츠가 바뀌어도 검사는 그대로다. */
+const FIXTURE = { world: FIXTURE_WORLD, balance: FIXTURE_BALANCE, moods: FIXTURE_MOODS } as const;
 import type { RoomTextRequest } from "../shared/narration";
 
 const WS_PORT = 8901;
@@ -72,11 +76,11 @@ async function main() {
   /* 가짜 LLM 을 700ms 지연으로 꽂는다. 규칙 4가 화면에서 어떻게 보이는지를
      확인하려는 것이다: 폴백이 먼저 뜨고, 그 '줄이' 조용히 교체된다. */
   const LLM_MS = 700;
-  const server = boot(DB, WS_PORT, {
+  const server = boot(DB, WS_PORT, { ...FIXTURE, 
     llm: "off", // 주입한 가짜만 쓴다 — 키가 있는 기계에서도 네트워크로 나가지 않는다
     llmRenderer: async (req: RoomTextRequest) => {
       await sleep(LLM_MS);
-      const calm = req.flags.some(([k, v]) => k === "guardian_slain" && v === true)
+      const calm = req.flags.some(([k, v]) => k === "journal_recovered" && v === true)
         ? " 공기가 한결 가벼워졌다."
         : "";
       return {
@@ -90,7 +94,7 @@ async function main() {
        그리고 교체된 뒤에도 화자("제단지기: ")가 남는지를 화면에서 본다. */
     llmNpcRenderer: async (req) => {
       await sleep(LLM_MS);
-      const calm = req.flags.some(([k, v]) => k === "guardian_slain" && v === true)
+      const calm = req.flags.some(([k, v]) => k === "journal_recovered" && v === true)
         ? "이제는 말해도 괜찮다는 듯 목소리가 낮아진다."
         : "말끝을 흐린다."; // 폴백 꼬리("그 이상은 말하지 않는다")와 눈으로 구별된다
       return {
@@ -279,7 +283,7 @@ async function main() {
   check("접힌 로그를 펼칠 수 있다", (await c.locator("text=접기").count()) > 0);
   await c.screenshot({ path: join(SHOTS, "12-로그-펼침.png") });
 
-  // 방을 벗어나 교전을 끊는다. (2,5) 도 guardian_slain 영향권이라
+  // 방을 벗어나 교전을 끊는다. (2,5) 도 journal_recovered 영향권이라
   // 다음 절에서 C 는 'near' 를 받는다.
   await c.keyboard.press("ArrowLeft");
   await sleep(400);
@@ -345,7 +349,7 @@ async function main() {
   await b.screenshot({ path: join(SHOTS, "15-주제-물음.png") });
 
   console.log("\n⑪ 3단계 — 세계가 바뀌어도 서 있는 화면을 갈아치우지 않는다");
-  // c 는 (3,5) 에 있다 — guardian_slain 을 선언한 방(영향권)이다.
+  // c 는 (3,5) 에 있다 — journal_recovered 을 선언한 방(영향권)이다.
   // a 를 영향권으로 보낸다: (3,3) -> (2,3) -> (1,3) -> (1,4)
   for (const k of ["ArrowLeft", "ArrowLeft", "ArrowDown"]) {
     await a.keyboard.press(k);
@@ -357,7 +361,7 @@ async function main() {
   check("A 가 영향권(좁고 가파른 내리막)에 있다",
     aBefore.some((t) => t.includes("좁고 가파른 내리막")), JSON.stringify(aBefore.slice(-2)));
 
-  server.events.setFlag("guardian_slain", true);
+  server.events.setFlag("journal_recovered", true);
   await sleep(600);
 
   const aAfter = await logText(a);
@@ -634,7 +638,7 @@ async function main() {
   await phone.close();
 
   console.log("\n⑰ 지역 다중화 — 봉인된 문을 지나면 지도가 통째로 바뀐다");
-  /* A 를 그대로 쓴다. guardian_slain 은 ⑪ 에서 이미 켜졌으므로 문이 열려 있다 —
+  /* A 를 그대로 쓴다. journal_recovered 은 ⑪ 에서 이미 켜졌으므로 문이 열려 있다 —
      '파수꾼을 쓰러뜨리면 장소를 얻는다' 가 화면에서 성립한다.
      (새 캐릭터를 만들지 않는 이유는 IP 당 신규 생성 예산이 5명이고 이미 다 썼기
       때문이다. 그 예산도 이 파일이 검증하는 성질 중 하나다.) */

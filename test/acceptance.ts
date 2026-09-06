@@ -16,15 +16,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import WebSocket from "ws";
 import { boot } from "../server/index";
+import { FIXTURE_WORLD, FIXTURE_BALANCE, FIXTURE_MOODS } from "./fixture";
+
+/** 모든 boot() 가 같은 고정 세계를 쓴다 — 운영 콘텐츠가 바뀌어도 검사는 그대로다. */
+const FIXTURE = { world: FIXTURE_WORLD, balance: FIXTURE_BALANCE, moods: FIXTURE_MOODS } as const;
 import { PROTOCOL_VERSION, type ServerMsg } from "../shared/protocol";
 import { GRACE_MS } from "../server/net/session";
 import { makeMap } from "../server/engine/map";
-import { loadWorld } from "../server/content/world";
 
-/** 실제 content/world/ 를 읽은 맵. 테스트는 서버가 부팅에서 쓰는 것과
- *  같은 데이터를 봐야 한다 — 별도의 테스트 세계를 만들면 검사는 통과하는데
- *  운영 데이터는 틀린 상황이 생긴다. */
-const map = makeMap(loadWorld());
+/** 서버가 이 검사에서 실제로 부팅하는 것과 '같은' 세계 (test/fixture.ts). */
+const map = makeMap(FIXTURE_WORLD);
 const SPAWN = map.spawn;
 import type { Dir } from "../shared/ids";
 
@@ -112,7 +113,7 @@ async function main() {
   rmSync(`${DB}-wal`, { force: true });
   rmSync(`${DB}-shm`, { force: true });
   // llm:"off" — 이 스위트는 렌더러를 하나도 안 꽂는다. 그것이 곧 실물 호출이면 안 된다.
-  const server = boot(DB, PORT, { llm: "off" });
+  const server = boot(DB, PORT, { ...FIXTURE,  llm: "off" });
 
   const alice = new Client("alice");
   const bob = new Client("bob");

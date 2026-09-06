@@ -14,16 +14,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import WebSocket from "ws";
 import { boot } from "../server/index";
+import { FIXTURE_WORLD, FIXTURE_BALANCE, FIXTURE_MOODS } from "./fixture";
+
+/** 모든 boot() 가 같은 고정 세계를 쓴다 — 운영 콘텐츠가 바뀌어도 검사는 그대로다. */
+const FIXTURE = { world: FIXTURE_WORLD, balance: FIXTURE_BALANCE, moods: FIXTURE_MOODS } as const;
 import { PROTOCOL_VERSION, type ServerMsg } from "../shared/protocol";
 import type { RoomTextRequest } from "../shared/narration";
 import type { Dir } from "../shared/ids";
 import { makeMap } from "../server/engine/map";
-import { loadWorld } from "../server/content/world";
 
-/** 실제 content/world/ 를 읽은 맵. 테스트는 서버가 부팅에서 쓰는 것과
- *  같은 데이터를 봐야 한다 — 별도의 테스트 세계를 만들면 검사는 통과하는데
- *  운영 데이터는 틀린 상황이 생긴다. */
-const map = makeMap(loadWorld());
+/** 서버가 이 검사에서 실제로 부팅하는 것과 '같은' 세계 (test/fixture.ts). */
+const map = makeMap(FIXTURE_WORLD);
 const SPAWN = map.spawn;
 
 const PORT = 8904;
@@ -46,7 +47,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  *  눈으로 구별하기 위해서다. */
 const fakeLlm = async (req: RoomTextRequest) => {
   await sleep(20);
-  const on = req.flags.some(([k, v]) => k === "guardian_slain" && v === true);
+  const on = req.flags.some(([k, v]) => k === "journal_recovered" && v === true);
   return {
     text: `[${on ? "이후" : "이전"}] ${req.seed}.`,
     source: "llm" as const,
@@ -137,12 +138,12 @@ class Client {
 
 async function main() {
   for (const f of [DB, `${DB}-wal`, `${DB}-shm`]) rmSync(f, { force: true });
-  const server = boot(DB, PORT, { llm: "off", llmRenderer: fakeLlm, queue: { concurrency: 3 } });
+  const server = boot(DB, PORT, { ...FIXTURE,  llm: "off", llmRenderer: fakeLlm, queue: { concurrency: 3 } });
   const ev = server.events;
 
   const AFFECTED = new Set(
     Object.entries(map.region(SPAWN.region)!.sensitive)
-      .filter(([, flags]) => flags.includes("guardian_slain"))
+      .filter(([, flags]) => flags.includes("journal_recovered"))
       .map(([k]) => `${SPAWN.region}:${k}`),
   );
 
@@ -156,7 +157,7 @@ async function main() {
   await sleep(150);
   const aliceRoom = alice.of("room.describe").at(-1)?.room.roomId;
   check("Alice 가 b1:1,4 에 있다", aliceRoom === "b1:1,4", String(aliceRoom));
-  check("b1:1,4 는 guardian_slain 을 선언한 방이다", AFFECTED.has("b1:1,4"));
+  check("b1:1,4 는 journal_recovered 을 선언한 방이다", AFFECTED.has("b1:1,4"));
   check("b1:3,3 은 선언하지 않은 방이다", !AFFECTED.has("b1:3,3"));
 
   await server.upgrades.idle();
@@ -173,7 +174,7 @@ async function main() {
   alice.clear();
   bob.clear();
   const t0 = Date.now();
-  const res = ev.setFlag("guardian_slain", true);
+  const res = ev.setFlag("journal_recovered", true);
   const sync = Date.now() - t0;
   check("setFlag 이 즉시 돌아온다 (재생성을 기다리지 않는다)", sync < 20, `${sync}ms`);
   check("값이 바뀌었다고 보고한다", res.changed);
@@ -233,13 +234,13 @@ async function main() {
     Boolean(untouched?.text.startsWith("[이전]")), String(untouched?.text));
 
   // 규칙 3: 옛 텍스트는 덮어쓰이지 않고 '다른 행' 으로 남는다
-  server.ctx.q.setFlag.run("guardian_slain", "false", Date.now());
-  server.ctx.world.applyFlag("guardian_slain", "false");
+  server.ctx.q.setFlag.run("journal_recovered", "false", Date.now());
+  server.ctx.world.applyFlag("journal_recovered", "false");
   const oldRow = server.ctx.q.getRoomTextRow.get("b1:1,4", server.ctx.world.stateHash("b1:1,4"));
   check("★ 옛 상태의 텍스트가 그대로 살아 있다 (규칙 3: 고쳐 쓰지 않는다)",
     Boolean(oldRow?.text.startsWith("[이전]")), String(oldRow?.text));
-  server.ctx.q.setFlag.run("guardian_slain", "true", Date.now());
-  server.ctx.world.applyFlag("guardian_slain", "true");
+  server.ctx.q.setFlag.run("journal_recovered", "true", Date.now());
+  server.ctx.world.applyFlag("journal_recovered", "true");
 
   // ── ⑤ '다음 입장부터' 적용 ──────────────────────────────────────────
   section("⑤' 새 텍스트는 다음 입장부터 — 그리고 즉시(사전 생성됐으므로)");
@@ -271,11 +272,15 @@ async function main() {
   const carol = new Client("carol");
   await carol.connect(null);
   const snap = carol.of("snapshot")[0]!;
-  check("스냅샷이 월드 플래그를 싣는다", snap.world.length === 1, JSON.stringify(snap.world));
+  /* 개수로 세지 않는다 — 플래그 레지스트리(WORLD_FLAGS)는 아직 코드에 있어
+     픽스처가 갈아끼울 수 없고, 운영 세계에 플래그가 늘면 이 검사가 깨진다.
+     확인할 것은 '그 플래그가 값과 라벨을 달고 실렸는가' 다. */
+  const wf = snap.world.find((w) => w.key === "journal_recovered");
+  check("스냅샷이 월드 플래그를 싣는다", Boolean(wf), JSON.stringify(snap.world));
   check("값과 라벨이 맞다",
-    snap.world[0]?.key === "guardian_slain" &&
-      snap.world[0]?.value === true &&
-      snap.world[0]?.label === "파수꾼 처치됨",
+    wf?.key === "journal_recovered" &&
+      wf?.value === true &&
+      wf?.label === "파수꾼 처치됨",
     JSON.stringify(snap.world[0]));
   check("Carol 은 이벤트 문장을 받지 않았다 (이미 지난 일이다)",
     carol.logs("world").length === 0);
@@ -283,7 +288,7 @@ async function main() {
   // ── 멱등성 / 검증 ──────────────────────────────────────────────────
   section("⑦ 같은 값으로 다시 켜면 아무 일도 없다");
   alice.clear();
-  const again = ev.setFlag("guardian_slain", true);
+  const again = ev.setFlag("journal_recovered", true);
   await sleep(50);
   check("changed=false", !again.changed);
   check("큐에도 넣지 않는다", again.queued === 0);
@@ -300,7 +305,7 @@ async function main() {
   // ── 되돌림 (charter 51줄) ──────────────────────────────────────────
   section("⑧ 플래그를 되돌리면 옛 텍스트가 그대로 복구된다");
   alice.clear();
-  const back = ev.setFlag("guardian_slain", false);
+  const back = ev.setFlag("journal_recovered", false);
   check("되돌림도 이벤트다", back.changed);
   await sleep(80);
   alice.clear();
@@ -327,11 +332,11 @@ async function main() {
   section("⑨ 승급이 진행 중인 방에서 플래그가 바뀌면");
   const DB2 = `${DB}.race`;
   for (const f of [DB2, `${DB2}-wal`, `${DB2}-shm`]) rmSync(f, { force: true });
-  const slow = boot(DB2, PORT + 1, {
+  const slow = boot(DB2, PORT + 1, { ...FIXTURE, 
     llm: "off",
     llmRenderer: async (req) => {
       await sleep(400); // 플래그를 뒤집을 시간을 벌어 준다
-      const on = req.flags.some(([k, v]) => k === "guardian_slain" && v === true);
+      const on = req.flags.some(([k, v]) => k === "journal_recovered" && v === true);
       return {
         text: `[${on ? "이후" : "이전"}] ${req.seed}.`,
         source: "llm" as const,
@@ -352,7 +357,7 @@ async function main() {
     JSON.stringify(slow.upgrades.stats()));
 
   // 승급이 해소되기 '전에' 플래그를 뒤집는다
-  slow.events.setFlag("guardian_slain", true);
+  slow.events.setFlag("journal_recovered", true);
   await slow.upgrades.idle();
   await sleep(150);
 
@@ -366,22 +371,22 @@ async function main() {
   // ★ 더 조용한 쪽의 피해: 행의 키(state_hash)와 내용이 어긋나는 것.
   // flags_json 이 곧 state_hash 의 preimage 이므로 둘은 반드시 일치해야 한다.
   // 어긋나면 플래그를 되돌렸을 때 '엉뚱한 문장' 이 복구된다.
-  slow.ctx.q.setFlag.run("guardian_slain", "false", Date.now());
-  slow.ctx.world.applyFlag("guardian_slain", "false");
+  slow.ctx.q.setFlag.run("journal_recovered", "false", Date.now());
+  slow.ctx.world.applyFlag("journal_recovered", "false");
   const offHash = slow.ctx.world.stateHash("b1:1,4");
   const offRow = slow.ctx.q.getRoomTextRow.get("b1:1,4", offHash);
   check("★ 옛 상태의 행은 옛 상태의 문장을 담고 있다 (캐시가 오염되지 않았다)",
     offRow?.text.startsWith("[이전]") === true, String(offRow?.text));
   check("행의 flags_json 이 그 행을 키잉한 preimage 와 일치한다",
-    offRow?.flags_json === '{"guardian_slain":false}', String(offRow?.flags_json));
+    offRow?.flags_json === '{"journal_recovered":false}', String(offRow?.flags_json));
   const onRow = slow.ctx.q.getRoomTextRow.get(
     "b1:1,4",
-    (slow.ctx.world.applyFlag("guardian_slain", "true"),
+    (slow.ctx.world.applyFlag("journal_recovered", "true"),
       slow.ctx.world.stateHash("b1:1,4")),
   );
   check("새 상태의 행도 마찬가지다",
     onRow?.text.startsWith("[이후]") === true &&
-      onRow?.flags_json === '{"guardian_slain":true}',
+      onRow?.flags_json === '{"journal_recovered":true}',
     `${onRow?.text} / ${onRow?.flags_json}`);
   dave.close();
   await slow.close();

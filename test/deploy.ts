@@ -14,6 +14,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import WebSocket from "ws";
 import { boot } from "../server/index";
+import { FIXTURE_WORLD, FIXTURE_BALANCE, FIXTURE_MOODS } from "./fixture";
+
+/** 모든 boot() 가 같은 고정 세계를 쓴다 — 운영 콘텐츠가 바뀌어도 검사는 그대로다. */
+const FIXTURE = { world: FIXTURE_WORLD, balance: FIXTURE_BALANCE, moods: FIXTURE_MOODS } as const;
 import { runPregen } from "../server/tools/pregen";
 import { PROTOCOL_VERSION, type ServerMsg } from "../shared/protocol";
 import type { NpcLineRequest, RoomTextRequest } from "../shared/narration";
@@ -61,7 +65,7 @@ async function main() {
   writeFileSync("dist/assets/index-TEST123.js", "console.log('bundle')");
   writeFileSync("secret-not-served.txt", "이 파일은 dist 밖에 있다");
 
-  const server = boot(DB, PORT, { llm: "off" });
+  const server = boot(DB, PORT, { ...FIXTURE,  llm: "off" });
 
   section("① 정적 파일과 ws 가 같은 포트에서 산다");
   const index = await fetch(`${BASE}/`);
@@ -173,7 +177,7 @@ async function main() {
   };
   const quiet = () => {};
 
-  const first = await runPregen(DB, { llm: "off", llmRenderer: fakeRoom, llmNpcRenderer: fakeNpc }, quiet);
+  const first = await runPregen(DB, { ...FIXTURE, llm: "off", llmRenderer: fakeRoom, llmNpcRenderer: fakeNpc }, quiet);
   check(`모든 방(${first.rooms})을 큐에 넣었다`, first.queuedRooms === first.rooms,
     `${first.queuedRooms}/${first.rooms}`);
   check("열린 주제도 전부", first.queuedLines === first.lines, `${first.queuedLines}/${first.lines}`);
@@ -185,7 +189,7 @@ async function main() {
 
   section("⑥' 다시 돌려도 안전하다 (지역을 추가하고 다시 돌리는 경우)");
   const callsBefore = roomCalls + npcCalls;
-  const again = await runPregen(DB, { llm: "off", llmRenderer: fakeRoom, llmNpcRenderer: fakeNpc }, quiet);
+  const again = await runPregen(DB, { ...FIXTURE, llm: "off", llmRenderer: fakeRoom, llmNpcRenderer: fakeNpc }, quiet);
   check("★ 이미 확정된 것은 다시 만들지 않는다", roomCalls + npcCalls === callsBefore,
     `${callsBefore} -> ${roomCalls + npcCalls}`);
   check("큐에 아무것도 넣지 않았다", again.queuedRooms === 0 && again.queuedLines === 0,
@@ -193,7 +197,7 @@ async function main() {
   check("폴백은 여전히 0", again.leftoverFallback === 0);
 
   section("⑥'' 선생성된 세계에 들어가면 폴백을 거치지 않는다");
-  const live = boot(DB, PORT, { llm: "off" });
+  const live = boot(DB, PORT, { ...FIXTURE,  llm: "off" });
   const ws = await connect();
   ws.send(JSON.stringify({ t: "hello", pv: PROTOCOL_VERSION, token: null, name: null }));
   const seen: ServerMsg[] = [];
@@ -220,7 +224,7 @@ async function main() {
   check("빌드가 저장소 루트의 dist/ 에 나온다 (client/dist 가 아니라)",
     existsSync("dist/index.html"), "vite 의 기본 outDir 은 root/dist 다");
 
-  const prod = boot(DB, PORT, { llm: "off" });
+  const prod = boot(DB, PORT, { ...FIXTURE,  llm: "off" });
   const pre = [
     "/opt/pw-browsers/chromium-1194/chrome-linux/chrome",
     "/opt/pw-browsers/chromium/chrome-linux/chrome",

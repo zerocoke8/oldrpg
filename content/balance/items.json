@@ -1,4 +1,5 @@
 {
-  "minor_potion": { "name": "낡은 물약",      "kind": "potion", "heal": 14 },
-  "warden_shard": { "name": "파수꾼의 파편",  "kind": "trophy", "heal": null }
+  "stabilizer": { "name": "안정제 앰플", "kind": "potion", "heal": 14 },
+  "research_log": { "name": "연구 일지", "kind": "trophy", "heal": null },
+  "dark_shard": { "name": "어둠 결정", "kind": "trophy", "heal": null }
 }

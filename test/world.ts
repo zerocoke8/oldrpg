@@ -89,18 +89,18 @@ async function main() {
   check("모든 방에 씨앗이 있다 (rooms() 가 던지지 않는다)", map.rooms().length > 0,
     String(map.rooms().length));
   check("지역 id 가 파일 이름에서 왔다 (JSON 안에 id 필드가 없다)",
-    !("id" in (JSON.parse(readFileSync("content/world/regions/b1.json", "utf8")) as object)));
+    !("id" in (JSON.parse(readFileSync("content/world/regions/ue001.json", "utf8")) as object)));
 
   section("② 씨앗은 한 글자도 바뀌지 않았다 (규칙 3)");
   /* seed_id 는 내용 파생이다. 아래 값들은 JSON 으로 옮기기 '전' 의 코드에서
      뽑은 것이다 — 하나라도 어긋나면 그 방의 생성된 텍스트가 전부 날아간다.
      그래서 이 표는 갱신하는 것이 아니라, 어긋나면 씨앗을 되돌리는 것이다. */
   const FROZEN: Record<string, [string, string]> = {
-    "b1:1,1": ["13ff4dbc", "e3b0c442"],
-    "b1:3,3": ["b2c1e416", "e3b0c442"],
-    "b1:5,5": ["51d68edd", "7e6abfd6"],
-    "b2:1,3": ["1104d66b", "e3b0c442"],
-    "b2:3,3": ["2b762458", "e3b0c442"],
+    "d6:2,1": ["a3b5dc04", "e3b0c442"],
+    "d6:5,3": ["aa823088", "e3b0c442"],
+    "ue001:4,1": ["e368ee21", "313a815a"],
+    "ue001:2,10": ["6b8eb017", "4078be97"],
+    "ue001b:2,5": ["5a3d15a4", "313a815a"],
   };
   const byId = new Map(map.rooms().map((r) => [r.id, r]));
   for (const [id, [seedId, declHash]] of Object.entries(FROZEN)) {
@@ -115,65 +115,67 @@ async function main() {
   section("②' NPC 도 같은 표에 얼어붙어 있다");
   /* npc_lines 의 seed_id 는 persona + topic.seed 파생이다. 이동하면서 한
      글자라도 바뀌면 이미 만든 대사가 전부 캐시 미스가 된다. */
-  const keeper = map.npc("altar_keeper");
-  check("NPC 가 지역 파일에서 실렸다", keeper?.region === "b1" && keeper?.roomId === "b1:3,1",
+  const keeper = map.npc("observer");
+  check("NPC 가 지역 파일에서 실렸다", keeper?.region === "ue001" && keeper?.roomId === "ue001:3,3",
     JSON.stringify([keeper?.region, keeper?.roomId]));
   const FROZEN_NPC: Record<string, string> = {
-    greet: "4128f090",
-    warden: "3b499c52",
-    altar: "c9861dd3",
-    sealed_door: "91ffd8be",
+    greet: "0a673c43",
+    darkness: "ce994a8e",
+    lab: "d1425257",
+    journal: "7a2d3f23",
+    isolation: "ffd69168",
+    after: "f6f715ce",
   };
   for (const [topicId, want] of Object.entries(FROZEN_NPC)) {
     const t = keeper?.topics.find((x) => x.id === topicId);
     const got = t && npcSeedId(keeper!, t);
-    check(`제단지기/${topicId} 의 seed_id 가 그대로다`, got === want, `${String(got)} != ${want}`);
+    check(`관측자/${topicId} 의 seed_id 가 그대로다`, got === want, `${String(got)} != ${want}`);
   }
   check("주제 순서가 그대로다 (대화 메뉴의 순서다)",
-    keeper?.topics.map((t) => t.id).join(",") === "greet,warden,altar,sealed_door",
+    keeper?.topics.map((t) => t.id).join(",") === "greet,darkness,lab,journal,isolation,after",
     String(keeper?.topics.map((t) => t.id)));
 
   section("③ 틀린 세계는 '부팅에서' 죽는다");
   const cases: [string, string | null][] = [
     ["줄 길이가 제각각인 타일",
-      refuses(broken("regions/b2.json", (d) => { (d.tiles as string[])[1] = "#..E##"; }))],
+      refuses(broken("regions/ue001b.json", (d) => { (d.tiles as string[])[1] = "#.####x"; }))],
     ['타일에 모르는 글자',
-      refuses(broken("regions/b2.json", (d) => { (d.tiles as string[])[1] = "#..X#"; }))],
+      refuses(broken("regions/ue001b.json", (d) => { (d.tiles as string[])[1] = "#..X#"; }))],
     ['좌표 키가 "x,y" 가 아님',
-      refuses(broken("regions/b2.json", (d) => {
+      refuses(broken("regions/ue001b.json", (d) => {
         (d.seeds as Record<string, string>)["1, 1"] = "공백이 들어간 키";
       }))],
     ["빈 씨앗",
-      refuses(broken("regions/b2.json", (d) => { (d.seeds as Record<string, string>)["1,1"] = ""; }))],
+      refuses(broken("regions/ue001b.json", (d) => { (d.seeds as Record<string, string>)["1,1"] = ""; }))],
     ["모르는 필드 (오타 방지)",
-      refuses(broken("regions/b2.json", (d) => { d.sensitiveFlags = {}; }))],
+      refuses(broken("regions/ue001b.json", (d) => { d.sensitiveFlags = {}; }))],
     ["모르는 방향의 출구",
-      refuses(broken("regions/b2.json", (d) => {
+      refuses(broken("regions/ue001b.json", (d) => {
         (d.exits as Record<string, unknown>[])[0]!.dir = "up";
       }))],
     ["NPC id 가 지역을 넘어 겹침",
       refuses((() => {
         const d = mkdtempSync(join(tmpdir(), "world-"));
         cpSync("content/world", d, { recursive: true });
-        const p2 = join(d, "regions", "b2.json");
-        const b1 = JSON.parse(readFileSync(join(d, "regions", "b1.json"), "utf8")) as {
+        const p2 = join(d, "regions", "ue001b.json");
+        const b1 = JSON.parse(readFileSync(join(d, "regions", "ue001.json"), "utf8")) as {
           npcs: Record<string, unknown>;
         };
         const b2 = JSON.parse(readFileSync(p2, "utf8")) as Record<string, unknown>;
-        b2.npcs = { altar_keeper: { ...(b1.npcs.altar_keeper as object), at: "1,3" } };
+        b2.npcs = { observer: { ...(b1.npcs.observer as object), at: "1,1" } };
         writeFileSync(p2, JSON.stringify(b2, null, 2));
         return d;
       })())],
     ["같은 주제 id 가 두 번",
-      refuses(broken("regions/b1.json", (d) => {
-        const n = (d.npcs as Record<string, { topics: unknown[] }>).altar_keeper!;
+      refuses(broken("regions/ue001.json", (d) => {
+        const n = (d.npcs as Record<string, { topics: unknown[] }>).observer!;
         n.topics.push({ ...(n.topics[0] as object) });
       }))],
     ["NPC id 에 ':' (승급 큐 키의 구분자)",
-      refuses(broken("regions/b1.json", (d) => {
+      refuses(broken("regions/ue001.json", (d) => {
         const npcs = d.npcs as Record<string, unknown>;
-        npcs["altar:keeper"] = npcs.altar_keeper;
-        delete npcs.altar_keeper;
+        npcs["obser:ver"] = npcs.observer;
+        delete npcs.observer;
       }))],
     ["없는 지역을 스폰으로",
       refuses(broken("world.json", (d) => {
@@ -184,7 +186,7 @@ async function main() {
     check(`★ ${label} 을 거절한다`, why !== null, "통과해 버렸다");
   }
   check("거절 메시지가 어느 파일인지 말해 준다",
-    (cases[0]![1] ?? "").includes("b2.json"), String(cases[0]![1]).split("\n")[0]);
+    (cases[0]![1] ?? "").includes("ue001b.json"), String(cases[0]![1]).split("\n")[0]);
 
   section("④ 지역이 하나도 없으면 죽는다");
   const empty = mkdtempSync(join(tmpdir(), "world-"));
@@ -221,7 +223,7 @@ async function main() {
   await sleep(200);
   const raw = JSON.stringify(inbox);
   check("★ 진짜 세계의 문장이 한 줄도 새지 않았다",
-    !raw.includes("석조 교차로") && !raw.includes("봉인된"), "b1/b2 의 씨앗이 보인다");
+    !raw.includes("게시벽") && !raw.includes("연구"), "b1/b2 의 씨앗이 보인다");
 
   ws.close();
   await server.close();

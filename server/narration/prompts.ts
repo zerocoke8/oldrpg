@@ -132,6 +132,25 @@ export const loadSeedsPrompt = (version = "seeds.v1.ko"): AuthorPrompt<{
   coords: string;
 }> => loadPrompt(version);
 
+/** 폴백 꼬리 문장들. 씨앗 뒤에 붙는 한 마디이고, 씨앗의 해시로 고른다 —
+ *  하나로 두면 방 50개가 전부 같은 문장으로 끝난다. */
+export interface Tails {
+  readonly room: readonly string[];
+  readonly npc: readonly string[];
+}
+
+export function loadTails(version = "tails.ko"): Tails {
+  const s = sections(readFileSync(join(PROMPTS, `${version}.md`), "utf8"));
+  const lines = (name: string): string[] =>
+    (s[name] ?? "").split("\n").map((l) => l.trim()).filter(Boolean);
+  const room = lines("room");
+  const npc = lines("npc");
+  if (!room.length || !npc.length) {
+    throw new Error(`${version}.md 에 '# room' 과 '# npc' 절이 모두 있어야 한다`);
+  }
+  return { room, npc };
+}
+
 /** 플래그 하나가 프로즈에 하는 일 전부. prompts/moods/<flag>.md 한 파일. */
 export interface Mood {
   /** LLM 에게 주는 톤 지시 (2단계). */

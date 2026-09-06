@@ -19,24 +19,25 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import WebSocket from "ws";
 import { boot } from "../server/index";
+import { FIXTURE_WORLD, FIXTURE_BALANCE, FIXTURE_MOODS } from "./fixture";
+
+/** 모든 boot() 가 같은 고정 세계를 쓴다 — 운영 콘텐츠가 바뀌어도 검사는 그대로다. */
+const FIXTURE = { world: FIXTURE_WORLD, balance: FIXTURE_BALANCE, moods: FIXTURE_MOODS } as const;
 import { PROTOCOL_VERSION, type ServerMsg } from "../shared/protocol";
 import type { RoomTextRequest } from "../shared/narration";
 import type { Dir } from "../shared/ids";
-import { loadBalance } from "../server/content/balance";
 import { makeRng } from "../server/engine/rng";
 import { makeMap } from "../server/engine/map";
-import { loadWorld } from "../server/content/world";
 
-/** 실제 content/world/ 를 읽은 맵. 테스트는 서버가 부팅에서 쓰는 것과
- *  같은 데이터를 봐야 한다 — 별도의 테스트 세계를 만들면 검사는 통과하는데
- *  운영 데이터는 틀린 상황이 생긴다. */
-const map = makeMap(loadWorld());
+/** 서버가 이 검사에서 실제로 부팅하는 것과 '같은' 세계 (test/fixture.ts). */
+const map = makeMap(FIXTURE_WORLD);
 const SPAWN = map.spawn;
 import { pickTarget } from "../server/engine/combat";
 
 const PORT = 8906;
 const DB = join(tmpdir(), `mud-combat-${process.pid}.db`);
-const BALANCE = loadBalance();
+/** 서버가 이 검사에서 실제로 부팅하는 것과 같은 밸런스. */
+const BALANCE = FIXTURE_BALANCE;
 const { skills: SKILLS, player: PLAYER } = BALANCE;
 const GUARD = BALANCE.enemies["shadow_warden"]!;
 
@@ -142,7 +143,7 @@ class Client {
 async function main() {
   for (const f of [DB, `${DB}-wal`, `${DB}-shm`]) rmSync(f, { force: true });
 
-  const server = boot(DB, PORT, {
+  const server = boot(DB, PORT, { ...FIXTURE, 
     llm: "off",
     llmRenderer: fakeLlm,
     combat: { now: monotonic, manualTick: true, seedFor: () => 12345, respawnMs: 50 },
@@ -286,14 +287,14 @@ async function main() {
 
   // ── ⑦ 승리 -> 3단계 파이프라인 ─────────────────────────────────────
   section("⑦ 적을 죽이면 3단계의 이벤트 경로가 통째로 돈다");
-  check("아직 guardian_slain 은 꺼져 있다", server.ctx.world.flagValue("guardian_slain") === false);
+  check("아직 journal_recovered 은 꺼져 있다", server.ctx.world.flagValue("journal_recovered") === false);
   alice.clear();
   bob.clear();
   await advance(30000); // 확실히 죽을 만큼
   check("★ 적이 죽었다", bob.texts("good").some((t) => t.includes("흩어진다")),
     JSON.stringify(bob.texts().slice(-4)));
   check("combat.end{victory}", bob.of("combat.end").some((e) => e.reason === "victory"));
-  check("★ guardian_slain 이 켜졌다", server.ctx.world.flagValue("guardian_slain") === true);
+  check("★ journal_recovered 이 켜졌다", server.ctx.world.flagValue("journal_recovered") === true);
   check("★ 3단계의 world.flag 가 방송됐다",
     bob.of("world.flag").some((f) => f.flag.value === true && f.flag.label === "파수꾼 처치됨"));
   check("★ 3단계의 이벤트 문장도 왔다 (near/far)",
@@ -328,7 +329,7 @@ async function main() {
 
   /* ── ⑩ 반복되는 적 ──────────────────────────────────────────────────
    *
-   * 파수꾼 하나뿐이면 '한 번 죽이면 끝' 인 세계다 — guardian_slain 이 DB 영속이라
+   * 파수꾼 하나뿐이면 '한 번 죽이면 끝' 인 세계다 — journal_recovered 이 DB 영속이라
    * 늦게 접속한 사람은 전투를 영영 보지 못했다. 그래서 적이 두 종류로 나뉜다:
    *   보스        플래그를 켠다. 돌아오지 않는다 (세계가 바뀐 사건이다)
    *   반복되는 적 세계를 바꾸지 않는다. 시간이 지나면 돌아온다
@@ -418,7 +419,7 @@ async function main() {
 
   let clock2 = 1_000_000;
   const boot2 = (respawnMs: number) =>
-    boot(DB2, PORT2, {
+    boot(DB2, PORT2, { ...FIXTURE, 
       llm: "off",
       llmRenderer: fakeLlm,
       // ★ 부활이 '절대' 오지 않는다 = 타이머를 잃은 것과 같은 상태.

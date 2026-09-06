@@ -17,9 +17,15 @@ import type {
   RoomTextRequest,
   RoomTextResult,
 } from "../../shared/narration";
-import type { Mood } from "./prompts";
+import { createHash } from "node:crypto";
+import type { Mood, Tails } from "./prompts";
 
-const TAIL = "발소리가 축축한 벽에 둔하게 부딪힌다.";
+/** 씨앗으로 꼬리를 고른다. 방마다 고정이고 같은 방은 언제나 같은 문장이다 —
+ *  폴백도 room_text 에 기록되므로 굴릴 때마다 달라지면 캐시가 거짓말이 된다. */
+const pickBySeed = (seed: string, pool: readonly string[]): string => {
+  const h = createHash("sha256").update(seed, "utf8").digest();
+  return pool[h.readUInt32BE(0) % pool.length]!;
+};
 
 /** 그 방이 '선언한' 플래그만 투영되어 들어온다. 전체 월드 플래그를 받는
  *  경로는 존재하지 않는다 (charter 45줄). */
@@ -37,11 +43,11 @@ export function moodTextFor(
     .join(" ");
 }
 
-export function makeStaticRenderer(moods: ReadonlyMap<string, Mood>): RoomTextRenderer {
+export function makeStaticRenderer(moods: ReadonlyMap<string, Mood>, tails: Tails): RoomTextRenderer {
   return async (req: RoomTextRequest): Promise<RoomTextResult> => {
     const mood = moodTextFor(req, moods, (m) => m.fallback);
     return {
-      text: `${req.seed}. ${mood || TAIL}`,
+      text: `${req.seed}. ${mood || pickBySeed(req.seed, tails.room)}`,
       source: "fallback",
       model: null,
       promptVersion: null,
@@ -52,7 +58,7 @@ export function makeStaticRenderer(moods: ReadonlyMap<string, Mood>): RoomTextRe
 /** NPC 대사의 결정론 폴백. 방과 같은 역할이다 — 키가 없을 때의 렌더러이자,
  *  LLM 실패 시의 폴백이자, 규칙 4 를 위해 '즉시' 보여줄 문장.
  *  씨앗을 그대로 한 문장으로 세운다. */
-export function makeStaticNpcRenderer(moods: ReadonlyMap<string, Mood>): NpcLineRenderer {
+export function makeStaticNpcRenderer(moods: ReadonlyMap<string, Mood>, tails: Tails): NpcLineRenderer {
   return async (req: NpcLineRequest): Promise<RoomTextResult> => {
     const mood = req.flags
       .filter(([, v]) => v === true)
@@ -60,7 +66,7 @@ export function makeStaticNpcRenderer(moods: ReadonlyMap<string, Mood>): NpcLine
       .filter((x): x is string => Boolean(x))
       .join(" ");
     return {
-      text: `${req.seed}. ${mood || "그 이상은 말하지 않는다."}`,
+      text: `${req.seed}. ${mood || pickBySeed(req.seed, tails.npc)}`,
       source: "fallback",
       model: null,
       promptVersion: null,

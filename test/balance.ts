@@ -67,18 +67,18 @@ async function main() {
 
   section("② 틀린 값이면 '부팅에서' 죽는다 — 조용히 도는 것보다 낫다");
   const cases: [string, string, (d: Record<string, unknown>) => void, string][] = [
-    ["체력이 0인 적", "enemies", (d) => { (d.ashen_pages as Record<string, unknown>).maxHp = 0; }, "maxHp"],
-    ["최소가 최대보다 큰 피해", "enemies", (d) => { (d.ashen_pages as Record<string, unknown>).damage = [9, 2]; }, "damage"],
+    ["체력이 0인 적", "enemies", (d) => { (d.husk_specimen as Record<string, unknown>).maxHp = 0; }, "maxHp"],
+    ["최소가 최대보다 큰 피해", "enemies", (d) => { (d.husk_specimen as Record<string, unknown>).damage = [9, 2]; }, "damage"],
     ["확률이 1을 넘는 드랍", "enemies", (d) => {
-      (d.ashen_pages as Record<string, unknown>).drops = [{ itemId: "minor_potion", qty: 1, chance: 1.5 }];
+      (d.husk_specimen as Record<string, unknown>).drops = [{ itemId: "stabilizer", qty: 1, chance: 1.5 }];
     }, "chance"],
-    ["★ 보스인데 리스폰한다", "enemies", (d) => { (d.shadow_warden as Record<string, unknown>).respawnMs = 1000; }, "보스"],
+    ["★ 보스인데 리스폰한다", "enemies", (d) => { (d.proliferant as Record<string, unknown>).respawnMs = 1000; }, "보스"],
     ["★ 없는 아이템을 떨어뜨린다", "enemies", (d) => {
-      (d.ashen_pages as Record<string, unknown>).drops = [{ itemId: "없는물약", qty: 1, chance: 1 }];
+      (d.husk_specimen as Record<string, unknown>).drops = [{ itemId: "없는물약", qty: 1, chance: 1 }];
     }, "선언되지 않은 아이템"],
-    ["모르는 필드 (오타)", "enemies", (d) => { (d.ashen_pages as Record<string, unknown>).maxHP = 50; }, "maxHP"],
-    ["★ potion 인데 heal 이 없다", "items", (d) => { (d.minor_potion as Record<string, unknown>).heal = null; }, "heal"],
-    ["trophy 인데 heal 이 있다", "items", (d) => { (d.warden_shard as Record<string, unknown>).heal = 5; }, "heal"],
+    ["모르는 필드 (오타)", "enemies", (d) => { (d.husk_specimen as Record<string, unknown>).maxHP = 50; }, "maxHP"],
+    ["★ potion 인데 heal 이 없다", "items", (d) => { (d.stabilizer as Record<string, unknown>).heal = null; }, "heal"],
+    ["trophy 인데 heal 이 있다", "items", (d) => { (d.research_log as Record<string, unknown>).heal = 5; }, "heal"],
     ["치명타 확률이 1을 넘는다", "player", (d) => { d.critChance = 2; }, "critChance"],
     ["스킬 종류가 오타", "skills", (d) => { (d.mend as Record<string, unknown>).kind = "healz"; }, "kind"],
   ];
@@ -91,7 +91,7 @@ async function main() {
     (refuses(missing) ?? "").includes("읽을 수 없다"));
 
   section("③ 배치와 정의는 다른 것이다 (부팅에서 짝을 본다)");
-  const noSuchEnemy = broken("enemies", (d) => { delete d.ashen_pages; });
+  const noSuchEnemy = broken("enemies", (d) => { delete d.husk_specimen; });
   let bootFailed = "";
   try {
     boot(DB, PORT, { llm: "off", balance: loadBalance(noSuchEnemy) }).close();
@@ -100,7 +100,7 @@ async function main() {
   }
   rmSync(noSuchEnemy, { recursive: true, force: true });
   check("★ 배치된 적이 정의에 없으면 서버가 뜨지 않는다",
-    bootFailed.includes("ashen_pages"), bootFailed || "떴다");
+    bootFailed.includes("husk_specimen"), bootFailed || "떴다");
 
   section("④ 주입이 실제로 통한다 — 수치를 바꾸면 게임이 달라진다");
   /* 이게 이 작업의 요점이다. 코드가 상수를 들고 있었다면 파일을 고쳐도

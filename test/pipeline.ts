@@ -17,10 +17,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import WebSocket from "ws";
 import { boot } from "../server/index";
+import { FIXTURE_WORLD, FIXTURE_BALANCE, FIXTURE_MOODS } from "./fixture";
+
+/** 모든 boot() 가 같은 고정 세계를 쓴다 — 운영 콘텐츠가 바뀌어도 검사는 그대로다. */
+const FIXTURE = { world: FIXTURE_WORLD, balance: FIXTURE_BALANCE, moods: FIXTURE_MOODS } as const;
 import { PROTOCOL_VERSION, type ServerMsg } from "../shared/protocol";
 import type { RoomTextRenderer, RoomTextRequest } from "../shared/narration";
 import type { Dir } from "../shared/ids";
-import { loadMoods, loadNpcPrompt, loadRoomPrompt } from "../server/narration/prompts";
+import { loadNpcPrompt, loadRoomPrompt, loadTails } from "../server/narration/prompts";
 import { makeStaticNpcRenderer, makeStaticRenderer } from "../server/narration/static";
 import { makeLlmNpcRenderer, makeLlmRenderer, type AnthropicLike } from "../server/narration/llm";
 
@@ -149,16 +153,16 @@ class Client {
 }
 
 /* ⑧ 에서 쓰는 진짜 mood/폴백. 파일에서 읽는다. */
-const moodsForTest = loadMoods();
-const fallbackForTest = makeStaticRenderer(moodsForTest);
-const fallbackNpcForTest = makeStaticNpcRenderer(moodsForTest);
+const moodsForTest = FIXTURE_MOODS;
+const fallbackForTest = makeStaticRenderer(moodsForTest, loadTails());
+const fallbackNpcForTest = makeStaticNpcRenderer(moodsForTest, loadTails());
 
 /* ── 본문 ────────────────────────────────────────────────────────────── */
 
 async function main() {
   for (const f of [DB, `${DB}-wal`, `${DB}-shm`]) rmSync(f, { force: true });
   const llm = makeFakeLlm(80);
-  const server = boot(DB, PORT, {
+  const server = boot(DB, PORT, { ...FIXTURE, 
     llm: "off",
     llmRenderer: llm,
     queue: { concurrency: 2, cooldownMs: 250, maxAttempts: 2 },
@@ -266,10 +270,10 @@ async function main() {
   section("⑤ 플래그가 되돌아가면 옛 텍스트가 그대로 복구된다");
   llm.failFor.clear();
   llm.calls.length = 0;
-  // guardian_slain 을 켠다 (4단계 전투가 할 일을 여기서는 직접).
+  // journal_recovered 을 켠다 (4단계 전투가 할 일을 여기서는 직접).
   const roomWithFlag = "b1:5,4";
   const hashOff = server.ctx.world.stateHash(roomWithFlag);
-  server.ctx.q.setFlag.run("guardian_slain", "true", Date.now());
+  server.ctx.q.setFlag.run("journal_recovered", "true", Date.now());
   server.ctx.world.load(
     new Map(server.ctx.q.allFlags.all().map((r) => [r.key, r.value] as [string, string])),
   );
@@ -278,7 +282,7 @@ async function main() {
   check("옛 상태의 텍스트가 사라지지 않았다 (다른 행이다)",
     server.ctx.q.getRoomText.get(roomWithFlag, hashOn) === undefined);
 
-  server.ctx.q.setFlag.run("guardian_slain", "false", Date.now());
+  server.ctx.q.setFlag.run("journal_recovered", "false", Date.now());
   server.ctx.world.load(
     new Map(server.ctx.q.allFlags.all().map((r) => [r.key, r.value] as [string, string])),
   );
@@ -295,9 +299,9 @@ async function main() {
   const withMood = p.render({ seed: "s", mood: "파수꾼이 쓰러졌다" });
   check("mood 가 있으면 절이 붙는다", withMood.includes("파수꾼이 쓰러졌다"));
   const moods = moodsForTest;
-  check("moods/guardian_slain.md 를 읽었다", moods.has("guardian_slain"));
+  check("moods/journal_recovered.md 를 읽었다", moods.has("journal_recovered"));
   check("mood 에 prompt/fallback 두 절이 있다",
-    Boolean(moods.get("guardian_slain")?.prompt) && Boolean(moods.get("guardian_slain")?.fallback));
+    Boolean(moods.get("journal_recovered")?.prompt) && Boolean(moods.get("journal_recovered")?.fallback));
 
   // ── ⑦ 승급된 행의 메타데이터 ───────────────────────────────────────
   section("⑦ 승급된 행이 무엇으로 만들어졌는지 남는다");
@@ -314,7 +318,7 @@ async function main() {
   // 플래그를 선언한 방은 preimage 에 그 플래그가 들어 있어야 한다
   const flagRoomHash = server.ctx.world.stateHash("b1:5,4");
   check("선언한 플래그만 투영된다 (전체 월드 플래그가 아니다)",
-    JSON.stringify(server.ctx.world.projectFlags("b1:5,4")) === '[["guardian_slain",false]]',
+    JSON.stringify(server.ctx.world.projectFlags("b1:5,4")) === '[["journal_recovered",false]]',
     JSON.stringify(server.ctx.world.projectFlags("b1:5,4")));
   check("플래그 없는 방의 투영은 빈 배열",
     JSON.stringify(server.ctx.world.projectFlags("b1:3,3")) === "[]");
@@ -346,7 +350,7 @@ async function main() {
     stateHash: "a.b.c",
     seed: "벽 틈에서 희미한 붉은 빛이 스며나온다",
     seedId: "a",
-    flags: [["guardian_slain", true]] as const,
+    flags: [["journal_recovered", true]] as const,
   };
   const fb = fallbackForTest;
 
@@ -408,7 +412,7 @@ async function main() {
     persona: "무너진 서고의 제단을 지키는 늙은 사제",
     seed: "남쪽 홀을 지키는 그림자 파수꾼",
     seedId: "a",
-    flags: [["guardian_slain", true]] as const,
+    flags: [["journal_recovered", true]] as const,
   };
   const npcFb = fallbackNpcForTest;
 
@@ -467,7 +471,7 @@ async function main() {
   process.on("uncaughtException", onErr);
   process.on("unhandledRejection", onErr);
 
-  const slow = boot(DB2, PORT + 1, {
+  const slow = boot(DB2, PORT + 1, { ...FIXTURE, 
     llm: "off",
     llmRenderer: async (req) => {
       await sleep(500); // 종료보다 오래 걸린다

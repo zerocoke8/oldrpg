@@ -85,7 +85,10 @@ export interface WorldFlagDef {
  *  ★ 이것은 JSON 으로 가지 않았다. broadcast 는 '값' 이 아니라 '동작' 이다 —
  *    스포일러를 클라이언트에 흘릴지 말지의 결정이고, 저작 도구가 만들 것이 아니다. */
 export const WORLD_FLAGS: Readonly<Record<string, WorldFlagDef>> = {
-  guardian_slain: { default: "false", broadcast: true },
+  /** 기록실의 괴령을 쓰러뜨려 연구 일지를 되찾았다. 격리 구역의 문이 열린다. */
+  journal_recovered: { default: "false", broadcast: true },
+  /** 증식체를 쓰러뜨렸다 = 이 괴담이 해결됐다. */
+  proliferant_slain: { default: "false", broadcast: true },
 };
 
 /** 시더가 쓰는 key -> default 사영. */

@@ -16,14 +16,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import WebSocket from "ws";
 import { boot } from "../server/index";
+import { FIXTURE_WORLD, FIXTURE_BALANCE, FIXTURE_MOODS } from "./fixture";
+
+/** 모든 boot() 가 같은 고정 세계를 쓴다 — 운영 콘텐츠가 바뀌어도 검사는 그대로다. */
+const FIXTURE = { world: FIXTURE_WORLD, balance: FIXTURE_BALANCE, moods: FIXTURE_MOODS } as const;
 import { PROTOCOL_VERSION, type ServerMsg } from "../shared/protocol";
 import type { NpcLineRequest } from "../shared/narration";
 import type { Dir } from "../shared/ids";
 import { makeMap } from "../server/engine/map";
-import { loadWorld } from "../server/content/world";
 
-/** 서버가 부팅에서 쓰는 것과 같은 데이터. */
-const map = makeMap(loadWorld());
+/** 서버가 이 검사에서 실제로 부팅하는 것과 '같은' 세계 (test/fixture.ts). */
+const map = makeMap(FIXTURE_WORLD);
 
 const PORT = 8906;
 const DB = join(tmpdir(), `mud-npc-${process.pid}.db`);
@@ -55,7 +58,7 @@ const fakeNpcLlm = async (req: NpcLineRequest) => {
   renderCalls.set(key, (renderCalls.get(key) ?? 0) + 1);
   seenRequests.push(req);
   await sleep(40);
-  const on = req.flags.some(([k, v]) => k === "guardian_slain" && v === true);
+  const on = req.flags.some(([k, v]) => k === "journal_recovered" && v === true);
   return {
     text: `[${on ? "이후" : "이전"}] ${req.seed}.`,
     source: "llm" as const,
@@ -137,7 +140,7 @@ class Client {
 
 async function main() {
   for (const f of [DB, `${DB}-wal`, `${DB}-shm`]) rmSync(f, { force: true });
-  const server = boot(DB, PORT, { llm: "off", llmNpcRenderer: fakeNpcLlm, queue: { concurrency: 3 } });
+  const server = boot(DB, PORT, { ...FIXTURE,  llm: "off", llmNpcRenderer: fakeNpcLlm, queue: { concurrency: 3 } });
   const q = server.ctx.q;
   const world = server.ctx.world;
   const keeper = map.npc("altar_keeper")!;
@@ -205,7 +208,7 @@ async function main() {
 
   const req = seenRequests[0]!;
   check("★ 렌더러는 그 NPC 가 '선언한' 플래그만 받았다 (charter 45줄)",
-    req.flags.length === 1 && req.flags[0]![0] === "guardian_slain",
+    req.flags.length === 1 && req.flags[0]![0] === "journal_recovered",
     JSON.stringify(req.flags));
   check("persona 와 topic 씨앗이 함께 들어간다",
     req.persona === keeper.persona && req.seed === keeper.topics[0]!.seed);
@@ -262,7 +265,7 @@ async function main() {
 
   // ── ⑤ 3단계 연결: 플래그가 NPC 도 재생성시킨다 ──────────────────────
   section("⑤ 플래그를 선언한 'NPC' 도 재생성 큐에 들어간다 (charter 59줄)");
-  const res = server.events!.setFlag("guardian_slain", true);
+  const res = server.events!.setFlag("journal_recovered", true);
   check("이벤트가 NPC 대사를 큐에 넣었다", res.queuedNpcLines > 0, JSON.stringify(res));
   check("★ 그 NPC 의 방(b1:3,1)은 이 플래그를 선언하지 않았다 — 그래도 NPC 는 반응한다",
     !res.queued || true);
@@ -306,7 +309,7 @@ async function main() {
   // ── ⑥ 규칙 3: 되돌리면 옛 대사가 복구된다 ──────────────────────────
   section("⑥ 플래그를 되돌리면 옛 대사가 그대로 복구된다 (규칙 3)");
   const greetOldHash = world.npcStateHash("altar_keeper", "greet"); // 지금은 '이후' 상태
-  server.events!.setFlag("guardian_slain", false);
+  server.events!.setFlag("journal_recovered", false);
   await server.upgrades.idle();
   await sleep(120);
   alice.clear();

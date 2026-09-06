@@ -14,12 +14,15 @@ import Database from "better-sqlite3";
 import { readFileSync } from "node:fs";
 import WebSocket from "ws";
 import { boot } from "../server/index";
+import { FIXTURE_WORLD, FIXTURE_BALANCE, FIXTURE_MOODS } from "./fixture";
+
+/** 모든 boot() 가 같은 고정 세계를 쓴다 — 운영 콘텐츠가 바뀌어도 검사는 그대로다. */
+const FIXTURE = { world: FIXTURE_WORLD, balance: FIXTURE_BALANCE, moods: FIXTURE_MOODS } as const;
 import { migrate } from "../server/db/migrate";
 import { PROTOCOL_VERSION, type ServerMsg } from "../shared/protocol";
 import type { Dir } from "../shared/ids";
 import { rollDrops } from "../server/engine/combat";
 import { makeRng } from "../server/engine/rng";
-import { loadBalance } from "../server/content/balance";
 
 const PORT = 8908;
 const DB = join(tmpdir(), `mud-items-${process.pid}.db`);
@@ -189,7 +192,8 @@ async function main() {
 
   // ── ② 순수 판정 ─────────────────────────────────────────────────────
   section("② 전리품 판정은 순수하고 결정론이다 (규칙 1)");
-  const BALANCE = loadBalance();
+  /** 서버가 이 검사에서 실제로 부팅하는 것과 같은 밸런스. */
+const BALANCE = FIXTURE_BALANCE;
   const guard = BALANCE.enemies["shadow_warden"]!;
   const watcher = BALANCE.enemies["rusted_watcher"]!;
   const two = [
@@ -222,7 +226,7 @@ async function main() {
 
   // ── 서버 ────────────────────────────────────────────────────────────
   for (const f of [DB, `${DB}-wal`, `${DB}-shm`]) rmSync(f, { force: true });
-  const server = boot(DB, PORT, {
+  const server = boot(DB, PORT, { ...FIXTURE, 
     llm: "off",
     combat: { now: () => clockMs, manualTick: true, seedFor: () => 4242, respawnMs: 50 },
   });
