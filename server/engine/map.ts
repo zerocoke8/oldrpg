@@ -36,8 +36,12 @@ export interface ExitDef {
   readonly dir: Dir;
   /** 여기로 (다른 지역의 칸) */
   readonly to: Pos;
-  /** 이 플래그가 켜져야 열린다. null 이면 언제나 열려 있다. */
+  /** 이 플래그가 켜져야 열린다. null 이면 언제나 열려 있다.
+   *  '세계가 열렸는가' 를 묻는다 — 모두에게 같은 답이다. */
   readonly requires: string | null;
+  /** 이 등급 이상이어야 지나간다. 0 이면 아무나.
+   *  '당신이 자격이 있는가' 를 묻는다 — 사람마다 답이 다르다. */
+  readonly minRank: number;
   /** 편도인가. false 면 반대편에도 짝이 되는 출구가 있어야 한다 (부팅에서 검증).
    *  짝이 없으면 들어갔다가 못 나오는 지역이 생기고, 그건 오타로 만들어진다. */
   readonly oneWay: boolean;

@@ -9,13 +9,14 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Db } from "./open";
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 /** 버전 N 으로 올리는 DDL. 전부 '가산' 이어야 한다 — 기존 표를 건드리면
  *  2단계에서 생성해 둔 room_text(값이 나간 산출물)를 잃는다. */
 const MIGRATIONS: Readonly<Record<number, string>> = {
   2: "migrations/002-npcs.sql",
   3: "migrations/003-items.sql",
+  4: "migrations/004-rank.sql",
 };
 
 const here = dirname(fileURLToPath(import.meta.url));

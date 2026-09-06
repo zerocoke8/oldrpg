@@ -12,7 +12,7 @@
     "lint": "eslint . --ext .ts,.tsx",
     "test": "tsx test/acceptance.ts",
     "test:browser": "tsx test/browser.ts",
-    "test:all": "npm run lint && npm run typecheck && npm run test && npm run test:pipeline && npm run test:events && npm run test:regions && npm run test:combat && npm run test:npc && npm run test:items && npm run test:balance && npm run test:world && npm run test:author && npm run test:deploy && npm run test:browser",
+    "test:all": "npm run lint && npm run typecheck && npm run test && npm run test:pipeline && npm run test:events && npm run test:regions && npm run test:combat && npm run test:npc && npm run test:items && npm run test:balance && npm run test:world && npm run test:guild && npm run test:author && npm run test:deploy && npm run test:browser",
     "test:pipeline": "tsx test/pipeline.ts",
     "test:events": "tsx test/events.ts",
     "test:regions": "tsx test/regions.ts",
@@ -26,6 +26,7 @@
     "test:deploy": "tsx test/deploy.ts",
     "test:balance": "tsx test/balance.ts",
     "test:world": "tsx test/world.ts",
+    "test:guild": "tsx test/guild.ts",
     "test:author": "tsx test/author.ts"
   },
   "dependencies": {

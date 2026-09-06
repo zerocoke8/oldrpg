@@ -43,6 +43,8 @@ export interface Session {
   seen: Set<RoomId>;
   hp: number;
   maxHp: number;
+  /** 길드 등급. 0 은 미등록. DB 커밋이 먼저, 이 값 갱신이 나중이다. */
+  rank: number;
   /** '연결' 단위 seq. 소켓이 바뀌면 0으로 리셋한다 — 플레이어 단위로 두면
    *  재접속한 클라이언트가 seq 1을 보내고 전부 거절당해, 미니맵에는 살아
    *  있는데 움직일 수 없는 상태가 된다. */

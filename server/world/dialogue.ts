@@ -39,7 +39,7 @@ export function makeDialogue(
   emit: Emit,
 ): DialogueService {
   const npcsIn = (roomId: RoomId): NpcBrief[] =>
-    map.npcsInRoom(roomId).map((n) => ({ id: n.id, name: n.name }));
+    map.npcsInRoom(roomId).map((n) => ({ id: n.id, name: n.name, ...(n.guild ? { guild: true } : {}) }));
 
   /** 지금 열려 있는 주제만. 잠긴 것은 목록에 아예 없다 —
    *  "무엇을 물을 수 있는가" 자체가 세계의 상태이고 스포일러가 될 수 있다. */

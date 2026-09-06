@@ -37,6 +37,8 @@ const zExit = z
     dir: z.enum(DIRECTIONS),
     to: zPos,
     requires: z.string().min(1).nullable(),
+    /** 이 등급 이상이어야 지나간다. 적지 않으면 0 — 아무나. */
+    minRank: z.number().int().min(0).default(0),
     oneWay: z.boolean(),
   })
   .strict();
@@ -58,6 +60,8 @@ const zNpc = z
     name: z.string().min(1),
     persona: z.string().min(1),
     sensitive: z.array(z.string().min(1)),
+    /** 길드 등급 접수를 보는 NPC 인가. 적지 않으면 false. */
+    guild: z.boolean().default(false),
     topics: z.array(zTopic).min(1),
   })
   .strict();
@@ -197,7 +201,7 @@ export function loadWorld(dir = process.env.MUD_WORLD ?? DEFAULT_DIR): MapData {
     const npcs = Object.fromEntries(
       Object.entries(r.npcs).map(([npcId, n]) => [
         npcId,
-        { at: n.at, name: n.name, persona: n.persona, sensitiveFlags: n.sensitive, topics: n.topics },
+        { at: n.at, name: n.name, persona: n.persona, sensitiveFlags: n.sensitive, guild: n.guild, topics: n.topics },
       ]),
     );
     regions.push({ id, ...r, npcs });

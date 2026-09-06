@@ -21,6 +21,7 @@ import { makeRoomTextService } from "./world/roomText";
 import { makeNpcTextService } from "./world/npcText";
 import { makeDialogue } from "./world/dialogue";
 import { makeInventory } from "./world/inventory";
+import { makeGuild } from "./world/guild";
 import { makeUpgradeService } from "./world/upgrade";
 import { makeEvents } from "./world/events";
 import { makeCombat, type CombatOptions } from "./world/combat";
@@ -124,6 +125,8 @@ export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
   let npcsIn: ((roomId: RoomId) => NpcBrief[]) | null = null;
   /* 가방은 메모리 사본이 없어 DB 만 읽으면 되므로, 늦은 바인딩이 필요 없다. */
   const inventory = makeInventory(q, reg, emit, balance, clock, (fn: () => void) => db.transaction(fn)());
+  const guild = makeGuild(q, emit, map, balance, clock, (fn: () => void) => db.transaction(fn)(),
+    (s: Session) => inventory.push(s));
   const presence = makePresence(
     reg,
     emit,
@@ -133,6 +136,7 @@ export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
     (roomId) => Boolean(combat?.enemyIn(roomId)),
     (roomId) => npcsIn?.(roomId) ?? [],
     (playerId) => inventory.of(playerId),
+    (rank) => guild.view(rank),
   );
 
   /* ── 서술 레이어 ────────────────────────────────────────────────────
@@ -191,6 +195,7 @@ export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
     combat: combatSvc,
     dialogue,
     inventory,
+    guild,
     balance,
     clock,
     isShuttingDown: () => shuttingDown,

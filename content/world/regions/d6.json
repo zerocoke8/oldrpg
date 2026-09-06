@@ -35,7 +35,8 @@
         "y": 1
       },
       "requires": null,
-      "oneWay": false
+      "oneWay": false,
+      "minRank": 1
     },
     {
       "at": "4,4",

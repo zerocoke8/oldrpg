@@ -32,6 +32,8 @@ import type { UpgradeService } from "../world/upgrade";
 import type { CombatService } from "../world/combat";
 import type { DialogueService } from "../world/dialogue";
 import type { InventoryService } from "../world/inventory";
+import type { GuildService } from "../world/guild";
+import { rankName } from "../engine/guild";
 import type { Balance } from "../engine/enemies";
 import type { Emit } from "./emit";
 import type { Presence } from "./presence";
@@ -66,6 +68,7 @@ export interface Ctx {
   combat: CombatService;
   dialogue: DialogueService;
   inventory: InventoryService;
+  guild: GuildService;
   balance: Balance;
   clock: () => number;
   /** 종료 중인가. true 면 handleClose 가 아무 일도 하지 않는다 —
@@ -162,6 +165,7 @@ export function handleHello(
   let pos: Pos;
   let seen: Set<RoomId>;
   let hp: number;
+  let rank: number;
   let maxHp: number;
   let displaced = false;
   let revived = false;
@@ -178,6 +182,7 @@ export function handleHello(
       displaced = true;
     }
     hp = row.hp;
+    rank = row.rank;
     maxHp = row.max_hp;
     /* ★ 저장된 vitals 도 좌표와 같은 이유로 여기서 검사한다.
      *
@@ -215,6 +220,7 @@ export function handleHello(
     pos = ctx.map.spawn;
     seen = new Set([roomIdOf(ctx.map.spawn)]);
     hp = ctx.balance.player.maxHp;
+    rank = 0; // 미등록. 길드 접수원에게 신청해야 오른다
     maxHp = ctx.balance.player.maxHp;
     ctx.q.insertPlayer.run({
       id: playerId,
@@ -267,6 +273,7 @@ export function handleHello(
     // 유예 중인 세션을 입양하는 경우, 메모리의 hp 도 DB 와 같아야 한다.
     existing.hp = hp;
     existing.maxHp = maxHp;
+    existing.rank = rank;
     existing.seen = seen;
     // 살아 있는 소켓 교체든 유예 입양이든, 관찰자는 그가 떠났다는 말을 들은
     // 적이 없다. 그래서 돌아왔다는 말도 필요 없다 — 둘 다 조용하다.
@@ -282,6 +289,7 @@ export function handleHello(
     seen,
     hp,
     maxHp,
+    rank,
     lastSeq: 0,
     logPrefix: randomBytes(4).toString("hex"),
     logN: 1,
@@ -424,6 +432,12 @@ export function handleAction(
       action = p.data;
       break;
     }
+    case "promote": {
+      const p = SCHEMAS.promote.safeParse(raw);
+      if (!p.success) return reject(ctx, s, seq, "bad_args");
+      action = p.data;
+      break;
+    }
     default:
       // 이 서버가 구현하지 않은 variant. 옛 서버가 새 클라이언트를 만나는
       // 경우가 정확히 이것이고, 크래시가 아니라 거절이어야 한다.
@@ -457,6 +471,8 @@ export function handleAction(
        "가지고 있지 않다" 도 거절이 아니라 문장이다 (벽 부딪힘과 같은 부류). */
     case "use_item":
       return doWorldCommand(ctx, s, seq, () => ctx.combat.useItem(s, action.itemId));
+    case "promote":
+      return doWorldCommand(ctx, s, seq, () => ctx.guild.promote(s, action.npcId));
   }
 }
 
@@ -487,7 +503,10 @@ function doMove(ctx: Ctx, s: Session, seq: number, dir: Dir): void {
   const from = s.pos;
   /* 봉인된 문이 열렸는지는 DB 가 아는 사실이다. 엔진은 db/ 를 모르므로
      읽는 함수를 넘긴다 — 난수·시계·밸런스와 같은 주입 방식이다. */
-  const result = resolveMove(ctx.map, from, dir, (key: string) => ctx.world.flagValue(key) === true);
+  const result = resolveMove(ctx.map, from, dir, {
+    isFlagOn: (key: string) => ctx.world.flagValue(key) === true,
+    rank: s.rank,
+  });
 
   if (!result.ok) {
     /* 벽은 엔진이 계산한 정상적 결정론 결과, 즉 '세계의 진실' 이지
@@ -497,7 +516,18 @@ function doMove(ctx: Ctx, s: Session, seq: number, dir: Dir): void {
          구별할 수 있으면, 클라이언트가 사방으로 이동을 찔러 보는 것만으로
          지도에 없는 문의 위치를 전부 알아낼 수 있다. 차이는 문장에만 있다. */
     ctx.emit.send(s, { t: "ack", seq, ok: false, reason: "blocked", pos: s.pos });
-    ctx.emit.log(s, "sys", result.reason === "sealed" ? lines.sealed : lines.blocked);
+    /* 벽·봉인·등급이 전부 같은 reason 으로 나가고 문장만 다르다. 다만 등급은
+       예외적으로 '무엇이 필요한지' 를 말해 준다 — 자격 문제는 감출 이유가
+       없고, 감추면 플레이어가 할 일을 알 수 없다. */
+    ctx.emit.log(
+      s,
+      "sys",
+      result.reason === "sealed"
+        ? lines.sealed
+        : result.reason === "rank"
+          ? lines.needRank(rankName(result.need, ctx.balance) ?? `${result.need}등급`)
+          : lines.blocked,
+    );
     return;
   }
 

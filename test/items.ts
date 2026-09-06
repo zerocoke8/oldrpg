@@ -18,7 +18,7 @@ import { FIXTURE_WORLD, FIXTURE_BALANCE, FIXTURE_MOODS } from "./fixture";
 
 /** 모든 boot() 가 같은 고정 세계를 쓴다 — 운영 콘텐츠가 바뀌어도 검사는 그대로다. */
 const FIXTURE = { world: FIXTURE_WORLD, balance: FIXTURE_BALANCE, moods: FIXTURE_MOODS } as const;
-import { migrate } from "../server/db/migrate";
+import { migrate, SCHEMA_VERSION } from "../server/db/migrate";
 import { PROTOCOL_VERSION, type ServerMsg } from "../shared/protocol";
 import type { Dir } from "../shared/ids";
 import { rollDrops } from "../server/engine/combat";
@@ -160,7 +160,9 @@ async function main() {
     const ver = db.prepare("SELECT value FROM meta WHERE key='schema_version'").get() as {
       value: string;
     };
-    check("v2 -> v3 로 올라간다", ver.value === "3", ver.value);
+    /* 최신까지 올라가면 된다. 여기서 숫자를 박으면 마이그레이션이 하나
+       늘 때마다 소지품 검사가 깨진다 — 그건 결합이지 회귀가 아니다. */
+    check("v2 DB 가 최신 스키마까지 올라간다", ver.value === String(SCHEMA_VERSION), ver.value);
     check("기존 캐릭터가 남아 있다",
       (db.prepare("SELECT name FROM players WHERE id='p1'").get() as { name: string } | undefined)
         ?.name === "옛 모험가");

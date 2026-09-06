@@ -28,6 +28,9 @@ export interface InventoryService {
   /** 쓸 수 있는가 — 예약하기 '전에' 보는 검사. 전투 중에 예약해 두고
    *  0.5초 뒤에야 "가지고 있지 않다" 를 듣는 것은 거짓말에 가깝다. */
   check(s: Session, itemId: string): string | null;
+  /** 가방이 바뀐 것을 알린다. 가방을 건드리는 다른 서비스(길드 승급 차감)가
+   *  같은 표현을 쓰도록 밖으로 낸다 — 두 곳이 각자 만들면 모양이 갈린다. */
+  push(s: Session): void;
 }
 
 export function makeInventory(
@@ -129,5 +132,5 @@ export function makeInventory(
     return null;
   }
 
-  return { of, award, use, check };
+  return { of, award, use, check, push: pushBag };
 }

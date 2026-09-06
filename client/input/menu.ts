@@ -74,13 +74,21 @@ export function rootItems(st: UiState): MenuItem[] {
         label: n.name,
         action: { type: "talk", npcId: n.id } as Action,
         // 주제는 서버가 보낸 것만. 잠긴 것은 애초에 오지 않는다 (스포일러).
+        // 길드 접수원에게는 '승급 신청' 이 하나 더 붙는다 — 자격이 되는지는
+        // 서버가 본다. 클라이언트가 미리 걸러 버리면 '무엇이 모자란지' 를
+        // 알려 줄 기회가 사라진다.
         items:
           st.dialogue?.npc.id === n.id
-            ? st.dialogue.topics.map((t) => ({
-                id: `topic:${t.id}`,
-                label: t.label,
-                action: { type: "ask", npcId: n.id, topic: t.id } as Action,
-              }))
+            ? [
+                ...st.dialogue.topics.map((t) => ({
+                  id: `topic:${t.id}`,
+                  label: t.label,
+                  action: { type: "ask", npcId: n.id, topic: t.id } as Action,
+                })),
+                ...(n.guild
+                  ? [{ id: "promote", label: "승급 신청", action: { type: "promote", npcId: n.id } as Action }]
+                  : []),
+              ]
             : [],
         empty: "…",
       })),

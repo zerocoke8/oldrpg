@@ -24,7 +24,9 @@ export type MoveResult =
    *  둘을 나누는 것은 '문장' 을 위해서다. 와이어의 ack.reason 은 둘 다
    *  "blocked" 하나로 남는다 — 클라이언트가 알 필요가 없고, 알면 지도에
    *  없는 문의 존재가 새어 나간다. */
-  | { ok: false; reason: "wall" | "sealed" };
+  | { ok: false; reason: "wall" | "sealed" }
+  /** 문은 열려 있는데 등급이 모자란다. need 는 요구 등급. */
+  | { ok: false; reason: "rank"; need: number };
 
 /** 클라이언트가 보낸 것은 '방향'뿐이다. 목표 좌표는 서버가 자기가 들고 있는
  *  위치에서 계산한다 — 그래서 좌표 위조를 검증으로 막을 필요가 없다.
@@ -37,11 +39,16 @@ export function resolveMove(
   map: GameMap,
   from: Pos,
   dir: Dir,
-  isFlagOn: (key: string) => boolean,
+  /** 세계가 열렸는가 (플래그) 와 당신이 누구인가 (등급). 둘 다 주입이다 —
+   *  엔진은 DB 도 세션도 모른다. */
+  who: { isFlagOn: (key: string) => boolean; rank: number },
 ): MoveResult {
   const door = map.exitAt(from, dir);
   if (door) {
-    if (door.requires !== null && !isFlagOn(door.requires)) return { ok: false, reason: "sealed" };
+    if (door.requires !== null && !who.isFlagOn(door.requires)) return { ok: false, reason: "sealed" };
+    /* 플래그를 먼저 본다. 세계가 아직 안 열렸으면 등급 이야기를 꺼낼 필요가
+       없고, "등급이 모자란다" 는 그 너머에 무언가 있다는 것까지 알려 준다. */
+    if (door.minRank > who.rank) return { ok: false, reason: "rank", need: door.minRank };
     // 목적지가 걸을 수 있는 칸인 것은 부팅에서 검증했다. 그래도 한 번 더 본다 —
     // 이 함수의 사후조건은 "반환한 to 는 설 수 있는 칸" 이다.
     if (!map.walkableAt(door.to)) return { ok: false, reason: "wall" };

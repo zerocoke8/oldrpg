@@ -1,0 +1,7 @@
+{
+  "1": { "name": "견습", "requires": [] },
+  "2": { "name": "정규", "requires": [{ "itemId": "dark_shard", "qty": 1 }] },
+  "3": { "name": "숙련", "requires": [{ "itemId": "dark_shard", "qty": 3 }] },
+  "4": { "name": "상급", "requires": [{ "itemId": "dark_shard", "qty": 6 }] },
+  "5": { "name": "특급", "requires": [{ "itemId": "dark_shard", "qty": 10 }] }
+}

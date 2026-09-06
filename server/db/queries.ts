@@ -54,6 +54,8 @@ export interface PlayerRow {
   hp: number;
   max_hp: number;
   seen: string;
+  /** 길드 등급. 0 은 미등록 (마이그레이션 004). */
+  rank: number;
   created_at: number;
   last_seen_at: number;
 }
@@ -187,6 +189,24 @@ export function makeQueries(db: Db) {
       "UPDATE players SET hp = ?, last_seen_at = ? WHERE id = ?",
     ),
     touchPlayer: db.prepare("UPDATE players SET last_seen_at = ? WHERE id = ?"),
+    /** 승급. 되돌아가지 않는다 — MAX 로 올리기만 하므로, 늦게 도착한 요청이
+     *  이미 올라간 등급을 내리는 일이 없다 (이동의 seen 과 같은 성질). */
+    promotePlayer: db.prepare(
+      "UPDATE players SET rank = MAX(rank, ?), last_seen_at = ? WHERE id = ?",
+    ),
+    /** 그 사람이 그 아이템을 몇 개 가졌나. 없으면 행이 없다 (0개는 행이 없다). */
+    qtyOf: db.prepare<[string, string], { qty: number }>(
+      "SELECT qty FROM player_items WHERE player_id = ? AND item_id = ?",
+    ),
+    /** 승급에 내는 만큼 뺀다. 남으면 줄이고, 정확히 다 쓰면 지운다.
+     *  ★ 지우기가 먼저다 — inventory.ts 의 소비와 같은 이유이자 같은 함정이다. */
+    spendItemAll: db.prepare(
+      "DELETE FROM player_items WHERE player_id = @player_id AND item_id = @item_id AND qty <= @qty",
+    ),
+    spendItemSome: db.prepare(
+      `UPDATE player_items SET qty = qty - @qty, updated_at = @now
+       WHERE player_id = @player_id AND item_id = @item_id AND qty > @qty`,
+    ),
     renamePlayer: db.prepare("UPDATE players SET name = ? WHERE id = ?"),
     /** 인증이 없는 표의 유일한 방어책. 부팅 때 한 번 돈다. */
     reapStalePlayers: db.prepare("DELETE FROM players WHERE last_seen_at < ?"),

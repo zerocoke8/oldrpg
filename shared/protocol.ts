@@ -116,7 +116,12 @@ export type Action =
    *    큐도 같은 한 자리를 쓴다(나중 입력이 이긴다). 전투 밖이면 즉시.
    *  가지고 있는지, 쓸 수 있는 것인지는 서버가 다시 본다 — 클라이언트의
    *  가방 목록은 안내일 뿐 권위가 아니다. */
-  | { type: "use_item"; itemId: string };
+  | { type: "use_item"; itemId: string }
+  /** 길드 접수원에게 승급을 신청한다. 등록(0 -> 1)과 그 뒤의 승급이 같은
+   *  동사인 이유: 플레이어가 하는 일이 "다음 등급을 신청한다" 하나이고,
+   *  요구 조건이 비어 있느냐 아니냐는 데이터의 차이일 뿐이다.
+   *  자격도 소지품도 서버가 다시 본다 — 클라이언트는 신청만 한다. */
+  | { type: "promote"; npcId: string };
 
 export interface Hello {
   t: "hello";
@@ -161,6 +166,16 @@ export interface SelfState {
   seen: RoomId[];
   /** 가방. 0개인 것은 실리지 않는다 (표에 행이 없다는 것과 같은 뜻이다). */
   items: ItemStack[];
+  /** 길드 등급. 0 은 미등록. 이름은 서버가 붙인다 — 클라이언트가 숫자로
+   *  문구를 조립하지 않는다 (프로토콜 불변식 1과 같은 이유). */
+  rank: RankView;
+}
+
+/** 길드 등급. 숫자와 이름이 함께 온다. */
+export interface RankView {
+  level: number;
+  /** 미등록(0)이면 null. */
+  name: string | null;
 }
 
 /** 가방의 한 칸. 이름은 서버가 붙인다 — 클라이언트가 id 로 문구를 조립하지
@@ -212,6 +227,9 @@ export interface PresenceEntry {
 export interface NpcBrief {
   id: string;
   name: string;
+  /** 길드 업무(등급 접수)를 보는가. 커맨드 창이 '승급 신청' 을 이 사람에게만
+   *  보여 준다. 안내일 뿐이고 자격 판정은 서버가 다시 한다. */
+  guild?: boolean;
 }
 
 /** 지금 열려 있는 대화 주제 하나. 잠긴 주제는 아예 오지 않는다 —
@@ -384,6 +402,8 @@ export interface SelfPatch {
   hp?: number;
   maxHp?: number;
   seen?: RoomId[];
+  /** 등급이 올랐다. */
+  rank?: RankView;
   /** 지역이 바뀌었다. 새 지역의 격자 전체가 실린다.
    *
    *  ★ 여기 있는 것은 '지도' 이지 '위치' 가 아니다 — 위쪽 주석의 금지는

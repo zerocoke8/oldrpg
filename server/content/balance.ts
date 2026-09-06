@@ -15,7 +15,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import type { Balance, EnemyDef, ItemDef, SkillDef } from "../engine/enemies";
+import type { Balance, EnemyDef, ItemDef, RankDef, SkillDef } from "../engine/enemies";
 
 /** 저장소 루트의 content/balance/. MUD_BALANCE 로 갈아끼울 수 있다 (테스트·실험용). */
 const DEFAULT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../content/balance");
@@ -83,11 +83,22 @@ const zEnemy = z
     message: "slainFlag 를 켜는 적(보스)은 respawnMs 를 가질 수 없다",
   });
 
+const zRank = z
+  .object({
+    name: z.string().min(1),
+    requires: z.array(
+      z.object({ itemId: z.string().min(1), qty: z.number().int().positive() }).strict(),
+    ),
+  })
+  .strict();
+
 const FILES = {
   player: zPlayer,
   skills: z.record(z.string().min(1), zSkill),
   items: z.record(z.string().min(1), zItem),
   enemies: z.record(z.string().min(1), zEnemy),
+  /** 키가 등급 숫자다. "1".."9" — 사다리는 1부터 빈틈 없이 이어져야 한다. */
+  ranks: z.record(z.string().regex(/^[1-9]$/, "1~9 의 정수 문자열"), zRank),
 } as const;
 
 function read<T extends z.ZodTypeAny>(dir: string, name: string, schema: T): z.infer<T> {
@@ -112,6 +123,7 @@ export function loadBalance(dir = process.env.MUD_BALANCE ?? DEFAULT_DIR): Balan
   const rawSkills = read(dir, "skills", FILES.skills);
   const rawItems = read(dir, "items", FILES.items);
   const rawEnemies = read(dir, "enemies", FILES.enemies);
+  const rawRanks = read(dir, "ranks", FILES.ranks);
 
   /* JSON 의 '키' 가 곧 id 다. 값 안에 id 를 또 적게 하면 둘이 어긋날 수 있고,
      그건 사람이 눈으로 못 잡는 종류의 오류다. 여기서 한 번에 채운다. */
@@ -131,5 +143,22 @@ export function loadBalance(dir = process.env.MUD_BALANCE ?? DEFAULT_DIR): Balan
     }
   }
 
-  return { enemies, skills, skillList: Object.values(skills), items, player };
+  /* 사다리는 1부터 빈틈 없이 이어져야 한다. 2가 없는데 3이 있으면 3에
+     영영 도달할 수 없고, 그건 조용히 도달 불가능한 콘텐츠가 된다. */
+  const ranks: RankDef[] = Object.entries(rawRanks)
+    .map(([lv, v]) => ({ level: Number(lv), ...v }))
+    .sort((a, b) => a.level - b.level);
+  ranks.forEach((r, i) => {
+    if (r.level !== i + 1) {
+      throw new Error(`ranks.json: 등급 사다리에 빈틈이 있다 (${i + 1} 다음이 ${r.level}).`);
+    }
+    for (const need of r.requires) {
+      if (!(need.itemId in items)) {
+        throw new Error(`ranks.json: ${r.level}등급이 선언되지 않은 아이템 ${need.itemId} 를 요구한다.`);
+      }
+    }
+  });
+  if (ranks.length === 0) throw new Error("ranks.json: 등급이 하나도 없다.");
+
+  return { enemies, skills, skillList: Object.values(skills), items, player, ranks };
 }

@@ -41,6 +41,9 @@ export interface NpcPlacement {
   /** 이 NPC 가 반응하는 플래그. 방과 같은 이유로 좁게 선언한다
    *  (charter 47-48줄: 2^n 폭발 방지). */
   readonly sensitiveFlags: readonly string[];
+  /** 길드 업무(등급 접수)를 보는가. 아무 NPC 에게나 승급을 신청할 수 있으면
+   *  "길드가 등급을 관리한다" 는 설정이 데이터에 남지 않는다. */
+  readonly guild?: boolean;
   /** 순서가 곧 대화 메뉴의 순서다. 그래서 객체가 아니라 배열이고,
    *  id 가 항목 안에 있다 (지역·적과 달리 키가 id 가 아닌 유일한 곳). */
   readonly topics: readonly TopicDef[];

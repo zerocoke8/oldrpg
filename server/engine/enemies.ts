@@ -77,6 +77,20 @@ export interface PlayerBalance {
 /** 코드가 아니라 데이터가 소유하는 것 전부. engine/ 함수들이 이걸 주입받는다.
  *
  *  ★ 적은 id 로 키잉된다 (좌표가 아니라). 배치는 맵의 일이다. */
+/** 길드 등급 하나. 사다리는 1부터 이어진 정수이고 0 은 미등록이다.
+ *
+ *  ★ 왜 요구 조건이 '아이템' 인가: 길드는 "임무에 맞는 보수를 지급" 하고
+ *    등급을 관리한다. 지금 이 세계에서 임무의 결과로 손에 남는 것은
+ *    괴담에서 나온 물건이므로, 그것을 내는 것이 곧 실적 증명이다.
+ *    나중에 임무 시스템이 생기면 요구 조건이 늘어날 뿐 사다리는 그대로다. */
+export interface RankDef {
+  /** 사다리에서의 자리. 1 이상. */
+  readonly level: number;
+  readonly name: string;
+  /** 승급에 내야 하는 것. 빈 배열이면 신청만으로 오른다 (등록). */
+  readonly requires: readonly { readonly itemId: string; readonly qty: number }[];
+}
+
 export interface Balance {
   readonly enemies: Readonly<Record<string, EnemyDef>>;
   readonly skills: Readonly<Record<string, SkillDef>>;
@@ -84,4 +98,6 @@ export interface Balance {
   readonly skillList: readonly SkillDef[];
   readonly items: Readonly<Record<string, ItemDef>>;
   readonly player: PlayerBalance;
+  /** 길드 등급 사다리. level 오름차순. */
+  readonly ranks: readonly RankDef[];
 }

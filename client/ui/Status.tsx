@@ -24,6 +24,9 @@ export function Status(props: {
     <div style={{ ...win, flex: 1 }}>
       <div style={{ fontSize: 13, color: C.dim, marginBottom: 6 }}>
         {region.name} · {at.x},{at.y} · <span style={{ color: C.text }}>{self.name}</span>
+        {/* 등급의 '이름' 은 서버가 붙여 보낸다 — 클라이언트가 숫자로 문구를
+            조립하지 않는다 (프로토콜 불변식 1). */}
+        {self.rank.name && <span style={{ color: C.gold }}> · {self.rank.name}</span>}
         {!connected && <span style={{ color: C.red }}> · 연결 끊김</span>}
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>

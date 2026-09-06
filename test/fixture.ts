@@ -95,6 +95,25 @@ export const FIXTURE_WORLD: MapData = {
         "5,2": "rusted_watcher"
       },
       "npcs": {
+        "clerk": {
+          "at": "1,1",
+          "name": "시험 접수원",
+          "persona": "검사를 위한 접수원",
+          "sensitiveFlags": [],
+          "guild": true,
+          "topics": [
+            { "id": "greet", "label": null, "seed": "등급부터 확인한다", "requires": null }
+          ]
+        },
+        "sweeper": {
+          "at": "1,1",
+          "name": "청소부",
+          "persona": "접수대 옆을 쓸고 있는 사람. 길드 일과는 아무 상관이 없다",
+          "sensitiveFlags": [],
+          "topics": [
+            { "id": "greet", "label": null, "seed": "빗자루를 멈추지 않는다", "requires": null }
+          ]
+        },
         "altar_keeper": {
           "at": "3,1",
           "name": "제단지기",
@@ -140,6 +159,7 @@ export const FIXTURE_WORLD: MapData = {
             "y": 3
           },
           "requires": "guardian_slain",
+          "minRank": 0,
           "oneWay": false
         }
       ]
@@ -179,6 +199,7 @@ export const FIXTURE_WORLD: MapData = {
             "y": 5
           },
           "requires": null,
+          "minRank": 0,
           "oneWay": false
         },
         {
@@ -190,6 +211,7 @@ export const FIXTURE_WORLD: MapData = {
             "y": 1
           },
           "requires": null,
+          "minRank": 0,
           "oneWay": false
         }
       ]
@@ -250,6 +272,7 @@ export const FIXTURE_WORLD: MapData = {
             "y": 3
           },
           "requires": null,
+          "minRank": 0,
           "oneWay": false
         }
       ]
@@ -379,8 +402,15 @@ const withIds = <T>(o: Record<string, Omit<T, "id">>): Record<string, T> =>
   Object.fromEntries(Object.entries(o).map(([id, v]) => [id, { id, ...v } as T]));
 
 const skills = withIds<SkillDef>(raw.skills);
+/** 픽스처의 등급 사다리. 운영과 분리돼 있다 — 등급 수를 늘려도 검사는 그대로다. */
+const FIXTURE_RANKS = [
+  { level: 1, name: "시험 1급", requires: [] },
+  { level: 2, name: "시험 2급", requires: [{ itemId: "warden_shard", qty: 1 }] },
+] as const;
+
 export const FIXTURE_BALANCE: Balance = {
   player: raw.player,
+  ranks: FIXTURE_RANKS,
   enemies: withIds<EnemyDef>(raw.enemies),
   items: withIds<ItemDef>(raw.items),
   skills,

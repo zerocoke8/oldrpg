@@ -293,6 +293,39 @@
           "requires": null
         }
       ]
+    },
+    "registrar": {
+      "at": "4,4",
+      "name": "접수원",
+      "persona": "길드 본부의 6구역 게시소 접수원. 등급을 매기고 임무를 붙이고 보수를 지급한다. 사무적이고 빠르며, 규정 밖의 부탁은 듣기 전에 자른다. 사람보다 서류를 먼저 본다",
+      "sensitive": [],
+      "guild": true,
+      "topics": [
+        {
+          "id": "greet",
+          "label": null,
+          "seed": "이름을 묻지 않고 등급부터 확인한다",
+          "requires": null
+        },
+        {
+          "id": "rank",
+          "label": "등급에 대해",
+          "seed": "등록하지 않은 사람은 괴담에 들여보내지 않는다. 들어간 사람을 찾으러 갈 근거가 없기 때문이다",
+          "requires": null
+        },
+        {
+          "id": "mission",
+          "label": "임무에 대해",
+          "seed": "게시된 것만 임무다. 게시되지 않은 곳에서 죽으면 그건 사고가 아니라 무단이다",
+          "requires": null
+        },
+        {
+          "id": "reward",
+          "label": "보수에 대해",
+          "seed": "괴담에서 나온 것을 가져오면 등급으로 갚는다. 등급은 다음 문을 여는 데 쓰인다",
+          "requires": null
+        }
+      ]
     }
   },
   "exits": [

@@ -30,7 +30,7 @@ const STALE_PLAYER_MS = 30 * 24 * 60 * 60 * 1000;
  *    부팅에서 죽는 편이 조용히 틀린 세계로 도는 것보다 낫다. */
 export function assertWorldData(map: GameMap, balance: Balance): void {
   for (const r of map.regions()) assertRegion(map, r, balance);
-  assertDoors(map);
+  assertDoors(map, balance);
 
   // ⑦ 적이 켜는 플래그는 선언돼 있어야 한다 (파일을 넘나드는 참조라 zod 가 못 본다).
   for (const [id, e] of Object.entries(balance.enemies)) {
@@ -127,7 +127,7 @@ function assertRegion(map: GameMap, r: RegionDef, balance: Balance): void {
 
 /** ⑥ 지역 간 문. 오타 하나가 '들어갔다 못 나오는 지역' 이나 '아무 데도 없는 지역'
  *  을 만든다 — 어느 쪽이든 플레이어가 갇히고 나서야 알게 된다. */
-function assertDoors(map: GameMap): void {
+function assertDoors(map: GameMap, balance: Balance): void {
   for (const r of map.regions()) {
     for (const e of r.exits) {
       const where = `지역 ${r.id} 의 출구 ${e.at} ${e.dir}`;
@@ -150,6 +150,14 @@ function assertDoors(map: GameMap): void {
       }
       if (e.requires !== null && !map.hasFlag(e.requires)) {
         throw new Error(`${where}: 선언되지 않은 플래그 ${e.requires} 를 requires 로 쓴다.`);
+      }
+      /* 사다리에 없는 등급을 요구하면 그 문은 영원히 안 열린다. 파일을 넘나드는
+         참조라 zod 가 못 보고, 증상이 '아무 일도 안 일어남' 이라 눈으로도 못 잡는다. */
+      const top = balance.ranks[balance.ranks.length - 1]?.level ?? 0;
+      if (e.minRank > top) {
+        throw new Error(
+          `${where}: ${e.minRank}등급을 요구하는데 ranks.json 의 최고 등급은 ${top} 이다 — 영영 안 열린다.`,
+        );
       }
       if (e.oneWay) continue;
       // 왕복이라고 선언했으면 반대편에 짝이 있어야 한다. 없으면 갇힌다.

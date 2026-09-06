@@ -153,7 +153,7 @@ async function main() {
     // 되돌린 뒤에는 다시 통과해야 한다 — 아니면 다음 검사가 거짓 양성이 된다.
     assertWorldData(map, balance);
   };
-  const exits = b2.exits as { at: string; dir: Dir; to: { region: string; x: number; y: number }; requires: string | null; oneWay: boolean }[];
+  const exits = b2.exits as { at: string; dir: Dir; to: { region: string; x: number; y: number }; requires: string | null; minRank: number; oneWay: boolean }[];
   throws("★ 짝 없는 왕복 출구를 부팅이 거절한다 (들어가면 못 나오는 지역)", () => {
     const saved = exits.splice(0, exits.length);
     return () => exits.push(...saved);
@@ -171,6 +171,11 @@ async function main() {
   throws("★ 선언되지 않은 플래그로 잠근 문을 부팅이 거절한다", () => {
     const saved = { ...exits[0]! };
     exits[0] = { ...saved, requires: "존재하지않는플래그" };
+    return () => (exits[0] = saved);
+  });
+  throws("★ 사다리에 없는 등급을 요구하는 문을 부팅이 거절한다 (영영 안 열린다)", () => {
+    const saved = { ...exits[0]! };
+    exits[0] = { ...saved, minRank: 99 };
     return () => (exits[0] = saved);
   });
   throws("★ 걸을 수 있는 칸을 향한 출구를 부팅이 거절한다 (한 칸 이동과 뜻이 겹친다)", () => {
