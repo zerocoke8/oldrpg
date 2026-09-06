@@ -53,7 +53,7 @@ class Client {
   curHp = 0;
   constructor(readonly label: string) {}
   async connect(token: string | null = null): Promise<void> {
-    this.ws = new WebSocket(`ws://127.0.0.1:${PORT}`);
+    this.ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws`);
     await new Promise<void>((res, rej) => {
       this.ws.once("open", () => res());
       this.ws.once("error", rej);

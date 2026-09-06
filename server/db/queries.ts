@@ -186,6 +186,12 @@ export function makeQueries(db: Db) {
       "SELECT count(*) AS n FROM players WHERE created_at >= ?",
     ),
 
+    /** 선생성 도구의 보고용. 폴백이 남아 있으면 그만큼 생성에 실패한 것이다. */
+    countRoomTextBySource: db.prepare<[], { source: string; n: number }>(
+      "SELECT source, count(*) AS n FROM room_text GROUP BY source ORDER BY source",
+    ),
+    countNpcLines: db.prepare<[], { n: number }>("SELECT count(*) AS n FROM npc_lines"),
+
     // ── player_items ────────────────────────────────────────────────────
     /** 그 사람의 전부. PK 의 앞자리가 player_id 라 이 질의가 PK 인덱스를 탄다.
      *  item_id 로 정렬해 목록의 순서가 요청마다 흔들리지 않게 한다 —

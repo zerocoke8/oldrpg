@@ -3,7 +3,9 @@
  * 여기서 나가는 error 는 '전부' 연결을 끊는다. 그래서 클라이언트의 pending 큐가
  * 살아남을 수 없고, ErrorEvent 에 seq 필드가 없어도 재조정이 완전하다. */
 
+import { createServer, type IncomingMessage } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
+import { makeStaticHandler } from "./static";
 import type { ErrorCode } from "../../shared/protocol";
 import { zEnvelope } from "../../shared/validators";
 import type { Emit } from "./emit";
@@ -37,12 +39,67 @@ interface Conn {
   dead: boolean;
 }
 
-export function startServer(ctx: Ctx, port: number): WebSocketServer {
-  const wss = new WebSocketServer({
-    port,
-    // 오버사이즈 프레임은 JSON.parse 이전에 ws 가 버린다.
-    maxPayload: LIMITS.maxFrameBytes,
+/** ws 업그레이드를 받는 경로. 나머지는 전부 정적 파일이다. */
+export const WS_PATH = "/ws";
+
+/** 프로세스 전체 동시 접속 상한. 인증이 없는 서버를 공개하는 이상,
+ *  IP 단위 상한만으로는 부족하다 (IP 는 얼마든지 바뀐다). */
+const MAX_SOCKETS = Number(process.env.MUD_MAX_SOCKETS ?? 200);
+
+/** 신뢰하는 프록시 홉 수. 0 이면 X-Forwarded-For 를 아예 보지 않는다.
+ *
+ *  ★ 기본이 0 이어야 한다. XFF 는 클라이언트가 마음대로 보낼 수 있으므로,
+ *    무조건 믿으면 IP 단위 예산이 통째로 우회된다.
+ *  ★ 그리고 '가장 왼쪽' 이 아니라 '오른쪽에서 n번째' 를 쓴다. 프록시는 자기가
+ *    실제로 본 주소를 뒤에 덧붙이므로, 클라이언트가 위조해 보낸 값은 왼쪽에
+ *    남고 우리 프록시가 본 진짜 주소가 맨 뒤에 붙는다. */
+const TRUST_PROXY = Number(process.env.MUD_TRUST_PROXY ?? 0);
+
+export interface Listening {
+  wss: WebSocketServer;
+  close(): Promise<void>;
+}
+
+export function startServer(ctx: Ctx, port: number): Listening {
+  const serveStatic = makeStaticHandler({ root: process.env.MUD_STATIC ?? "dist" });
+  const http = createServer(serveStatic);
+  /* noServer: 업그레이드를 우리가 직접 받는다. 같은 포트에서 정적 파일과
+     ws 를 함께 다루기 위한 유일한 방법이다. */
+  const wss = new WebSocketServer({ noServer: true, maxPayload: LIMITS.maxFrameBytes });
+
+  http.on("upgrade", (req, socket, head) => {
+    const path = (req.url ?? "").split("?")[0];
+    if (path !== WS_PATH) {
+      socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+    wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
   });
+  /* 포트를 못 잡으면 스택 트레이스가 아니라 사람이 읽을 문장으로 죽는다.
+     배포에서 가장 흔한 첫 실패가 이것이고, 처리하지 않으면 unhandled 'error'
+     이벤트로 프로세스가 통째로 터진다. */
+  http.on("error", (err: NodeJS.ErrnoException) => {
+    if (err.code === "EADDRINUSE") {
+      console.error(`[mud] 포트 ${port} 가 이미 쓰이고 있다. MUD_PORT 로 바꾸거나 그 프로세스를 끌 것.`);
+    } else {
+      console.error("[mud] 서버를 열 수 없다:", err.message);
+    }
+    process.exit(1);
+  });
+  http.listen(port);
+
+  /** 요청을 보낸 쪽의 주소. 프록시 뒤에서는 remoteAddress 가 프록시 것이라
+   *  '전원이 한 버킷' 이 되어 서로를 flooding 으로 밀어낸다. */
+  function clientIp(req: IncomingMessage): string {
+    if (TRUST_PROXY > 0) {
+      const xff = req.headers["x-forwarded-for"];
+      const list = (Array.isArray(xff) ? xff.join(",") : (xff ?? "")).split(",").map((v) => v.trim());
+      const hop = list[list.length - TRUST_PROXY];
+      if (hop) return hop;
+    }
+    return req.socket.remoteAddress ?? "unknown";
+  }
 
   const socketsPerIp = new Map<string, number>();
   const newCharsPerIp = new Map<string, number[]>();
@@ -76,10 +133,21 @@ export function startServer(ctx: Ctx, port: number): WebSocketServer {
     return true;
   }
 
-  wss.on("connection", (socket, req) => {
-    const ip = req.socket.remoteAddress ?? "unknown";
+  wss.on("connection", (socket, req: IncomingMessage) => {
+    const ip = clientIp(req);
     const open = (socketsPerIp.get(ip) ?? 0) + 1;
     socketsPerIp.set(ip, open);
+
+    /* ★ 감소를 '지금' 등록한다. 예전에는 상한 검사에서 return 한 뒤 한참 아래에서
+       close 리스너를 달았는데, 그러면 거절된 연결이 카운터를 영구히 +1 한다.
+       프록시 뒤에서는 모두가 한 버킷이므로 누적 거절이 상한에 닿는 순간
+       서버가 '모두를' 영영 거부하고, 시도할 때마다 더 나빠진다. */
+    socket.on("close", () => {
+      const left = Math.max(0, (socketsPerIp.get(ip) ?? 1) - 1);
+      // 0이면 키를 지운다. 안 지우면 IP 마다 항목이 영원히 쌓인다.
+      if (left) socketsPerIp.set(ip, left);
+      else socketsPerIp.delete(ip);
+    });
 
     const conn: Conn = {
       socket,
@@ -91,7 +159,7 @@ export function startServer(ctx: Ctx, port: number): WebSocketServer {
       dead: false,
     };
 
-    if (open > MAX_SOCKETS_PER_IP) {
+    if (open > MAX_SOCKETS_PER_IP || wss.clients.size > MAX_SOCKETS) {
       fatal(conn, "flooding", "동시 연결이 너무 많습니다.", true);
       return;
     }
@@ -182,10 +250,7 @@ export function startServer(ctx: Ctx, port: number): WebSocketServer {
     });
 
     socket.on("close", () => {
-      const left = Math.max(0, (socketsPerIp.get(ip) ?? 1) - 1);
-      // 0이면 키를 지운다. 안 지우면 IP 마다 항목이 영원히 쌓인다.
-      if (left) socketsPerIp.set(ip, left);
-      else socketsPerIp.delete(ip);
+      // 소켓 카운터의 감소는 위에서 이미 등록했다 (거절된 연결도 반드시 돌려준다).
       if (conn.session) handleClose(ctx, conn.session, conn.epoch);
     });
 
@@ -218,7 +283,15 @@ export function startServer(ctx: Ctx, port: number): WebSocketServer {
   beat.unref?.();
 
   wss.on("close", () => clearInterval(beat));
-  return wss;
+  return {
+    wss,
+    /** ws 와 http 를 함께 닫는다. wss.close() 는 붙어 있는 http 서버를
+     *  닫지 않는다 — noServer 모드에서는 우리가 소유자다. */
+    close: () =>
+      new Promise<void>((resolve) => {
+        wss.close(() => http.close(() => resolve()));
+      }),
+  };
 }
 
 export type { Ctx, Registry, Emit, Presence };

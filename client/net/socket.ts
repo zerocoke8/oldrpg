@@ -28,9 +28,18 @@ const saveToken = (t: string): void => {
   }
 };
 
+/* ★ 같은 오리진, 프로토콜을 따라간다.
+ *
+ *   HTTPS 페이지에서 ws:// 를 열면 브라우저가 mixed content 로 '차단' 한다 —
+ *   조용히 실패하는 것이 아니라 아예 열리지 않는다. 그래서 페이지가 https 면
+ *   wss 여야 한다. 포트를 따로 두지 않는 이유도 같다: 서버가 정적 파일과
+ *   업그레이드를 한 포트에서 처리하므로 location.host 를 그대로 쓰면 된다.
+ *
+ *   VITE_MUD_WS 는 테스트와 특수한 배치(클라이언트를 CDN 에 따로 두는 경우)를
+ *   위한 탈출구다. */
 const WS_URL =
   (import.meta.env?.VITE_MUD_WS as string | undefined) ??
-  `ws://${location.hostname}:8787`;
+  `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`;
 
 export interface Socket {
   /** 프레임이 실제로 나갔으면 true. 소켓이 닫혀 있으면 false —

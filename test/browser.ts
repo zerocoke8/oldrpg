@@ -96,7 +96,7 @@ async function main() {
   const vite = await createVite({
     root: "client",
     server: { port: WEB_PORT, strictPort: true },
-    define: { "import.meta.env.VITE_MUD_WS": JSON.stringify(`ws://127.0.0.1:${WS_PORT}`) },
+    define: { "import.meta.env.VITE_MUD_WS": JSON.stringify(`ws://127.0.0.1:${WS_PORT}/ws`) },
     logLevel: "warn",
   });
   await vite.listen();

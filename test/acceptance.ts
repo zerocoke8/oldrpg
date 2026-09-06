@@ -47,7 +47,7 @@ class Client {
   constructor(readonly label: string) {}
 
   async connect(token: string | null = this.token): Promise<void> {
-    this.ws = new WebSocket(`ws://127.0.0.1:${PORT}`);
+    this.ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws`);
     await new Promise<void>((res, rej) => {
       this.ws.once("open", () => res());
       this.ws.once("error", rej);
@@ -374,7 +374,7 @@ async function main() {
   const bogus = (n: number) => String(n).padStart(64, "0");
   const tryHello = (token: string | null) =>
     new Promise<{ ok: boolean; code?: string }>((resolve) => {
-      const w = new WebSocket(`ws://127.0.0.1:${PORT}`);
+      const w = new WebSocket(`ws://127.0.0.1:${PORT}/ws`);
       let settled = false;
       const done = (r: { ok: boolean; code?: string }) => {
         if (settled) return;
@@ -415,7 +415,7 @@ async function main() {
   //     reg.all() 만 순회하면 이런 소켓은 Session 이 없어 영원히 안 닫히고,
   //     업그레이드된 소켓이 http 서버의 연결 수에 잡혀 wss.close() 콜백이
   //     영영 호출되지 않는다.
-  const silent = new WebSocket(`ws://127.0.0.1:${PORT}`);
+  const silent = new WebSocket(`ws://127.0.0.1:${PORT}/ws`);
   await new Promise<void>((res, rej) => {
     silent.once("open", () => res());
     silent.once("error", rej);

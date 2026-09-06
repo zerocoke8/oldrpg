@@ -184,7 +184,8 @@ export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
     emit.send(s, { t: "room.describe", room: presence.roomView(s.pos, s) });
   });
 
-  const wss = startServer(ctx, port);
+  const listening = startServer(ctx, port);
+  const wss = listening.wss;
 
   console.log(
     `[mud] ws://localhost:${port} · db=${dbPath} · rooms=${world.allRoomIds().length}` +
@@ -267,7 +268,7 @@ export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
           }
           c.terminate();
         }
-        wss.close(() => {
+        void listening.close().then(() => {
           db.close();
           resolve();
         });
@@ -287,4 +288,19 @@ const isEntry = (() => {
   }
 })();
 
-if (isEntry) boot();
+if (isEntry) {
+  const server = boot();
+  /* 컨테이너는 SIGTERM 을 보내고 잠깐 기다린 뒤 죽인다. 그 잠깐 안에
+     "서버가 종료됩니다" 를 보내고 DB 를 닫으면, 클라이언트는 재접속을
+     시도하고(reconnect:true) WAL 은 깨끗하게 정리된다.
+     두 번 와도 한 번만 돈다 — 급한 사람은 두 번 누른다. */
+  let closing = false;
+  for (const sig of ["SIGTERM", "SIGINT"] as const) {
+    process.on(sig, () => {
+      if (closing) process.exit(1);
+      closing = true;
+      console.log(`[mud] ${sig} — 종료합니다`);
+      void server.close().then(() => process.exit(0));
+    });
+  }
+}
