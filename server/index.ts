@@ -57,6 +57,15 @@ const DB_PATH = process.env.MUD_DB ?? "mud.db";
 const PORT = Number(process.env.MUD_PORT ?? 8787);
 
 export interface BootOptions {
+  /** 실물 모델 호출을 통째로 끈다 ("off"). 주입된 가짜 렌더러는 그대로 쓴다.
+   *
+   *  ★ 왜 필요한가: 렌더러를 '안 꽂은 것' 이 곧 '네트워크로 나가는 것' 이었다.
+   *    테스트는 두 렌더러 중 필요한 쪽만 꽂는 것이 자연스러운데, 안 꽂은 쪽은
+   *    .env 에 키가 있는 기계에서 실물 API 로 나갔다 — 키 없는 기계는 영원히
+   *    초록, 키 있는 기계는 빨강이고, 그 빨강이 진짜 회귀가 아니라서 사람이
+   *    빨강을 무시하는 법을 배운다. 기본값이 위험한 쪽이면 안 된다.
+   *    환경변수 MUD_NO_LLM=1 도 같은 뜻이다. */
+  llm?: "auto" | "off";
   /** 테스트가 가짜 렌더러를 꽂는 자리. 지정하면 API 키 여부와 무관하게 이걸 쓴다. */
   llmRenderer?: RoomTextRenderer;
   /** NPC 대사의 가짜 렌더러. 방과 따로인 이유: 4b 테스트는 대사만 승급시키고
@@ -108,7 +117,11 @@ export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
   const fallbackRenderer = makeStaticRenderer(moods);
   const fallbackNpcRenderer = makeStaticNpcRenderer(moods);
 
-  const hasKey = Boolean(process.env.ANTHROPIC_API_KEY ?? process.env.ANTHROPIC_AUTH_TOKEN);
+  /* 실물 호출은 '명시적으로 끄지 않았고' + '키가 있을 때' 만 켜진다.
+     끔이 우선한다 — 키의 존재가 조용히 네트워크를 여는 일이 없어야 한다. */
+  const llmOff = options.llm === "off" || process.env.MUD_NO_LLM === "1";
+  const hasKey =
+    !llmOff && Boolean(process.env.ANTHROPIC_API_KEY ?? process.env.ANTHROPIC_AUTH_TOKEN);
   const llmRenderer =
     options.llmRenderer ?? (hasKey ? makeLlmRenderer(moods, fallbackRenderer) : null);
   const llmNpcRenderer =
@@ -166,10 +179,19 @@ export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
       (seededRooms ? ` (시드 ${seededRooms}행)` : "") +
       (reaped ? ` · 유령 플레이어 ${reaped}행 정리` : ""),
   );
+  /* 두 렌더러를 따로 찍는다. 한 줄로 방 렌더러만 보고 말하면, NPC 렌더러가
+     실물인 채로 "주입된 렌더러" 라고 말하는 거짓말이 된다 — 실제로 그랬다. */
+  const model = process.env.MUD_MODEL ?? "claude-opus-5";
+  const label = (injected: unknown, live: unknown): string =>
+    injected ? "주입" : live ? model : "폴백";
   console.log(
-    llmRenderer
-      ? `[mud] 서술: ${options.llmRenderer ? "주입된 렌더러" : (process.env.MUD_MODEL ?? "claude-opus-5")} (백그라운드 승급)`
-      : `[mud] 서술: 결정론 폴백만. ANTHROPIC_API_KEY 가 없다 — .env 를 만들면 LLM 이 켜진다.`,
+    `[mud] 서술: 방=${label(options.llmRenderer, llmRenderer)} · ` +
+      `NPC=${label(options.llmNpcRenderer, llmNpcRenderer)}` +
+      (llmOff
+        ? " · 실물 모델 호출 꺼짐 (llm:\"off\" / MUD_NO_LLM=1)"
+        : hasKey
+          ? " · 백그라운드 승급"
+          : " · ANTHROPIC_API_KEY 가 없다 (.env 를 만들면 켜진다)"),
   );
 
   /* 3단계를 손으로 몰아 보는 개발용 입구.

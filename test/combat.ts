@@ -134,6 +134,7 @@ async function main() {
   for (const f of [DB, `${DB}-wal`, `${DB}-shm`]) rmSync(f, { force: true });
 
   const server = boot(DB, PORT, {
+    llm: "off",
     llmRenderer: fakeLlm,
     combat: { now: monotonic, manualTick: true, seedFor: () => 12345, respawnMs: 50 },
   });
@@ -336,6 +337,7 @@ async function main() {
   let clock2 = 1_000_000;
   const boot2 = (respawnMs: number) =>
     boot(DB2, PORT2, {
+      llm: "off",
       llmRenderer: fakeLlm,
       // ★ 부활이 '절대' 오지 않는다 = 타이머를 잃은 것과 같은 상태.
       combat: { now: () => clock2, manualTick: true, seedFor: () => 999, respawnMs },

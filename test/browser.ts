@@ -64,6 +64,7 @@ async function main() {
      확인하려는 것이다: 폴백이 먼저 뜨고, 그 '줄이' 조용히 교체된다. */
   const LLM_MS = 700;
   const server = boot(DB, WS_PORT, {
+    llm: "off", // 주입한 가짜만 쓴다 — 키가 있는 기계에서도 네트워크로 나가지 않는다
     llmRenderer: async (req: RoomTextRequest) => {
       await sleep(LLM_MS);
       const calm = req.flags.some(([k, v]) => k === "guardian_slain" && v === true)

@@ -103,7 +103,8 @@ async function main() {
   rmSync(DB, { force: true });
   rmSync(`${DB}-wal`, { force: true });
   rmSync(`${DB}-shm`, { force: true });
-  const server = boot(DB, PORT);
+  // llm:"off" — 이 스위트는 렌더러를 하나도 안 꽂는다. 그것이 곧 실물 호출이면 안 된다.
+  const server = boot(DB, PORT, { llm: "off" });
 
   const alice = new Client("alice");
   const bob = new Client("bob");

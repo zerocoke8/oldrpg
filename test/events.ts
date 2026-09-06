@@ -130,7 +130,7 @@ class Client {
 
 async function main() {
   for (const f of [DB, `${DB}-wal`, `${DB}-shm`]) rmSync(f, { force: true });
-  const server = boot(DB, PORT, { llmRenderer: fakeLlm, queue: { concurrency: 3 } });
+  const server = boot(DB, PORT, { llm: "off", llmRenderer: fakeLlm, queue: { concurrency: 3 } });
   const ev = server.events;
 
   const AFFECTED = new Set(
@@ -321,6 +321,7 @@ async function main() {
   const DB2 = `${DB}.race`;
   for (const f of [DB2, `${DB2}-wal`, `${DB2}-shm`]) rmSync(f, { force: true });
   const slow = boot(DB2, PORT + 1, {
+    llm: "off",
     llmRenderer: async (req) => {
       await sleep(400); // 플래그를 뒤집을 시간을 벌어 준다
       const on = req.flags.some(([k, v]) => k === "guardian_slain" && v === true);

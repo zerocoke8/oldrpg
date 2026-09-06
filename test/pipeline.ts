@@ -20,9 +20,9 @@ import { boot } from "../server/index";
 import { PROTOCOL_VERSION, type ServerMsg } from "../shared/protocol";
 import type { RoomTextRenderer, RoomTextRequest } from "../shared/narration";
 import type { Dir } from "../shared/ids";
-import { loadMoods, loadRoomPrompt } from "../server/narration/prompts";
-import { makeStaticRenderer } from "../server/narration/static";
-import { makeLlmRenderer, type AnthropicLike } from "../server/narration/llm";
+import { loadMoods, loadNpcPrompt, loadRoomPrompt } from "../server/narration/prompts";
+import { makeStaticNpcRenderer, makeStaticRenderer } from "../server/narration/static";
+import { makeLlmNpcRenderer, makeLlmRenderer, type AnthropicLike } from "../server/narration/llm";
 
 const PORT = 8902;
 const DB = join(tmpdir(), `mud-pipeline-${process.pid}.db`);
@@ -151,6 +151,7 @@ class Client {
 /* ⑧ 에서 쓰는 진짜 mood/폴백. 파일에서 읽는다. */
 const moodsForTest = loadMoods();
 const fallbackForTest = makeStaticRenderer(moodsForTest);
+const fallbackNpcForTest = makeStaticNpcRenderer(moodsForTest);
 
 /* ── 본문 ────────────────────────────────────────────────────────────── */
 
@@ -158,6 +159,7 @@ async function main() {
   for (const f of [DB, `${DB}-wal`, `${DB}-shm`]) rmSync(f, { force: true });
   const llm = makeFakeLlm(80);
   const server = boot(DB, PORT, {
+    llm: "off",
     llmRenderer: llm,
     queue: { concurrency: 2, cooldownMs: 250, maxAttempts: 2 },
   });
@@ -390,6 +392,66 @@ async function main() {
   check("예외를 던지지 않고 폴백을 돌려준다", boomRes.source === "fallback");
   check("폴백 문장은 씨앗 기반", boomRes.text.includes("붉은 빛이 스며나온다"));
 
+  /* ── ⑧' NPC 대사 렌더러도 같은 스텁으로 ────────────────────────────
+   *
+   * ★ 이 절이 생긴 이유: 예전에는 이 경로가 '우연히' 도는 것에 기대고 있었다.
+   *   테스트가 방 렌더러만 꽂으면 NPC 렌더러는 키가 있는 기계에서 실물 API 로
+   *   나갔고, 그것이 makeLlmNpcRenderer 와 loadNpcPrompt 를 태우는 유일한
+   *   경로였다. 이제 모든 스위트가 llm:"off" 라 그 우연이 사라졌으므로,
+   *   방 렌더러에 해 둔 것과 같은 검증을 여기서 명시적으로 한다. */
+  section("⑧' NPC 대사 렌더러 — 프롬프트가 실제로 읽히고 실패가 폴백으로 떨어진다");
+  const npcReq = {
+    npcId: "altar_keeper",
+    topic: "warden",
+    stateHash: "a.b.c",
+    npcName: "제단지기",
+    persona: "무너진 서고의 제단을 지키는 늙은 사제",
+    seed: "남쪽 홀을 지키는 그림자 파수꾼",
+    seedId: "a",
+    flags: [["guardian_slain", true]] as const,
+  };
+  const npcFb = fallbackNpcForTest;
+
+  seen.length = 0;
+  const npcOk = makeLlmNpcRenderer(moodsForTest, npcFb, {
+    client: stub(() => ({
+      stop_reason: "end_turn",
+      content: [{ type: "text", text: "  ...오래 거기 있었다.  " }],
+    })),
+    model: "m2",
+  });
+  const npcRes = await npcOk(npcReq);
+  check("성공하면 source='llm'", npcRes.source === "llm");
+  check("공백이 정리된다", npcRes.text === "...오래 거기 있었다.");
+  check("모델과 프롬프트 버전이 실린다",
+    npcRes.model === "m2" && npcRes.promptVersion === "npc.v1.ko");
+  const npcBody = seen[0]!;
+  check("파일에서 읽은 NPC system 프롬프트를 보냈다",
+    JSON.stringify(npcBody.system).includes(loadNpcPrompt().system.slice(0, 24)),
+    JSON.stringify(npcBody.system).slice(0, 120));
+  check("persona 와 주제 씨앗이 둘 다 user 메시지에 들어갔다",
+    JSON.stringify(npcBody.messages).includes("늙은 사제") &&
+      JSON.stringify(npcBody.messages).includes("그림자 파수꾼"),
+    JSON.stringify(npcBody.messages));
+  check("켜진 플래그의 mood 지시가 들어갔다",
+    JSON.stringify(npcBody.messages).includes("파수꾼"), JSON.stringify(npcBody.messages));
+  check("★ 대사 프롬프트에 플레이어가 쓴 문자열이 들어갈 자리가 없다 (규칙 1)",
+    !JSON.stringify(npcBody.messages).includes("undefined"));
+
+  for (const [label, reply] of [
+    ["거절", () => ({ stop_reason: "refusal", stop_details: { category: "x" }, content: [] })],
+    ["잘림", () => ({ stop_reason: "max_tokens", content: [{ type: "text", text: "반쯤" }] })],
+    ["빈 응답", () => ({ stop_reason: "end_turn", content: [] })],
+    ["네트워크 예외", () => new Error("network down")],
+  ] as const) {
+    const r = await makeLlmNpcRenderer(moodsForTest, npcFb, { client: stub(reply) })(npcReq);
+    check(`${label}은 폴백으로 떨어진다 (던지지 않는다)`, r.source === "fallback", r.text);
+  }
+  const npcBoom = await makeLlmNpcRenderer(moodsForTest, npcFb, {
+    client: stub(() => new Error("boom")),
+  })(npcReq);
+  check("폴백 문장은 씨앗 기반", npcBoom.text.includes("그림자 파수꾼"), npcBoom.text);
+
   // ── ⑨ 종료 중에 승급이 해소되는 경우 ────────────────────────────────
   section("⑨ 종료 — 진행 중이던 승급이 닫힌 DB 를 만지지 않는다");
   for (const c of [alice, carol, dave]) c.close();
@@ -406,6 +468,7 @@ async function main() {
   process.on("unhandledRejection", onErr);
 
   const slow = boot(DB2, PORT + 1, {
+    llm: "off",
     llmRenderer: async (req) => {
       await sleep(500); // 종료보다 오래 걸린다
       return { text: `[생성] ${req.seed}`, source: "llm" as const, model: "m", promptVersion: "p" };

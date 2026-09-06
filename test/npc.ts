@@ -133,7 +133,7 @@ class Client {
 
 async function main() {
   for (const f of [DB, `${DB}-wal`, `${DB}-shm`]) rmSync(f, { force: true });
-  const server = boot(DB, PORT, { llmNpcRenderer: fakeNpcLlm, queue: { concurrency: 3 } });
+  const server = boot(DB, PORT, { llm: "off", llmNpcRenderer: fakeNpcLlm, queue: { concurrency: 3 } });
   const q = server.ctx.q;
   const world = server.ctx.world;
   const keeper = NPC_BY_ID["altar_keeper"]!;
