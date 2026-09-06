@@ -1,7 +1,8 @@
 /* 지역 저작 도구. 브리프 하나에서 content/world/regions/<id>.json 을 만든다.
  *
- *     npm run author -- b3
- *     npm run author -- b3 --batch 8 --dry-run
+ *     npm run author -- b3                 개요 + 씨앗까지 (모델을 부른다)
+ *     npm run author -- b3 --dry-run       지도만 그려 본다 (아무것도 안 쓴다)
+ *     npm run author -- b3 --layout-only   타일만 써 둔다 (모델을 안 부른다)
  *
  * 분업이 이 도구의 전부다:
  *
@@ -31,6 +32,15 @@ export interface AuthorRunOptions {
   batch?: number;
   /** 파일에 쓰지 않고 무엇을 할지만 보여준다. */
   dryRun?: boolean;
+  /** 배치만 만들어 파일에 쓰고 모델은 부르지 않는다.
+   *
+   *  ★ 씨앗을 사람이(또는 대화 중인 모델이) 직접 쓰는 경로다. 결과는 완전히
+   *    같다 — 지역 파일의 seeds 에 문장이 들어가는 것뿐이고, 그것을 누가
+   *    썼는지는 파일에 남지 않는다. 어차피 커밋되는 순간 리뷰를 거친
+   *    저작물이 되고 그때부터 불변이다 (규칙 3).
+   *    API 키가 없거나, 비용을 안 쓰거나, 지역 전체를 한 사람이 일관되게
+   *    쓰고 싶을 때 이쪽이 낫다. */
+  layoutOnly?: boolean;
   /** 테스트가 가짜 저자를 꽂는 자리. */
   author?: Author;
   /** content/world/ 를 갈아끼운다 (테스트용). */
@@ -135,14 +145,15 @@ export async function authorRegion(
 
   /* ── 2. 개요 ─────────────────────────────────────────────────────────
      한 번만 만든다. 방을 나중에 더 뚫어도 같은 장소로 이어져야 한다. */
-  const author = options.author ?? makeAuthor();
+  const noModel = options.dryRun || options.layoutOnly;
+  const author = options.author ?? (noModel ? null : makeAuthor());
   let calls = 0;
   let overview = brief.overview;
   let generatedOverview = false;
   if (overview) {
     log("개요: 브리프에 이미 있다. 그대로 쓴다.");
-  } else if (options.dryRun) {
-    log("개요: (dry-run) 만들지 않는다.");
+  } else if (noModel || !author) {
+    log("개요: 모델을 부르지 않는다. 씨앗을 손으로 쓸 때는 필요 없다.");
     overview = "";
   } else {
     overview = await author.overview({ name: brief.name, theme: brief.theme, landmarks: brief.landmarks });
@@ -177,7 +188,10 @@ export async function authorRegion(
   };
 
   let filled = 0;
-  if (!options.dryRun) {
+  if (options.layoutOnly) {
+    // 배치만 쓴다. 빈 칸 목록은 아래에서 그대로 보고된다 — 그게 '할 일' 이다.
+    save();
+  } else if (!options.dryRun && author) {
     for (let i = 0; i < todo.length; i += batch) {
       const slice = todo.slice(i, i + batch);
       const asks: SeedAsk[] = slice.map((c) => {
@@ -217,7 +231,7 @@ export async function authorRegion(
 async function main(argv: string[]): Promise<void> {
   const id = argv.find((a) => !a.startsWith("--"));
   if (!id) {
-    console.error("사용법: npm run author -- <지역id> [--batch N] [--dry-run]");
+    console.error("사용법: npm run author -- <지역id> [--batch N] [--dry-run] [--layout-only]");
     console.error("  content/world/briefs/<지역id>.json 이 있어야 한다.");
     process.exit(2);
   }
@@ -226,21 +240,22 @@ async function main(argv: string[]): Promise<void> {
     return i >= 0 ? argv[i + 1] : undefined;
   };
   const dryRun = argv.includes("--dry-run");
+  const layoutOnly = argv.includes("--layout-only");
 
   try {
     process.loadEnvFile(".env");
   } catch {
     /* .env 없음 */
   }
-  if (!dryRun && !(process.env.ANTHROPIC_API_KEY ?? process.env.ANTHROPIC_AUTH_TOKEN)) {
+  if (!dryRun && !layoutOnly && !(process.env.ANTHROPIC_API_KEY ?? process.env.ANTHROPIC_AUTH_TOKEN)) {
     /* 폴백으로 조용히 넘어가지 않는다. 저작의 결과물은 커밋되고 그 뒤로는
        불변이다 — "특징 없는 돌 통로" 50개를 커밋하는 것이 최악이다. */
     console.error("ANTHROPIC_API_KEY 가 없다. 저작은 실물 모델이 있어야 한다.");
-    console.error(".env 를 만들거나, 배치만 보려면 --dry-run 으로 돌릴 것.");
+    console.error(".env 를 만들거나, --layout-only 로 배치만 만들고 씨앗은 손으로 쓸 것.");
     process.exit(1);
   }
 
-  const r = await authorRegion(id, { batch: Number(at("--batch") ?? 10), dryRun });
+  const r = await authorRegion(id, { batch: Number(at("--batch") ?? 10), dryRun, layoutOnly });
   console.log(
     `\n${r.id}: ${r.rooms}방 · 이번에 채운 씨앗 ${r.filled} · 모델 호출 ${r.calls}회` +
       (r.missing.length ? `\n★ 아직 비어 있는 칸 ${r.missing.length}: ${r.missing.join(" ")}` : ""),
