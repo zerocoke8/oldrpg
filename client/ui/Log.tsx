@@ -89,7 +89,15 @@ function Fold({ lines }: { lines: LogLine[] }) {
   );
 }
 
-export function Log({ lines }: { lines: LogLine[] }) {
+export function Log({
+  lines,
+  swipe,
+}: {
+  lines: LogLine[];
+  /** 스와이프 어댑터의 핸들러. 로그 창이 화면에서 가장 넓어서 여기 붙인다.
+   *  임계값을 넘겨야 발동하므로 접힌 로그를 펼치는 탭과 부딪히지 않는다. */
+  swipe?: { onTouchStart: (e: React.TouchEvent) => void; onTouchEnd: (e: React.TouchEvent) => void };
+}) {
   const ref = useRef<HTMLDivElement>(null);
   /* 아래에 붙어 있을 때만 자동 스크롤한다. 전투 중에 위로 올려 읽는 사람을
      0.5초마다 아래로 끌어내리면 로그를 읽을 수가 없다. */
@@ -104,15 +112,25 @@ export function Log({ lines }: { lines: LogLine[] }) {
   return (
     <div
       ref={ref}
+      // 스와이프 테스트가 붙잡을 손잡이. 화면에는 아무 영향이 없다.
+      data-mud="log"
+      {...swipe}
       onScroll={(e) => {
         const el = e.currentTarget;
         stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
       }}
       style={{
         ...win,
-        height: 260,
+        /* 5단계: 높이를 고정하지 않는다. 화면이 작으면 로그가 줄고 커맨드 창은
+           그대로다 — 명령을 못 누르는 것보다 로그가 짧은 편이 낫다.
+           ★ basis 가 "0px" 인 것이 중요하다. `flex: 1` 은 basis 를 0'%' 로 두는데,
+             퍼센트는 컨테이너의 높이에 대해 푼다. 껍데기는 height:auto +
+             min-height:100dvh 라 높이가 '불확정' 이고, 그러면 퍼센트 basis 는
+             content 로 되돌아간다 — 로그가 내용만큼 자라서 커맨드 창을 화면
+             밖으로 밀어낸다. 길이 basis 는 컨테이너와 무관하게 확정이다. */
+        flex: "1 1 0px",
+        minHeight: 120,
         overflowY: "auto",
-        marginBottom: 12,
         lineHeight: 1.75,
         fontSize: 15,
       }}

@@ -3,11 +3,17 @@
  * 프로토타입의 격자를 그대로 쓰되, 다른 플레이어의 점이 추가됐다.
  * 다른 플레이어는 '안개와 무관하게' 그린다 — 서버가 보내준 presence 는
  * 이미 "내가 볼 수 있는 사람" 으로 걸러진 것이므로, 클라이언트가 두 번째
- * 가시성 판정을 하면 서버와 어긋날 뿐이다. */
+ * 가시성 판정을 하면 서버와 어긋날 뿐이다.
+ *
+ * ★ 5단계: 붙어 있는 칸을 누르면 그쪽으로 한 칸 간다 (모바일 조작).
+ *   한 칸까지다 — 여러 칸 경로를 클라이언트가 계산하기 시작하면 그것은
+ *   클라이언트가 맵을 해석하는 것이고, 벽 판정이 두 군데 살게 된다.
+ *   벽인지 아닌지도 여기서 보지 않는다. 눌러 보고 서버가 "단단한 벽이
+ *   앞을 막는다" 고 답하는 것이 D패드와 완전히 같은 경로다 (규칙 1). */
 
-import type { Pos } from "../../shared/ids";
+import type { Dir, Pos } from "../../shared/ids";
 import { roomIdOf } from "../../shared/ids";
-import type { PlayerBrief, RegionView, SelfState } from "../../shared/protocol";
+import type { Action, PlayerBrief, RegionView, SelfState } from "../../shared/protocol";
 import { C, win } from "../theme";
 import { isSeen } from "../state/store";
 
@@ -19,8 +25,9 @@ export function Minimap(props: {
   /** 화면에 그릴 '예측' 위치. self.pos(확정)와 다를 수 있다. */
   at: Pos;
   others: { player: PlayerBrief; pos: Pos }[];
+  act: (a: Action) => void;
 }) {
-  const { region, self, at, others } = props;
+  const { region, self, at, others, act } = props;
 
   const othersAt = new Map<string, PlayerBrief[]>();
   for (const o of others) {
@@ -29,6 +36,17 @@ export function Minimap(props: {
   }
 
   const tile = (x: number, y: number): string => region.tiles[y]?.[x] ?? "#";
+
+  /** 그 칸이 지금 위치의 상하좌우인가. 맞으면 그 방향을 돌려준다. */
+  const dirTo = (x: number, y: number): Dir | null => {
+    const dx = x - at.x;
+    const dy = y - at.y;
+    if (dx === 0 && dy === -1) return "north";
+    if (dx === 0 && dy === 1) return "south";
+    if (dx === 1 && dy === 0) return "east";
+    if (dx === -1 && dy === 0) return "west";
+    return null;
+  };
 
   /* 안개 칸도 '보이게' 그린다. 완전 투명으로 두면 격자 자체가 사라져서
      내가 지도의 어디쯤에 있는지 알 수 없다. 벽인지 바닥인지는 여전히
@@ -53,10 +71,20 @@ export function Minimap(props: {
           Array.from({ length: region.width }).map((__, x) => {
             const here = x === at.x && y === at.y;
             const guests = othersAt.get(`${x},${y}`) ?? [];
+            const dir = dirTo(x, y);
             return (
               <div
                 key={`${x}-${y}`}
                 title={guests.map((g) => g.name).join(", ") || undefined}
+                {...(dir
+                  ? {
+                      role: "button",
+                      // 탭 순서에는 넣지 않는다 — 키보드에는 화살표와
+                      // 커맨드 창이라는 제대로 된 길이 이미 있다.
+                      tabIndex: -1,
+                      onClick: () => act({ type: "move", dir }),
+                    }
+                  : {})}
                 style={{
                   width: CELL,
                   height: CELL,
@@ -66,6 +94,8 @@ export function Minimap(props: {
                   background: here ? C.gold : bg(x, y),
                   outline: guests.length ? `2px solid ${C.other}` : "none",
                   outlineOffset: -2,
+                  cursor: dir ? "pointer" : "default",
+                  touchAction: "manipulation",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",

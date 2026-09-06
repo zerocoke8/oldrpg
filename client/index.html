@@ -4,6 +4,14 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>지하 1층</title>
+    <meta name="theme-color" content="#0b1020" />
+    <style>
+      /* 최소 리셋. 5단계의 100dvh 레이아웃이 body 기본 여백에 밀리지 않게 하고,
+         모바일에서 더블탭 확대와 고무줄 스크롤을 끈다. */
+      html, body { margin: 0; padding: 0; background: #0b1020; overscroll-behavior: none; }
+      body { -webkit-text-size-adjust: 100%; }
+      button { touch-action: manipulation; }
+    </style>
   </head>
   <body>
     <div id="root"></div>

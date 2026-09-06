@@ -31,6 +31,13 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /** 화면에 실제로 렌더된 로그 줄들. DOM 에서 읽는다 — 와이어가 아니라. */
 const logText = (p: Page) => p.locator("p").allInnerTexts();
 
+/** 상태창이 말하는 지금 좌표. 화면에서 읽는다 — 와이어가 아니라. */
+async function posOf(p: Page): Promise<string> {
+  const t = await p.locator("body").innerText();
+  const m = /지하 1층 · (\d+),(\d+)/.exec(t);
+  return m ? `${m[1]},${m[2]}` : "?";
+}
+
 /** 미니맵에서 '다른 플레이어' 테두리가 칠해진 칸의 인덱스. */
 async function otherCells(p: Page): Promise<number[]> {
   return p.evaluate(() => {
@@ -220,13 +227,20 @@ async function main() {
   const atEnemy = await logText(c);
   check("적이 있는 방에 도착했다",
     atEnemy.some((t) => t.includes("이쪽을 향해 서 있다")), JSON.stringify(atEnemy.slice(-3)));
-  check("공격 버튼이 떴다", (await c.locator("button:has-text('공격')").count()) > 0);
+  check("커맨드 창에 '싸우기' 가 떴다 (방에 적이 있다)",
+    (await c.locator("button:has-text('싸우기')").count()) > 0);
 
+  // 5단계: 명령은 전부 커맨드 창 한 곳에 있다. 싸우기 -> 공격.
+  await c.locator("button:has-text('싸우기')").first().click();
+  await sleep(150);
   await c.locator("button:has-text('공격')").first().click();
   await sleep(200);
   check("전투 패널이 떴다", (await c.locator("text=그림자 파수꾼").count()) > 0);
-  const skillCount = await c.locator("button:has-text('강타'), button:has-text('응급 치료'), button:has-text('방어 태세')").count();
-  check("스킬 버튼 3개", skillCount === 3, String(skillCount));
+  const skillCount = await c
+    .locator("button:has-text('강타'), button:has-text('응급 치료'), button:has-text('방어 태세')")
+    .count();
+  check("교전이 시작되자 스킬이 같은 창에 나타났다 (메뉴는 상태의 함수)",
+    skillCount === 3, String(skillCount));
 
   // ★ 한 번만 눌렀는데 계속 오가는가 — 진짜 시계로 2.5초 지켜본다
   const linesAfterEngage = (await logText(c)).length;
@@ -261,6 +275,8 @@ async function main() {
   await sleep(400);
   check("걸어 나가니 전투 패널이 사라졌다",
     (await c.locator("button:has-text('물러나기')").count()) === 0);
+  check("★ 서 있던 커맨드 경로도 최상위로 되돌아갔다 (가지가 사라졌다)",
+    (await c.locator("button:has-text('살펴보기')").count()) > 0);
 
   console.log("\n⑩ 4b단계 — NPC 대화 (말을 걸어야 나온다)");
   /* B 는 스폰(3,3). 제단지기의 방(3,1)까지: 좌 좌 상 상 우 우.
@@ -279,10 +295,14 @@ async function main() {
   check("NPC 가 '있다' 고만 알린다",
     atNpc.some((t) => t.includes("제단지기이(가) 이곳에 있다")), JSON.stringify(atNpc.slice(-3)));
   check("★ 말을 걸기 전에는 대사가 없다", (await npcLines()).length === 0);
-  check("말 걸기 버튼이 떴다", (await b.locator("button:has-text('제단지기')").count()) > 0);
+  check("커맨드 창에 '대화' 가 떴다", (await b.locator("button:has-text('대화')").count()) > 0);
   await b.screenshot({ path: join(SHOTS, "13-NPC-있음.png") });
 
   const badgesBeforeTalk = await bBadges();
+  await b.locator("button:has-text('대화')").first().click();
+  await sleep(150);
+  check("말 걸 상대가 목록에 있다", (await b.locator("button:has-text('제단지기')").count()) > 0);
+  // 들어가는 것이 곧 말을 거는 것이다 (talk 액션 + 주제 목록으로 하강).
   await b.locator("button:has-text('제단지기')").first().click();
   await sleep(250);
   const greetLine = (await npcLines())[0];
@@ -357,8 +377,18 @@ async function main() {
   await a.screenshot({ path: join(SHOTS, "9-다음-입장부터.png") });
 
   console.log("\n⑫ 4a -> 3단계 -> 4b — 파수꾼이 사라지자 새 이야기가 열린다");
-  // B 는 아직 제단지기 옆에 서 있다. 대화창은 열린 채였지만, 새 주제는
-  // '다시 말을 걸어야' 나타난다 — 서 있는 화면을 갈아치우지 않는 것과 같은 규칙이다.
+  // 사전 생성이 끝날 때까지 기다린다 — 백그라운드 큐와 경주하면 이 절이
+  // 무엇을 확인하는지가 시계에 달리게 된다.
+  await server.upgrades.idle();
+  await sleep(200);
+
+  /* B 는 아직 제단지기 옆에 서 있고 주제 목록을 펼친 채다. 새 주제는
+     '다시 말을 걸어야' 나타난다 — 서 있는 화면을 갈아치우지 않는 것과 같은
+     규칙이다. 한 단계 나갔다가 다시 들어간다. */
+  check("열려 있던 목록은 아직 옛 상태다 (화면을 갈아치우지 않는다)",
+    (await b.locator("button:has-text('봉인된 문에 대해')").count()) === 0);
+  await b.locator('button[aria-label="뒤로"]').first().click();
+  await sleep(120);
   await b.locator("button:has-text('제단지기')").first().click();
   await sleep(300);
   check("★ 봉인된 문 이야기가 열렸다",
@@ -383,6 +413,174 @@ async function main() {
   await sleep(400);
   check("방을 벗어나니 대화창이 닫혔다",
     (await b.locator("button:has-text('파수꾼에 대해')").count()) === 0);
+
+  console.log("\n⑬ 5단계 — 커맨드 창을 키보드만으로 (charter 의 화살표/Enter/Esc)");
+  /* A 는 (1,4). 적도 NPC 도 없으므로 최상위는 살펴보기 / 말하기 둘이다. */
+  await a.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  const fieldHint = await a.locator("text=Esc 커맨드").count();
+  check("탐색 모드에서는 '화살표 이동' 안내가 보인다", fieldHint > 0);
+
+  await a.keyboard.press("Escape");
+  await sleep(120);
+  check("★ Esc 로 커맨드 모드에 들어갔다 (charter 의 Esc 가 드디어 일한다)",
+    (await a.locator("text=Enter 확정").count()) > 0);
+  const firstRow = await a.locator("button:has-text('살펴보기')").first().innerText();
+  check("커서가 첫 항목에 있다", firstRow.includes("▶"), firstRow);
+
+  await a.keyboard.press("ArrowDown");
+  await sleep(100);
+  check("★ 화살표가 이동이 아니라 커서가 됐다",
+    (await a.locator("button:has-text('말하기')").first().innerText()).includes("▶"));
+  /* ★ 로그가 스무 줄 넘게 쌓인 지금이 레이아웃의 진짜 시험대다.
+     로그가 자기 내용만큼 자라면 커맨드 창이 화면 밖으로 밀린다. */
+  const grown = await a.evaluate(() => ({
+    over: document.documentElement.scrollHeight - window.innerHeight,
+    log: Math.round(document.querySelector('[data-mud="log"]')!.getBoundingClientRect().height),
+  }));
+  const cmdBottom = await a.locator("button:has-text('살펴보기')").first().boundingBox();
+  check("★ 로그가 길어져도 커맨드 창은 첫 화면에 남는다 (자라는 것이 아니라 스크롤한다)",
+    grown.over <= 0 && Boolean(cmdBottom && cmdBottom.y + cmdBottom.height <= 820),
+    `${JSON.stringify(grown)} cmd=${JSON.stringify(cmdBottom)}`);
+  await a.screenshot({ path: join(SHOTS, "17-커맨드-모드.png") });
+  const posInMenu = await posOf(a);
+
+  await a.keyboard.press("Enter");
+  await sleep(150);
+  check("Enter 로 '말하기' 를 골랐다 — 입력창에 접두사가 채워졌다",
+    (await a.locator('input[aria-label="명령 입력"]').inputValue()) === "말하기 ");
+  check("커맨드 모드 동안 캐릭터는 한 칸도 움직이지 않았다",
+    (await posOf(a)) === posInMenu, posInMenu);
+
+  console.log("\n⑭ 5단계 — 자유 텍스트 한 줄 (1단계부터 있던 parse() 가 이어졌다)");
+  await a.locator('input[aria-label="명령 입력"]').fill("말하기 여기 누구 있나");
+  await a.keyboard.press("Enter");
+  await sleep(200);
+  check("'말하기 …' 가 say 액션으로 수렴했다",
+    (await logText(a)).some((t) => t.includes("여기 누구 있나")),
+    JSON.stringify((await logText(a)).slice(-2)));
+
+  const posBeforeTyped = await posOf(a);
+  await a.locator('input[aria-label="명령 입력"]').fill("북");
+  await a.keyboard.press("Enter");
+  await sleep(250);
+  check("★ '북' 이 화살표와 같은 move 액션이 됐다 (같은 Action 으로 수렴)",
+    (await posOf(a)) !== posBeforeTyped, `${posBeforeTyped} -> ${await posOf(a)}`);
+
+  await a.locator('input[aria-label="명령 입력"]').fill("춤춰");
+  await a.keyboard.press("Enter");
+  await sleep(200);
+  check("★ 해석 못 한 것은 클라이언트가 판정하지 않고 그대로 서버로 간다",
+    (await logText(a)).some((t) => t.includes("무엇을 하려는지 알 수 없다")),
+    JSON.stringify((await logText(a)).slice(-2)));
+
+  // 입력창을 벗어나야 화살표가 다시 이동이 된다 (전역 핸들러는 타이핑을 가로채지 않는다)
+  await a.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  const posBeforeArrow = await posOf(a);
+  await a.keyboard.press("ArrowDown");
+  await sleep(250);
+  check("입력창을 나오면 화살표가 다시 이동이다",
+    (await posOf(a)) !== posBeforeArrow, `${posBeforeArrow} -> ${await posOf(a)}`);
+  await a.screenshot({ path: join(SHOTS, "18-자유-입력.png") });
+
+  console.log("\n⑮ 5단계 — 모바일: 세로 화면 · 스와이프 · 미니맵 탭");
+  const phone = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    hasTouch: true,
+    isMobile: true,
+    deviceScaleFactor: 3,
+  });
+  const m = await phone.newPage();
+  await m.goto(`http://127.0.0.1:${WEB_PORT}/`);
+  await m.waitForSelector("text=화살표로 이동", { timeout: 8000 });
+  await sleep(LLM_MS + 400);
+
+  const overflow = await m.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  check("가로 스크롤이 없다 (390px 세로 화면)", overflow <= 0, `${overflow}px`);
+  const cmdBox = await m.locator("button:has-text('살펴보기')").first().boundingBox();
+  check("커맨드 창이 첫 화면 안에 들어온다",
+    Boolean(cmdBox && cmdBox.y + cmdBox.height <= 844), JSON.stringify(cmdBox));
+  const padBox = await m.locator('button[aria-label="서쪽으로"]').first().boundingBox();
+  check("D패드가 손가락 크기다 (44px 이상)",
+    Boolean(padBox && padBox.width >= 44 && padBox.height >= 44), JSON.stringify(padBox));
+  await m.screenshot({ path: join(SHOTS, "19-모바일.png") });
+
+  /* 스와이프: 로그 창을 왼쪽으로 쓸면 서쪽으로 한 칸.
+     Playwright 에 스와이프 API 가 없어 진짜 TouchEvent 를 만들어 보낸다. */
+  const swipe = (dx: number, dy: number) =>
+    m.evaluate(
+      // ★ 이 함수 안에 이름 붙은 내부 함수를 두지 말 것. esbuild(tsx)가
+      //   keepNames 로 __name(...) 호출을 끼워 넣는데, 브라우저에는 그 헬퍼가
+      //   없어서 ReferenceError 로 죽는다.
+      ([ddx, ddy]) => {
+        const el = document.querySelector('[data-mud="log"]');
+        if (!el) throw new Error("로그 창을 찾지 못했다");
+        const from = new Touch({ identifier: 1, target: el, clientX: 200, clientY: 400 });
+        const to = new Touch({
+          identifier: 1,
+          target: el,
+          clientX: 200 + ddx!,
+          clientY: 400 + ddy!,
+        });
+        el.dispatchEvent(
+          new TouchEvent("touchstart", { touches: [from], bubbles: true, cancelable: true }),
+        );
+        el.dispatchEvent(
+          new TouchEvent("touchend", { changedTouches: [to], bubbles: true, cancelable: true }),
+        );
+      },
+      [dx, dy],
+    );
+
+  const phonePos = await posOf(m);
+  await swipe(-90, 0);
+  await sleep(300);
+  check("★ 스와이프가 D패드와 같은 move 액션이 됐다",
+    (await posOf(m)) !== phonePos, `${phonePos} -> ${await posOf(m)}`);
+
+  const beforeTap = await posOf(m);
+  await swipe(0, 12); // 임계값 아래 — 탭이지 스와이프가 아니다
+  await sleep(200);
+  check("짧게 스치는 것은 스와이프가 아니다 (탭과 부딪히지 않는다)",
+    (await posOf(m)) === beforeTap, `${beforeTap} -> ${await posOf(m)}`);
+
+  /* 미니맵의 '붙어 있는' 칸을 누르면 그쪽으로 한 칸. 지금 (2,3) 이므로
+     인덱스 (y*7 + x) 로 (3,3) = 24 를 누른다. */
+  const here = await posOf(m);
+  const [hx, hy] = here.split(",").map(Number);
+  const cells = m.locator('div[style*="grid-template-columns"] > div');
+  await cells.nth(hy! * 7 + hx! + 1).click(); // 동쪽 칸
+  await sleep(300);
+  check("★ 미니맵의 옆 칸을 누르면 그쪽으로 한 칸 간다",
+    (await posOf(m)) !== here, `${here} -> ${await posOf(m)}`);
+
+  await m.screenshot({ path: join(SHOTS, "20-모바일-이동.png") });
+
+  /* 더 작은 화면(360x640). 로그가 줄어들면서 커맨드 창과 입력줄은 남아야 한다 —
+     "명령을 못 누르는 것보다 로그가 짧은 편이 낫다" 를 숫자로 잰다.
+     ★ setViewportSize 로 줄이지 않고 새 창을 연다: 모바일 에뮬레이션에서
+       100dvh 가 리사이즈에 다시 계산되지 않아, 레이아웃이 아니라 에뮬레이션의
+       성질을 재게 된다. */
+  const tiny = await browser.newContext({
+    viewport: { width: 360, height: 640 },
+    hasTouch: true,
+    isMobile: true,
+  });
+  const s360 = await tiny.newPage();
+  await s360.goto(`http://127.0.0.1:${WEB_PORT}/`);
+  await s360.waitForSelector("text=화살표로 이동", { timeout: 8000 });
+  await sleep(400);
+  const small = await s360.evaluate(() => ({
+    over: document.documentElement.scrollHeight - window.innerHeight,
+    log: Math.round(document.querySelector('[data-mud="log"]')!.getBoundingClientRect().height),
+  }));
+  check("360x640 에서도 페이지가 세로로 넘치지 않는다", small.over <= 0, JSON.stringify(small));
+  const inputBox = await s360.locator('input[aria-label="명령 입력"]').boundingBox();
+  check("★ 줄어드는 것은 로그다 — 입력줄과 커맨드 창은 첫 화면에 남는다",
+    Boolean(inputBox && inputBox.y + inputBox.height <= 640) && small.log < 300,
+    `${JSON.stringify(inputBox)} log=${small.log}`);
+  await s360.screenshot({ path: join(SHOTS, "21-모바일-작은-화면.png") });
+  await tiny.close();
+  await phone.close();
 
   await browser.close();
   await vite.close();

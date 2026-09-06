@@ -46,19 +46,28 @@ export function Status(props: {
           '라벨 + 데이터' 이지 서사 문장이 아니다. "○○ 님이 들어왔다" 같은
           문장은 여기서 만들지 않고 서버의 log 로만 온다. 그래서 2단계에
           문구가 바뀌어도 이 컴포넌트는 그대로다. */}
-      <div style={{ fontSize: 11, color: C.dim, marginTop: 8, display: "flex", gap: 10 }}>
-        <span>
+      {/* 좁은 화면에서 줄바꿈이 이름 한가운데를 자르지 않게 한다 (5단계).
+          각 항목은 통째로 넘어가고, 넘칠 때는 이름 쪽만 줄어든다. */}
+      <div
+        style={{
+          fontSize: 11,
+          color: C.dim,
+          marginTop: 8,
+          display: "flex",
+          flexWrap: "wrap",
+          columnGap: 10,
+          rowGap: 3,
+        }}
+      >
+        <span style={{ minWidth: 0 }}>
           동행 {room?.occupants.length ?? 0}
           {room?.occupants.length ? (
-            <span style={{ color: C.other }}>
-              {" "}
-              {room.occupants.map((o) => o.name).join(", ")}
-            </span>
+            <span style={{ color: C.other }}> {room.occupants.map((o) => o.name).join(", ")}</span>
           ) : null}
         </span>
-        <span>탐색한 방 {self.seen.length}</span>
+        <span style={{ whiteSpace: "nowrap" }}>탐색한 방 {self.seen.length}</span>
         {marks.map((f) => (
-          <span key={f.key} style={{ color: C.gold }}>
+          <span key={f.key} style={{ color: C.gold, whiteSpace: "nowrap" }}>
             {f.label}
           </span>
         ))}
