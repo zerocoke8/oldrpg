@@ -8,8 +8,6 @@
 
 import {
   MAX_SENSITIVE,
-  WORLD_FLAGS,
-  WORLD_FLAG_DEFAULTS,
   declHashOf,
   type GameMap,
   type RegionDef,
@@ -36,7 +34,7 @@ export function assertWorldData(map: GameMap, balance: Balance): void {
 
   // ⑦ 적이 켜는 플래그는 선언돼 있어야 한다 (파일을 넘나드는 참조라 zod 가 못 본다).
   for (const [id, e] of Object.entries(balance.enemies)) {
-    if (e.slainFlag !== null && !(e.slainFlag in WORLD_FLAGS)) {
+    if (e.slainFlag !== null && !map.hasFlag(e.slainFlag)) {
       throw new Error(`enemies.json: ${id} 가 선언되지 않은 플래그 ${e.slainFlag} 를 켠다.`);
     }
   }
@@ -52,12 +50,12 @@ export function assertWorldData(map: GameMap, balance: Balance): void {
       throw new Error(`NPC ${n.id} 가 ${n.region} 의 걷는 칸이 아닌 ${n.at} 에 서 있다.`);
     }
     for (const t of n.topics) {
-      if (t.requires !== null && !(t.requires in WORLD_FLAGS)) {
+      if (t.requires !== null && !map.hasFlag(t.requires)) {
         throw new Error(`NPC ${n.id} 의 주제 ${t.id} 가 선언되지 않은 플래그 ${t.requires} 로 열린다.`);
       }
     }
     for (const f of n.sensitiveFlags) {
-      if (!(f in WORLD_FLAGS)) {
+      if (!map.hasFlag(f)) {
         throw new Error(`NPC ${n.id} 가 선언되지 않은 플래그 ${f} 를 sensitive 에 적었다.`);
       }
     }
@@ -103,7 +101,7 @@ function assertRegion(map: GameMap, r: RegionDef, balance: Balance): void {
   // ③ 선언된 플래그가 실제로 존재하는가. 오타 하나가 '영영 안 바뀌는 방' 이 된다.
   for (const [k, decl] of Object.entries(r.sensitive)) {
     for (const f of decl) {
-      if (!(f in WORLD_FLAGS)) {
+      if (!map.hasFlag(f)) {
         throw new Error(`지역 ${r.id} ${k}: 선언되지 않은 플래그 ${f} 를 sensitive 에 적었다.`);
       }
     }
@@ -150,7 +148,7 @@ function assertDoors(map: GameMap): void {
       if (!map.walkableAt(e.to)) {
         throw new Error(`${where}: 목적지 ${e.to.region} ${e.to.x},${e.to.y} 이 벽이다.`);
       }
-      if (e.requires !== null && !(e.requires in WORLD_FLAGS)) {
+      if (e.requires !== null && !map.hasFlag(e.requires)) {
         throw new Error(`${where}: 선언되지 않은 플래그 ${e.requires} 를 requires 로 쓴다.`);
       }
       if (e.oneWay) continue;
@@ -182,7 +180,7 @@ export function seed(db: Db, q: Queries, map: GameMap, balance: Balance, now: nu
     // 안에 두면 새 플래그를 선언해도 시더가 건너뛰어, 그 플래그가 DB 에
     // 존재하지 않는 채 state_hash 가 계산된다 (전부 "null" 로).
     // INSERT OR IGNORE 이므로 멱등하고 사실상 공짜다.
-    for (const [key, value] of Object.entries(WORLD_FLAG_DEFAULTS)) {
+    for (const [key, value] of Object.entries(map.flagDefaults())) {
       q.insertFlagIfAbsent.run(key, value, now);
     }
 

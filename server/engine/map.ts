@@ -67,10 +67,17 @@ export interface RegionDef {
 export interface MapData {
   readonly regions: readonly RegionDef[];
   readonly spawn: Pos;
+  /** 존재하는 모든 월드 플래그. 세계마다 다르므로 지역·씨앗과 같은 데이터다. */
+  readonly flags: Readonly<Record<string, WorldFlagDef>>;
 }
 
 export const MAX_SENSITIVE = 4;
 
+/** 플래그 하나의 선언. content/world/world.json 의 `flags` 에 있다.
+ *
+ *  ★ broadcast 가 왜 데이터인가: 플래그마다 스포일러인지 아닌지가 다르고,
+ *    그건 세계관의 결정이다 (secret_door_found 는 감추고 boss_slain 은 공개).
+ *    코드에 두면 세계를 갈아끼울 때 옛 세계의 플래그가 남는다. */
 export interface WorldFlagDef {
   /** JSON 스칼라의 정규 표기. world_flags.value 에 이 문자열이 그대로 들어간다. */
   readonly default: string;
@@ -79,24 +86,6 @@ export interface WorldFlagDef {
    *  꺼진 것은 snapshot.world 와 world.flag 에 아예 나가지 않는다. */
   readonly broadcast: boolean;
 }
-
-/** 존재하는 모든 월드 플래그.
- *
- *  ★ 이것은 JSON 으로 가지 않았다. broadcast 는 '값' 이 아니라 '동작' 이다 —
- *    스포일러를 클라이언트에 흘릴지 말지의 결정이고, 저작 도구가 만들 것이 아니다. */
-export const WORLD_FLAGS: Readonly<Record<string, WorldFlagDef>> = {
-  /** 기록실의 괴령을 쓰러뜨려 연구 일지를 되찾았다. 격리 구역의 문이 열린다. */
-  journal_recovered: { default: "false", broadcast: true },
-  /** 증식체를 쓰러뜨렸다 = 이 괴담이 해결됐다. */
-  proliferant_slain: { default: "false", broadcast: true },
-};
-
-/** 시더가 쓰는 key -> default 사영. */
-export const WORLD_FLAG_DEFAULTS: Readonly<Record<string, string>> = Object.fromEntries(
-  Object.entries(WORLD_FLAGS).map(([k, v]) => [k, v.default]),
-);
-
-export const isBroadcastFlag = (key: string): boolean => WORLD_FLAGS[key]?.broadcast === true;
 
 export interface RoomDef {
   id: RoomId;
@@ -157,6 +146,14 @@ export interface GameMap {
   npcsInRoom(roomId: RoomId): NpcDef[];
   /** 그 플래그를 선언한 NPC 들. 3단계의 영향 범위가 "방·NPC" 인 근거. */
   npcsSensitiveTo(flag: string): NpcDef[];
+  /** 이 세계에 선언된 플래그인가. 아닌 것을 켜려 하면 그건 오타다. */
+  hasFlag(key: string): boolean;
+  /** 클라이언트에 값을 공개할 플래그인가. 공개는 옵트인이다 (스포일러 방지). */
+  isBroadcastFlag(key: string): boolean;
+  /** 시더가 쓰는 key -> default 문자열. */
+  flagDefaults(): Readonly<Record<string, string>>;
+  /** 선언된 플래그 이름 전부. */
+  flagKeys(): string[];
   contentHash(): string;
   view(id: RegionId): RegionSlice;
 }
@@ -247,6 +244,12 @@ export function makeMap(data: MapData): GameMap {
     npcsInRoom: (roomId) => npcList.filter((n) => n.roomId === roomId),
     npcsSensitiveTo: (flag) => npcList.filter((n) => n.sensitiveFlags.includes(flag)),
 
+    hasFlag: (key) => key in data.flags,
+    isBroadcastFlag: (key) => data.flags[key]?.broadcast === true,
+    flagDefaults: () =>
+      Object.fromEntries(Object.entries(data.flags).map(([k, v]) => [k, v.default])),
+    flagKeys: () => Object.keys(data.flags),
+
     /** "코드 맵과 DB rooms 가 같은 세대인가"를 한 번에 판정한다.
      *  플래그 레지스트리도 preimage 에 넣는다 — 안 그러면 새 플래그를 선언해도
      *  content_hash 가 그대로라 시더가 단축경로를 타 버린다. */
@@ -254,7 +257,7 @@ export function makeMap(data: MapData): GameMap {
       const rows = rooms()
         .map((r) => [r.id, r.tile, r.seed, r.sensitiveFlags.join(",")].join(SEP))
         .sort();
-      const flags = Object.keys(WORLD_FLAG_DEFAULTS).sort().join(",");
+      const flags = Object.keys(data.flags).sort().join(",");
       /* NPC 도 같은 해시에 들어간다. 빠뜨리면 시더의 단축경로가 살아 있는 채로
          persona 나 방을 고쳐도 npcs 표가 옛 값을 유지한다 — "표는 코드의 그림자"
          라는 성질이 조용히 깨진다. (대사 캐시는 별개다: 그쪽은 seed_id 가

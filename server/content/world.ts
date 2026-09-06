@@ -76,7 +76,22 @@ const zRegion = z
   })
   .strict();
 
-const zWorld = z.object({ spawn: zPos }).strict();
+/** 플래그 하나의 선언. broadcast 는 '이 값을 클라이언트에 공개할 것인가' 다 —
+ *  플래그마다 스포일러인지 아닌지가 다르고 그건 세계관의 결정이라 데이터다. */
+const zFlag = z
+  .object({
+    /** JSON 스칼라의 정규 표기. world_flags.value 에 이 문자열이 그대로 들어간다. */
+    default: z.string().min(1),
+    broadcast: z.boolean(),
+  })
+  .strict();
+
+const zWorld = z
+  .object({
+    spawn: zPos,
+    flags: z.record(z.string().min(1).regex(/^[a-z0-9_]+$/, "소문자·숫자·밑줄만"), zFlag),
+  })
+  .strict();
 
 function readJson(path: string): unknown {
   try {
@@ -204,5 +219,7 @@ export function loadWorld(dir = process.env.MUD_WORLD ?? DEFAULT_DIR): MapData {
     throw new Error(`world.json: 스폰 지역 ${world.spawn.region} 이 regions/ 에 없다.`);
   }
 
-  return { regions, spawn: world.spawn };
+  /* 선언되지 않은 플래그를 쓰는 곳은 db/seed.ts 의 assertWorldData 가 잡는다 —
+     적의 slainFlag 와 밸런스를 함께 봐야 하므로 여기서는 판정할 수 없다. */
+  return { regions, spawn: world.spawn, flags: world.flags };
 }

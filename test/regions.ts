@@ -191,7 +191,7 @@ async function main() {
     );
     let threw = false;
     try {
-      assertWorldData(makeMap({ regions, spawn: map.spawn }), balance);
+      assertWorldData(makeMap({ regions, spawn: map.spawn, flags: FIXTURE_WORLD.flags }), balance);
     } catch {
       threw = true;
     }
@@ -241,7 +241,7 @@ async function main() {
 
   // ── ③ 플래그가 문을 연다 ────────────────────────────────────────────
   section("③ 플래그가 문을 연다 — 지역 이동");
-  ev.setFlag("journal_recovered", true);
+  ev.setFlag("guardian_slain", true);
   await sleep(60);
   alice.clear();
   const ack = await alice.step("east");

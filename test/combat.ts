@@ -287,14 +287,14 @@ async function main() {
 
   // ── ⑦ 승리 -> 3단계 파이프라인 ─────────────────────────────────────
   section("⑦ 적을 죽이면 3단계의 이벤트 경로가 통째로 돈다");
-  check("아직 journal_recovered 은 꺼져 있다", server.ctx.world.flagValue("journal_recovered") === false);
+  check("아직 guardian_slain 은 꺼져 있다", server.ctx.world.flagValue("guardian_slain") === false);
   alice.clear();
   bob.clear();
   await advance(30000); // 확실히 죽을 만큼
   check("★ 적이 죽었다", bob.texts("good").some((t) => t.includes("흩어진다")),
     JSON.stringify(bob.texts().slice(-4)));
   check("combat.end{victory}", bob.of("combat.end").some((e) => e.reason === "victory"));
-  check("★ journal_recovered 이 켜졌다", server.ctx.world.flagValue("journal_recovered") === true);
+  check("★ guardian_slain 이 켜졌다", server.ctx.world.flagValue("guardian_slain") === true);
   check("★ 3단계의 world.flag 가 방송됐다",
     bob.of("world.flag").some((f) => f.flag.value === true && f.flag.label === "파수꾼 처치됨"));
   check("★ 3단계의 이벤트 문장도 왔다 (near/far)",
@@ -329,7 +329,7 @@ async function main() {
 
   /* ── ⑩ 반복되는 적 ──────────────────────────────────────────────────
    *
-   * 파수꾼 하나뿐이면 '한 번 죽이면 끝' 인 세계다 — journal_recovered 이 DB 영속이라
+   * 파수꾼 하나뿐이면 '한 번 죽이면 끝' 인 세계다 — guardian_slain 이 DB 영속이라
    * 늦게 접속한 사람은 전투를 영영 보지 못했다. 그래서 적이 두 종류로 나뉜다:
    *   보스        플래그를 켠다. 돌아오지 않는다 (세계가 바뀐 사건이다)
    *   반복되는 적 세계를 바꾸지 않는다. 시간이 지나면 돌아온다

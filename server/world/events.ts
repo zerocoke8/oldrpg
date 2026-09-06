@@ -22,7 +22,7 @@ import type { RoomId } from "../../shared/ids";
 import { roomIdOf } from "../../shared/ids";
 import type { JsonScalar } from "../../shared/json";
 import type { WorldFlagView } from "../../shared/protocol";
-import { isBroadcastFlag, WORLD_FLAGS, type GameMap } from "../engine/map";
+import type { GameMap } from "../engine/map";
 import type { World } from "../engine/world";
 import type { Queries } from "../db/queries";
 import type { Mood } from "../narration/prompts";
@@ -76,14 +76,14 @@ export function makeEvents(
   }
 
   function publicFlags(): WorldFlagView[] {
-    return Object.keys(WORLD_FLAGS)
-      .filter(isBroadcastFlag)
+    return map.flagKeys()
+      .filter((k) => map.isBroadcastFlag(k))
       .map(viewOf)
       .filter((f) => f.value !== null);
   }
 
   function setFlag(key: string, value: JsonScalar): SetFlagResult {
-    if (!(key in WORLD_FLAGS)) throw new Error(`선언되지 않은 플래그: ${key}`);
+    if (!map.hasFlag(key)) throw new Error(`선언되지 않은 플래그: ${key}`);
 
     const next = JSON.stringify(value); // 정규화는 여기 한 곳 (db/queries 의 setFlag 와 짝)
     const prev = world.getFlag(key);
@@ -114,7 +114,7 @@ export function makeEvents(
     }
 
     // 구조화 상태는 따로 간다 (프로토콜 불변식 1). 공개 플래그만.
-    if (isBroadcastFlag(key)) {
+    if (map.isBroadcastFlag(key)) {
       const view = viewOf(key);
       for (const s of reg.all()) emit.send(s, { t: "world.flag", flag: view });
     }

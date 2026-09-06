@@ -34,7 +34,7 @@ LLM 출력이 게임 상태를 바꾸는 경로는 존재해서는 안 된다.
 
 ```
 rooms          id, x, y, seed, region, sensitive_flags[]   -- 절대 변경 안 됨
-world_flags    key, value                                  -- 엔진 소유
+world_flags    key, value                                  -- world.json 의 투영
 room_text      room_id, state_hash, text, created_at       -- 생성 결과 캐시
 npcs           id, room_id, persona_seed, sensitive_flags[]  -- 지역 파일의 투영
 npc_lines      npc_id, state_hash, text
@@ -67,6 +67,10 @@ player_items   player_id, item_id, qty                     -- 소지품. 0개는
 
 그래서 지역은 50방쯤으로 유지한다. 1000방을 한 지역에 넣으면 반경 기반
 `canSee`, 창(window) 미니맵, 스냅샷 분할이 한꺼번에 필요해진다.
+
+월드 플래그의 '선언' 도 데이터다 (`content/world/world.json` 의 `flags`).
+어떤 플래그가 존재하는지, 그 값을 클라이언트에 공개할지(`broadcast`)는
+세계관의 결정이라 세계를 갈아끼우면 함께 갈린다. 값을 바꾸는 것은 엔진이다.
 
 NPC 도 지역 파일 안에 산다. 방에 서 있는 것은 전부 그 방이 있는 지역이
 소유한다 — 전역 목록으로 두면 `"b1:3,1"` 같은 문자열이 지역과 어긋나도

@@ -1,1 +1,17 @@
-{"spawn": {"region": "d6", "x": 2, "y": 1}}
+{
+  "spawn": {
+    "region": "d6",
+    "x": 2,
+    "y": 1
+  },
+  "flags": {
+    "journal_recovered": {
+      "default": "false",
+      "broadcast": true
+    },
+    "proliferant_slain": {
+      "default": "false",
+      "broadcast": true
+    }
+  }
+}

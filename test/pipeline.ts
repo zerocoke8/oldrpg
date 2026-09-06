@@ -270,10 +270,10 @@ async function main() {
   section("⑤ 플래그가 되돌아가면 옛 텍스트가 그대로 복구된다");
   llm.failFor.clear();
   llm.calls.length = 0;
-  // journal_recovered 을 켠다 (4단계 전투가 할 일을 여기서는 직접).
+  // guardian_slain 을 켠다 (4단계 전투가 할 일을 여기서는 직접).
   const roomWithFlag = "b1:5,4";
   const hashOff = server.ctx.world.stateHash(roomWithFlag);
-  server.ctx.q.setFlag.run("journal_recovered", "true", Date.now());
+  server.ctx.q.setFlag.run("guardian_slain", "true", Date.now());
   server.ctx.world.load(
     new Map(server.ctx.q.allFlags.all().map((r) => [r.key, r.value] as [string, string])),
   );
@@ -282,7 +282,7 @@ async function main() {
   check("옛 상태의 텍스트가 사라지지 않았다 (다른 행이다)",
     server.ctx.q.getRoomText.get(roomWithFlag, hashOn) === undefined);
 
-  server.ctx.q.setFlag.run("journal_recovered", "false", Date.now());
+  server.ctx.q.setFlag.run("guardian_slain", "false", Date.now());
   server.ctx.world.load(
     new Map(server.ctx.q.allFlags.all().map((r) => [r.key, r.value] as [string, string])),
   );
@@ -299,9 +299,9 @@ async function main() {
   const withMood = p.render({ seed: "s", mood: "파수꾼이 쓰러졌다" });
   check("mood 가 있으면 절이 붙는다", withMood.includes("파수꾼이 쓰러졌다"));
   const moods = moodsForTest;
-  check("moods/journal_recovered.md 를 읽었다", moods.has("journal_recovered"));
+  check("moods/guardian_slain.md 를 읽었다", moods.has("guardian_slain"));
   check("mood 에 prompt/fallback 두 절이 있다",
-    Boolean(moods.get("journal_recovered")?.prompt) && Boolean(moods.get("journal_recovered")?.fallback));
+    Boolean(moods.get("guardian_slain")?.prompt) && Boolean(moods.get("guardian_slain")?.fallback));
 
   // ── ⑦ 승급된 행의 메타데이터 ───────────────────────────────────────
   section("⑦ 승급된 행이 무엇으로 만들어졌는지 남는다");
@@ -318,7 +318,7 @@ async function main() {
   // 플래그를 선언한 방은 preimage 에 그 플래그가 들어 있어야 한다
   const flagRoomHash = server.ctx.world.stateHash("b1:5,4");
   check("선언한 플래그만 투영된다 (전체 월드 플래그가 아니다)",
-    JSON.stringify(server.ctx.world.projectFlags("b1:5,4")) === '[["journal_recovered",false]]',
+    JSON.stringify(server.ctx.world.projectFlags("b1:5,4")) === '[["guardian_slain",false]]',
     JSON.stringify(server.ctx.world.projectFlags("b1:5,4")));
   check("플래그 없는 방의 투영은 빈 배열",
     JSON.stringify(server.ctx.world.projectFlags("b1:3,3")) === "[]");
@@ -350,7 +350,7 @@ async function main() {
     stateHash: "a.b.c",
     seed: "벽 틈에서 희미한 붉은 빛이 스며나온다",
     seedId: "a",
-    flags: [["journal_recovered", true]] as const,
+    flags: [["guardian_slain", true]] as const,
   };
   const fb = fallbackForTest;
 
@@ -412,7 +412,7 @@ async function main() {
     persona: "무너진 서고의 제단을 지키는 늙은 사제",
     seed: "남쪽 홀을 지키는 그림자 파수꾼",
     seedId: "a",
-    flags: [["journal_recovered", true]] as const,
+    flags: [["guardian_slain", true]] as const,
   };
   const npcFb = fallbackNpcForTest;
 

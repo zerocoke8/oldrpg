@@ -12,8 +12,8 @@
  *
  * 내용은 이 프로젝트의 첫 세계(지하 서고)를 그대로 옮긴 것이다 — 이미 모든
  * 검사가 이 좌표와 문장을 알고 있었으므로, 옮기면서 한 글자도 바꾸지 않았다.
- * (플래그 이름만 현재 레지스트리의 것으로 맞췄다. WORLD_FLAGS 는 아직
- * engine/map.ts 에 있어 데이터로 갈아끼울 수 없다.)
+ * 플래그(guardian_slain)도 여기서 선언한다 — 운영 세계에 플래그가 늘거나
+ * 이름이 바뀌어도 검사는 그대로다.
  *
  * 운영 콘텐츠 자체를 검사하는 곳은 여기를 쓰지 않는다:
  *   test/world.ts    씨앗이 안 바뀌었는가 (얼어붙은 seed_id 표)
@@ -26,6 +26,7 @@ import type { Balance, EnemyDef, ItemDef, SkillDef } from "../server/engine/enem
 import type { Mood } from "../server/narration/prompts";
 
 export const FIXTURE_WORLD: MapData = {
+  "flags": { "guardian_slain": { "default": "false", "broadcast": true } },
   "spawn": {
     "region": "b1",
     "x": 3,
@@ -67,25 +68,25 @@ export const FIXTURE_WORLD: MapData = {
       },
       "sensitive": {
         "1,4": [
-          "journal_recovered"
+          "guardian_slain"
         ],
         "5,4": [
-          "journal_recovered"
+          "guardian_slain"
         ],
         "1,5": [
-          "journal_recovered"
+          "guardian_slain"
         ],
         "2,5": [
-          "journal_recovered"
+          "guardian_slain"
         ],
         "3,5": [
-          "journal_recovered"
+          "guardian_slain"
         ],
         "4,5": [
-          "journal_recovered"
+          "guardian_slain"
         ],
         "5,5": [
-          "journal_recovered"
+          "guardian_slain"
         ]
       },
       "enemies": {
@@ -99,7 +100,7 @@ export const FIXTURE_WORLD: MapData = {
           "name": "제단지기",
           "persona": "무너진 서고의 제단을 지키는 늙은 사제. 눈이 어둡고 말수가 적다. 짧게 끊어 말하며, 묻지 않은 것은 말하지 않는다",
           "sensitiveFlags": [
-            "journal_recovered"
+            "guardian_slain"
           ],
           "topics": [
             {
@@ -124,7 +125,7 @@ export const FIXTURE_WORLD: MapData = {
               "id": "sealed_door",
               "label": "봉인된 문에 대해",
               "seed": "동쪽 끝의 봉인된 문. 파수꾼이 사라진 지금에야 말할 수 있는 것이고, 그 너머에 무엇이 있는지는 자신도 모른다",
-              "requires": "journal_recovered"
+              "requires": "guardian_slain"
             }
           ]
         }
@@ -138,7 +139,7 @@ export const FIXTURE_WORLD: MapData = {
             "x": 1,
             "y": 3
           },
-          "requires": "journal_recovered",
+          "requires": "guardian_slain",
           "oneWay": false
         }
       ]
@@ -284,7 +285,7 @@ const raw: {
         5
       ],
       "swingMs": 900,
-      "slainFlag": "journal_recovered",
+      "slainFlag": "guardian_slain",
       "respawnMs": null,
       "drops": [
         {
@@ -389,7 +390,7 @@ export const FIXTURE_BALANCE: Balance = {
 /** 픽스처 세계의 플래그가 프로즈에 하는 일. 운영의 moods/ 와 분리돼 있다 —
  *  검사가 게임 문구에 매달리면 문구를 다듬을 때마다 검사가 깨진다. */
 export const FIXTURE_MOODS: ReadonlyMap<string, Mood> = new Map<string, Mood>([
-  ["journal_recovered", {
+  ["guardian_slain", {
     prompt: "이 구역을 지키던 그림자 파수꾼은 방금 쓰러졌다.\n위협이 사라진 직후의 느슨한 정적을 담아라.",
     fallback: "위협이 사라진 뒤의 느슨한 정적이 감돈다.",
     label: "파수꾼 처치됨",

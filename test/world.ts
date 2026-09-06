@@ -65,6 +65,12 @@ function refuses(dir: string): string | null {
  *   b1 과 그 방이 있어야 npcs 표의 외래키가 살았다. 이제 NPC 가 지역 파일
  *   안에 있으므로 세계에 NPC 가 하나도 없어도 된다. */
 const TINY: MapData = {
+  /* 지역은 두 방뿐이지만 플래그는 실제 밸런스가 요구하는 것을 선언해야 한다 —
+     적의 slainFlag 가 선언되지 않았으면 부팅이 거절한다 (아래 ⑤' 에서 본다). */
+  flags: {
+    journal_recovered: { default: "false", broadcast: true },
+    proliferant_slain: { default: "false", broadcast: true },
+  },
   spawn: { region: "t1", x: 1, y: 1 },
   regions: [
     {
@@ -177,6 +183,14 @@ async function main() {
         npcs["obser:ver"] = npcs.observer;
         delete npcs.observer;
       }))],
+    ["모르는 필드가 world.json 에",
+      refuses(broken("world.json", (d) => { d.모르는것 = 1; }))],
+    ["플래그 선언이 아예 없음",
+      refuses(broken("world.json", (d) => { delete d.flags; }))],
+    ["플래그 이름에 대문자",
+      refuses(broken("world.json", (d) => {
+        (d.flags as Record<string, unknown>).BadFlag = { default: "false", broadcast: true };
+      }))],
     ["없는 지역을 스폰으로",
       refuses(broken("world.json", (d) => {
         d.spawn = { region: "없는지역", x: 1, y: 1 };
@@ -224,6 +238,18 @@ async function main() {
   const raw = JSON.stringify(inbox);
   check("★ 진짜 세계의 문장이 한 줄도 새지 않았다",
     !raw.includes("게시벽") && !raw.includes("연구"), "b1/b2 의 씨앗이 보인다");
+
+  /* ⑤' 플래그가 데이터가 됐으니, 세계와 밸런스가 어긋나는 것도 부팅이 잡는다. */
+  let crossErr = "";
+  try {
+    const bad = boot(`${DB}.x`, PORT + 1, { llm: "off", world: { ...TINY, flags: {} } });
+    await bad.close();
+  } catch (e) {
+    crossErr = e instanceof Error ? e.message : String(e);
+  }
+  check("★ 밸런스가 켜는 플래그를 세계가 선언 안 하면 거절한다",
+    crossErr.includes("선언되지 않은 플래그"), crossErr || "통과해 버렸다");
+  for (const f of [`${DB}.x`, `${DB}.x-wal`, `${DB}.x-shm`]) rmSync(f, { force: true });
 
   ws.close();
   await server.close();

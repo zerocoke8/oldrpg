@@ -20,9 +20,29 @@ A → B → A 로 되돌리면 옛 텍스트가 그대로 복구된다.
 ## 파일
 
 ```
-world.json          스폰. 지역이 아닌 것들이 여기 온다
+world.json          스폰 + 플래그 선언. 지역이 아닌 것들이 여기 온다
 regions/<id>.json   지역 하나. 파일 이름이 곧 지역 id 다
 ```
+
+### `world.json`
+
+```json
+{
+  "spawn": { "region": "d6", "x": 2, "y": 1 },
+  "flags": {
+    "journal_recovered": { "default": "false", "broadcast": true }
+  }
+}
+```
+
+`flags` 는 **이 세계에 존재하는 모든 월드 플래그의 선언**이다. 값을 바꾸는 것은
+엔진(전투 승리 등)이고, 여기 없는 플래그를 켜려 하면 부팅이나 런타임이 거절한다.
+
+- `default` 는 JSON 스칼라의 문자열 표기 (`"false"`, `"0"`, `"\"x\""`).
+  `state_hash` 는 이 문자열을 그대로 해시하므로 `"false"` 와 `"0"` 은 다른 상태다.
+- `broadcast: true` 면 값이 `snapshot.world` 와 `world.flag` 로 나간다.
+  **공개는 옵트인이다** — 플래그는 쉽게 스포일러가 된다(`secret_door_found` 같은 것).
+  꺼두면 클라이언트에 아예 가지 않는다.
 
 `id` 를 JSON 안에 다시 적지 않는다. 두 군데 적으면 어긋날 수 있고, 그건 사람이
 눈으로 못 잡는 종류의 오류다 (`content/balance/` 의 키와 같은 규칙).
@@ -93,7 +113,7 @@ regions/<id>.json   지역 하나. 파일 이름이 곧 지역 id 다
 - **`dir` 쪽은 반드시 벽이어야 한다.** 걸어갈 수 있는 칸을 가리키면 같은 키
   입력에 두 가지 뜻이 생긴다 — 한 칸 이동인가 지역 이동인가.
 - `requires` 가 `null` 이 아니면 그 플래그가 켜져야 열린다. 플래그는
-  `server/engine/map.ts` 의 `WORLD_FLAGS` 에 선언돼 있어야 한다.
+  `world.json` 의 `flags` 에 선언돼 있어야 한다.
 - `oneWay: false` 면 **반대편에 짝이 있어야 한다.** 없으면 들어갔다 못 나온다.
 
 ## 검증
