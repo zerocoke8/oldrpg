@@ -51,7 +51,10 @@ const AFTER_DEPLOY: { what: string; how: string }[] = [
   },
   {
     what: "better-sqlite3 가 이미지 안에서 실제로 빌드/적재되는가",
-    how: "fly logs 의 첫 줄에 [db] schema v0 -> v1 이 보이면 네이티브 애드온이 살아 있다",
+    /* ★ v0 -> v1 은 안 찍힌다. 새 DB 의 v1 은 schema.sql 이 조용히 만들고
+       (migrate.ts), 로그를 남기는 루프는 v2 부터 돈다. 없는 줄을 찾으라고
+       하면 사람이 '실패했다' 고 읽는다. */
+    how: "fly logs 에 [db] schema v1 -> v2 … v5 -> v6 다섯 줄이 보이면 네이티브 애드온이 살아 있다",
   },
   {
     what: "머신이 하나뿐인가 — 둘이면 세계가 둘이다",
@@ -80,6 +83,21 @@ export async function runPreflight(
     log(`${mark} ${label}${detail ? `\n       ${detail}` : ""}`);
   };
   const section = (s: string): void => log(`\n${s}`);
+
+  /* ★ 이 도구는 **저장소 루트 전용**이다. 컨테이너 안에는 client/ 도
+     Dockerfile 도 없다 (이미지는 dist/·server/·shared/·content/ 만 COPY 한다).
+     거기서 돌리면 지금까지는 ENOENT 스택 트레이스가 나왔고, 그건 '배포가
+     잘못됐다' 로 읽힌다 — 실제로는 도구를 잘못된 곳에서 부른 것뿐이다.
+     컨테이너 안에서 쓸 수 있는 것은 pregen · backup · restore 셋이다. */
+  const missing = ["Dockerfile", "client", "shared", ".dockerignore"].filter((f) => !existsSync(f));
+  if (missing.length) {
+    log(
+      `[preflight] 여기서는 돌 수 없다 — ${missing.join(", ")} 가 없다.\n` +
+        "[preflight] 이 도구는 배포 '전에' 저장소 루트에서 돈다. 컨테이너 안이라면\n" +
+        "[preflight] 쓸 수 있는 것은 pregen · backup · restore 셋뿐이다.",
+    );
+    return { ok: false, fails: 1, warns: 0 };
+  }
 
   // ── ① 운영 콘텐츠 ────────────────────────────────────────────────────
   section("① 운영 콘텐츠 — content/ 가 실제로 로드되고 검증을 통과하는가");
@@ -142,6 +160,15 @@ export async function runPreflight(
   if (!existsSync("dist/index.html")) {
     say("fail", "dist/index.html 이 없다", "npm run build");
   } else {
+    /* ★ mtime 만 보면 '새 것' 인 가짜가 통과한다. test/deploy.ts 가 dist/ 를
+       치우고 60바이트짜리 가짜를 깔았다가 되돌리는데, 검사가 중간에 죽으면
+       그 가짜가 남는다 — 그리고 그 가짜의 mtime 은 방금이라 ③ 이 ok 를 찍는다.
+       진짜 vite 산출물은 /assets/ 번들을 참조한다. 그것만 보면 갈린다. */
+    const html = readFileSync("dist/index.html", "utf8");
+    if (!/\/assets\/[^"']+\.js/.test(html)) {
+      say("fail", "dist/index.html 이 번들을 참조하지 않는다 — 진짜 빌드가 아니다",
+        `${html.length}바이트: ${html.slice(0, 70)}`);
+    }
     const distAt = statSync("dist/index.html").mtimeMs;
     const newest = (dir: string): number => {
       let max = 0;

@@ -327,6 +327,17 @@ async function main() {
     rmSync(stashed, { recursive: true, force: true });
     renameSync("dist", stashed);
   }
+  /* ★ 되돌리기를 '함수 끝' 이 아니라 여기서 process 에 건다. 끝에만 두면
+     검사가 중간에 죽었을 때 60바이트 가짜가 dist/ 에 남고, 다음 실행이 그
+     가짜를 다시 치웠다 되돌리므로 **영원히 전파된다** (실제로 그랬다).
+     그 상태에서 npm start 는 게임이 아니라 빈 페이지를 서빙하고,
+     preflight ③ 은 mtime 만 보므로 ok 를 찍는다. */
+  const restoreDist = (): void => {
+    if (!stashed || !existsSync(stashed)) return;
+    rmSync("dist", { recursive: true, force: true });
+    renameSync(stashed, "dist");
+  };
+  process.on("exit", restoreDist);
   mkdirSync("dist/assets", { recursive: true });
   writeFileSync("dist/index.html", "<!doctype html><title>지하 1층</title><div id=root></div>");
   writeFileSync("dist/assets/index-TEST123.js", "console.log('bundle')");
@@ -754,6 +765,17 @@ async function main() {
   check("★ 홉 수가 실제보다 크면 맞는 값을 말해 준다",
     tooMany.includes("MUD_TRUST_PROXY=2 가 맞다"), tooMany.match(/\[mud] !.*/)?.[0] ?? "경고 없음");
 
+  /* ★ 이 갈래가 없으면 "경고가 없다 = 맞다" 가 거짓이 된다. 홉이 설정보다
+     많으면 채택되는 것(오른쪽에서 n번째)이 프록시 주소일 수 있는데, 한 표본
+     으로는 '프록시가 두 단' 과 '접속자가 위조했다' 를 가를 수 없다.
+     그래서 서버는 고르지 않고 둘 다 말하고, 가르는 재료를 준다. */
+  const extraHop = await probeIp("1", "1.1.1.1, 2.2.2.2");
+  check("★ 홉이 설정보다 많으면 두 해석을 다 말한다 (조용히 넘어가지 않는다)",
+    extraHop.includes("둘 중 하나다") && extraHop.includes("MUD_TRUST_PROXY=2"),
+    extraHop.match(/\[mud] !.*/)?.[0] ?? "경고 없음");
+  check("그리고 무엇으로 가르는지 알려 준다 (공인 IP 와 대조)",
+    extraHop.includes("공인 IP"), extraHop.match(/공인 IP.*/)?.[0] ?? "없음");
+
   const behindProxy = await probeIp("0", "1.1.1.1");
   check("★ 프록시 뒤인데 0 이면 '전원이 한 버킷' 을 경고한다",
     behindProxy.includes("한 IP 버킷"), behindProxy.match(/\[mud] !.*/)?.[0] ?? "경고 없음");
@@ -859,6 +881,23 @@ async function main() {
     !fellBack.estimate.inputMeasured && fellBack.estimate.calls === plan.estimate.calls,
     JSON.stringify(fellBack.estimate.inputTokens));
 
+  /* ★ 그런데 '왜 못 셌는가' 를 삼키면 안 된다. .env.example 의 자리표시자
+     (sk-ant-...)는 값이 비어 있지 않아 pregen 의 키 가드를 그대로 통과한다 —
+     즉 '키가 틀렸다' 와 '키가 없다' 가 똑같이 '추정' 으로 보인다. 그 둘을
+     못 가르면 견적을 보고 안심한 채 --limit 을 돌려 전부 401 로 태운다.
+     --dry-run 은 과금되지 않으므로, 여기가 키를 공짜로 시험하는 유일한 자리다. */
+  const authLog: string[] = [];
+  for (const f of [PDB, `${PDB}-wal`, `${PDB}-shm`]) rmSync(f, { force: true });
+  await planPregen(PDB, planOpts, (l) => authLog.push(l), async () => {
+    throw Object.assign(new Error("401 Unauthorized"), { status: 401 });
+  });
+  check("★ 키가 거절당하면 --dry-run 이 그렇게 말한다 (공짜로 키를 시험하는 자리)",
+    authLog.some((l) => l.includes("키가 거절당했다") && l.includes("401")),
+    authLog.filter((l) => l.includes("못 셌다")).join(" | ") || "아무 말도 안 했다");
+  check("자리표시자가 가드를 통과한다는 것까지 말한다",
+    authLog.some((l) => l.includes("sk-ant-")),
+    authLog.find((l) => l.includes("못 셌다")) ?? "없음");
+
   /* 단가를 모르는 모델에 아무 단가나 끌어다 쓰면 그 순간 보고가 거짓말이 된다. */
   const savedModel = process.env.MUD_MODEL;
   process.env.MUD_MODEL = "claude-어딘가-9";
@@ -908,6 +947,14 @@ async function main() {
      고정 세계로 돈다 (CLAUDE.md). 그래서 "지금 커밋의 **운영** 콘텐츠로
      서버가 뜨는가" 를 구조적으로 볼 수 없다. 그 답을 알게 되는 자리가
      지금까지는 fly deploy 뒤의 로그였다. */
+  /* ★ 이 절이 도는 시점의 dist/ 는 이 검사가 ① 앞에서 깐 60바이트 가짜다.
+     그래서 preflight 를 두 번 부른다 — 진짜처럼 번들을 참조하는 것 하나와
+     그 가짜 하나. 앞은 '운영 콘텐츠로 통과한다' 를, 뒤는 '가짜를 잡는다' 를
+     본다. 가짜는 지어낸 것이 아니라 이 검사가 실제로 깔던 그 파일이다. */
+  const FAKE_INDEX = readFileSync("dist/index.html", "utf8");
+  writeFileSync("dist/index.html",
+    '<!doctype html><title>지하 1층</title><script type="module" src="/assets/index-AAA111.js"></script><div id="root"></div>');
+
   const preLog: string[] = [];
   /* ★ counter=null. 안 주면 키가 있는 기계에서만 count_tokens 로 네트워크에
      나가고, 그러면 같은 커밋이 기계에 따라 다르게 돈다 — 키 없는 기계는
@@ -921,6 +968,60 @@ async function main() {
   check("배포 뒤에만 닫히는 것을 목록으로 남긴다 (조용히 빠뜨리지 않는다)",
     preLog.some((l) => l.includes("/data 소유권")) &&
       preLog.some((l) => l.includes("MUD_TRUST_PROXY")));
+  /* ★ 체크리스트가 '안 찍히는 로그 줄' 을 가리키면 안 된다. 새 DB 의 v1 은
+     schema.sql 이 조용히 만들고 로그 루프는 v2 부터 돈다 — v0 -> v1 을 찾으라고
+     하면 사람이 정상 부팅을 실패로 읽는다. */
+  check("★ 체크리스트가 실제로 찍히는 로그 줄을 가리킨다 (v0 -> v1 은 안 찍힌다)",
+    preLog.some((l) => l.includes("schema v1 -> v2")) &&
+      !preLog.some((l) => l.includes("v0 -> v1")),
+    preLog.find((l) => l.includes("schema v")) ?? "없음");
+
+  /* ★ 그리고 그 줄이 정말 안 찍히는지를 로그에서 직접 확인한다 — 체크리스트와
+     서버가 어긋나면 어느 쪽이 틀렸는지 여기서 갈린다. */
+  const BOOTLOG = join(tmpdir(), `mud-bootlog-${process.pid}.db`);
+  for (const f of [BOOTLOG, `${BOOTLOG}-wal`, `${BOOTLOG}-shm`]) rmSync(f, { force: true });
+  const bootLines: string[] = [];
+  const realLog2 = console.log;
+  console.log = (...a: unknown[]) => bootLines.push(a.map(String).join(" "));
+  const fresh = boot(BOOTLOG, PORT + 30, { ...FIXTURE, llm: "off" });
+  console.log = realLog2;
+  await fresh.close();
+  for (const f of [BOOTLOG, `${BOOTLOG}-wal`, `${BOOTLOG}-shm`]) rmSync(f, { force: true });
+  check("★ 빈 DB 의 첫 부팅이 v1 -> v2 부터 찍는다 (v0 -> v1 은 없다)",
+    bootLines.some((l) => l.includes("schema v1 -> v2")) &&
+      !bootLines.some((l) => l.includes("v0 -> v1")),
+    bootLines.filter((l) => l.includes("schema")).join(" | ") || "없음");
+
+  /* ★ mtime 만 보면 '방금 만든 가짜' 가 통과한다. 그 가짜로 npm start 를 하면
+     게임이 아니라 빈 페이지가 서빙된다. */
+  writeFileSync("dist/index.html", FAKE_INDEX);
+  const fakeLog: string[] = [];
+  const preFake = await runPreflight((s) => fakeLog.push(s), null);
+  check("★ 번들을 참조하지 않는 dist 를 가짜로 잡는다 (mtime 만 보면 통과한다)",
+    !preFake.ok && fakeLog.some((l) => l.startsWith("  FAIL") && l.includes("번들을 참조하지 않는다")),
+    fakeLog.filter((l) => l.includes("dist")).join(" | ") || "없음");
+
+  /* ★ 이 도구는 저장소 루트 전용이다. 컨테이너 안에는 client/ 도 Dockerfile 도
+     없어서 (이미지는 dist/·server/·shared/·content/ 만 COPY 한다) 거기서 돌리면
+     ENOENT 스택 트레이스가 났고, 그건 '배포가 잘못됐다' 로 읽힌다. */
+  const backHome = process.cwd();
+  const elsewhere = join(tmpdir(), `mud-notrepo-${process.pid}`);
+  mkdirSync(elsewhere, { recursive: true });
+  const awayLog: string[] = [];
+  process.chdir(elsewhere);
+  let away: Awaited<ReturnType<typeof runPreflight>>;
+  try {
+    away = await runPreflight((s) => awayLog.push(s), null);
+  } finally {
+    process.chdir(backHome);
+  }
+  rmSync(elsewhere, { recursive: true, force: true });
+  check("★ 저장소 밖에서 부르면 스택이 아니라 '여기서는 못 돈다' 로 끝난다",
+    !away.ok && awayLog.some((l) => l.includes("여기서는 돌 수 없다")),
+    JSON.stringify([away, awayLog.slice(0, 2)]));
+  check("그리고 컨테이너에서 쓸 수 있는 것을 알려 준다",
+    awayLog.some((l) => l.includes("pregen") && l.includes("backup") && l.includes("restore")),
+    awayLog.join(" ").slice(0, 160));
 
   /* ★ 돌연변이: 운영 콘텐츠가 깨지면 빨개져야 한다. 안 그러면 이 도구는
      '언제나 초록' 이고, 언제나 초록인 관문은 관문이 아니다. */
@@ -983,10 +1084,7 @@ async function main() {
   // ── 정리 ────────────────────────────────────────────────────────────
   for (const f of [DB, `${DB}-wal`, `${DB}-shm`]) rmSync(f, { force: true });
   rmSync("secret-not-served.txt", { force: true });
-  if (stashed) {
-    rmSync("dist", { recursive: true, force: true });
-    renameSync(stashed, "dist");
-  }
+  restoreDist();
 
   console.log(`\n${failures === 0 ? "PASS" : "FAIL"} — ${checks - failures}/${checks} 검사 통과`);
   process.exit(failures === 0 ? 0 : 1);

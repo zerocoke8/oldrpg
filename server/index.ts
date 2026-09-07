@@ -4,7 +4,7 @@
  * (.eslintrc.cjs 가 빌드 에러로 강제). 그 셋을 아는 파일은 여기와
  * world/roomText.ts 둘뿐이다. */
 
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { openDb } from "./db/open";
 import { migrate } from "./db/migrate";
@@ -57,7 +57,16 @@ const NO_UPGRADES: UpgradeService = {
 try {
   process.loadEnvFile(".env");
 } catch {
-  /* .env 없음 */
+  /* ★ '파일이 없다' 와 '있는데 못 읽었다' 는 다른 명제다. loadEnvFile 은
+     Node 22 의 기능이라 20 에서는 있어도 통째로 무시되고, 그러면 키를 제대로
+     채워 놓고도 "ANTHROPIC_API_KEY 가 없다" 로 막히면서 원인이 안 보인다.
+     (package.json 의 engines 는 강제되지 않는다.) */
+  if (existsSync(".env")) {
+    console.warn(
+      `[mud] .env 가 있는데 읽지 못했다 (node ${process.versions.node}). ` +
+        "process.loadEnvFile 은 node 22 부터다 — 22 이상으로 올리거나 환경변수로 직접 줄 것.",
+    );
+  }
 }
 
 const DB_PATH = process.env.MUD_DB ?? "mud.db";

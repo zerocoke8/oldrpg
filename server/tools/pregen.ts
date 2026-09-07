@@ -229,17 +229,23 @@ export async function planPregen(
     const chars = prompts.reduce((n, p) => n + p.system.length + p.user.length, 0);
     /* 표본으로 글자당 토큰 비를 재고, 재지 못하면 폭이 2배인 추정으로 떨어진다. */
     const count = counter === undefined ? makeTokenCounter(model) : counter;
-    const ratio = count ? await measureRatio(prompts, count) : null;
-    const inputTokens = ratio
-      ? { lo: Math.round(chars * ratio), hi: Math.round(chars * ratio) }
+    const measured = count
+      ? await measureRatio(prompts, count)
+      : { ratio: null, error: null };
+    const inputTokens = measured.ratio
+      ? { lo: Math.round(chars * measured.ratio), hi: Math.round(chars * measured.ratio) }
       : estimateTokens(chars);
-    const est = estimate(prompts.length, inputTokens, ratio !== null, model);
+    const est = estimate(prompts.length, inputTokens, measured.ratio !== null, model);
 
     log(`[pregen] (예상) db=${dbPath} · 방 ${todoRooms}/${roomIds.length} · 대사 ${prompts.length - todoRooms}/${totalLines} 자리가 비어 있다`);
     if (prompts.length === 0) {
       log("[pregen] (예상) 부를 것이 없다 — 이미 전부 확정본이다.");
     } else {
       for (const line of formatEstimate(est, "[pregen] (예상) ")) log(line);
+      /* ★ 키가 있는데 못 셌으면 그건 정보다. 조용히 '추정' 으로 내려앉으면
+         --dry-run 이 '키가 틀렸다' 를 말할 수 있는 유일한 자리를 버린다 —
+         그러면 그 다음의 --limit 이 전부 401 로 타고 나서야 알게 된다. */
+      if (measured.error) log(`[pregen] (예상) ! 입력 토큰을 못 셌다 — ${measured.error}`);
     }
     return {
       rooms: { total: roomIds.length, todo: todoRooms },

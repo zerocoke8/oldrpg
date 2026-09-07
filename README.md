@@ -1046,36 +1046,73 @@ npm start              # node --import tsx server/index.ts
 
 ```bash
 # 0. 배포해도 되는 상태인가. 여기가 빨간 채로 fly deploy 하면 한 사이클을 버린다
-npm run test:all
-npm run preflight
+npm run test:all      # ★ build 보다 먼저. test/deploy.ts 가 dist/ 를 소유한다
+npm run build
+npm run preflight     # exit 0 은 '준비됐다' 가 아니다 — '경고' 줄을 눈으로 읽을 것
 
-# 1. 앱과 볼륨. fly.toml 은 이미 저장소에 있다 (--no-deploy 로 덮어쓰지 않게)
-fly launch --no-deploy --copy-config
-fly volumes create oldrpg_data --region nrt --size 1
+# 1. 앱 이름만 등록한다. fly launch 를 쓰지 않는 이유는 아래에 있다
+fly apps create <앱이름>          # 이름은 fly 전역에서 유일하다
+#   fly.toml 의 app = '...' 한 줄을 <앱이름> 으로 고치고 커밋한다
 
-# 2. 키는 이미지가 아니라 시크릿으로. fly.toml 은 커밋되므로 절대 여기 쓰지 않는다
-fly secrets set ANTHROPIC_API_KEY=sk-...
+# 2. 볼륨 하나. 정확히 하나, fly.toml 의 primary_region 과 같은 리전에
+fly volumes create oldrpg_data --region nrt --size 1 --app <앱이름>
+fly volumes list --app <앱이름>   # 한 행이어야 한다
 
-# 3. 배포
-fly deploy
+# 3. 키는 이미지가 아니라 시크릿으로. fly.toml 은 커밋되므로 절대 여기 쓰지 않는다
+fly secrets set ANTHROPIC_API_KEY="$(cat)" --app <앱이름>   # 붙여넣고 Ctrl-D
+#   ★ .env 를 통째로 넣지 말 것. MUD_DB 줄이 섞이면 이미지의 /data/mud.db 를
+#     덮어써서 DB 가 볼륨 밖에 생기고, 재배포마다 세계가 사라진다
 
-# 4. 볼륨 소유권 — 이미지의 chown 은 빌드 시점의 빈 디렉터리를 고친 것이고,
-#    볼륨은 런타임에 그 위를 root 소유로 덮는다. 못 열면 로그가 그렇게 말한다
-fly logs | grep "를 열 수 없다"
-fly ssh console -C "chown -R 1000:1000 /data"   # 위가 잡혔을 때만
+# 4. 배포. --ha=false 는 머신이 2대로 뜨는 것을 막는다 (플래그를 모른다고 하면 뺀다)
+fly deploy --ha=false --app <앱이름>
 
-# 5. 홉 수 실측. 첫 연결에서 실제로 도착한 X-Forwarded-For 를 한 줄로 찍는다
-fly logs | grep "IP 판정"
+# 5. ★ 다른 어떤 확인보다 먼저 — 머신 1개 · 볼륨 1개. 둘이면 세계가 둘이다
+fly status --app <앱이름>
+fly volumes list --app <앱이름>
+fly scale count 1 --app <앱이름>          # 2대일 때만
 
-# 6. 선생성. 먼저 견적, 다음 시험 주행, 그 다음 전체
-fly ssh console -C "cd /app && npm run pregen -- --dry-run"
-fly ssh console -C "cd /app && npm run pregen -- --limit 10"   # 실제 사용량을 콘솔에서 확인
-fly ssh console -C "cd /app && npm run pregen"
+# 6. 첫 부팅 로그를 눈으로 읽는다. ★ grep 에 파이프하지 말 것 —
+#    fly logs 는 tail 이라 끝나지 않고, 버퍼링 때문에 '성공' 과 '미출력' 이 같아 보인다
+fly logs --app <앱이름>                    # 읽고 Ctrl-C
+#   [db] schema v1 -> v2 … v5 -> v6   네이티브 애드온이 살아 있다
+#   [mud] … db=/data/mud.db · rooms=164 (시드 164행)   볼륨 위 DB 를 열었다
+#   [mud] 서술: 방=claude-opus-5 …    키가 실렸다 ('폴백' 이면 3번이 안 된 것)
+#   "를 열 수 없다" 가 보이면 볼륨 소유권이다 — 그 줄 아래에 uid 까지 채운
+#   chown 명령이 함께 찍히므로 화면의 그 줄을 그대로 친다
 
-# 7. 백업을 기계 밖으로. 이 줄을 잊으면 백업은 없다
-fly ssh console -C "cd /app && npm run backup"
-fly ssh sftp get /data/backups/…
+# 7. 브라우저로 두 탭. 그 다음에야 홉 수가 로그에 찍힌다 (첫 ws 연결에 한 번)
+open https://<앱이름>.fly.dev
+fly logs --app <앱이름>                    # "IP 판정" 줄을 찾는다
+#   ★ 경고가 없다고 맞는 것이 아니다. '쓰는 값' 이 접속자의 공인 IP 인지로 판정한다
+
+# 8. 선생성. -C 는 셸을 안 거칠 수 있으므로 대화형으로 들어가서 친다
+fly ssh console --app <앱이름>
+  cd /app                                  # ★ 없으면 npm error enoent
+  npm run pregen -- --dry-run              # 무료. db= 가 /data/mud.db 인지 볼 것
+  npm run pregen -- --limit 10             # 실제 사용량을 콘솔에서 확인 (×23.3)
+  nohup npm run pregen > /data/pregen.log 2>&1 &   # 15~50분. 세션이 끊겨도 산다
+  exit
+#   끝났다는 판정은 exit code 가 아니라 --dry-run 이 '부를 것이 없다' 라고 할 때다
+
+# 9. 백업을 기계 밖으로. 이 줄을 잊으면 백업은 없다
+fly ssh console --app <앱이름> -C "/bin/sh -lc 'cd /app && npm run backup'"
+fly ssh sftp get /data/backups/mud-<시각>-<해시>.db
+fly ssh sftp get /data/backups/mud-<시각>-<해시>.db.json    # ★ 매니페스트도
+MUD_DB=/tmp/verify.db npm run restore -- ./mud-<시각>-<해시>.db --dry-run
+#   '적중 방 164/164 (100%)' 까지 봐야 그 파일이 진짜 백업이다
 ```
+
+**`fly launch` 가 아니라 `fly apps create` 인 이유**: `fly.toml` 은 손으로 쓴
+파일이고, 그 머리 주석이 `auto_stop_machines = 'off'` 같은 값의 유일한 근거다.
+`launch` 의 본업이 그 파일을 **생성**하는 것이라 재직렬화로 주석이 날아갈 위험이
+구조적으로 있고, 잠들기 설정이 기본값으로 되돌아간 것은 눈에 보이지도 않는다.
+`apps create` 는 fly 쪽에 이름만 등록하고 로컬 파일을 한 글자도 안 건드린다.
+굳이 `launch` 를 쓰려면 `--no-deploy --copy-config` 로 부르고 끝나자마자
+`git diff fly.toml` 을 볼 것.
+
+**여기서 `--ha=false` · `--copy-config` · `sftp` 문법은 확인하지 못했다.** 이
+환경에서 fly.io 에 접근할 수 없다. 플래그를 모른다고 하면 빼고, 대신 5번의
+머신·볼륨 개수 확인을 반드시 할 것 — 그 확인이 플래그가 하려던 일의 사후 판정이다.
 
 `npm run preflight` 가 이 순서의 0번이다. 검사(`test:all`)는 `test/fixture.ts`
 의 **고정 세계**로 돌기 때문에 (그래야 게임 내용을 바꿔도 프로토콜 검사가 안

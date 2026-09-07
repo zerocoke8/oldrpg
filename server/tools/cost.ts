@@ -165,12 +165,21 @@ export function makeTokenCounter(model: string): TokenCounter | null {
  *    것은 그 전환이지 그 뒤의 정밀도가 아니다.
  *  ★ 표본은 결정론적으로 고른다 (등간격). 무작위로 고르면 같은 세계에 대해
  *    돌릴 때마다 다른 견적이 나오고, 그러면 사람이 그 수를 안 믿는다. */
+export interface RatioResult {
+  ratio: number | null;
+  /** 못 셌으면 왜. ★ 이걸 삼키면 --dry-run 이 '키가 틀렸다' 를 못 말한다 —
+   *  .env.example 의 자리표시자(`sk-ant-...`)는 '값이 있다' 는 가드를 통과하므로
+   *  키가 틀린 것과 키가 없는 것이 똑같이 '추정' 으로 보인다. 그 차이를 모르면
+   *  견적을 보고 안심한 채 --limit 을 돌려 전부 401 로 태운다. */
+  error: string | null;
+}
+
 export async function measureRatio(
   prompts: readonly { system: string; user: string }[],
   count: TokenCounter,
   samples = 6,
-): Promise<number | null> {
-  if (prompts.length === 0) return null;
+): Promise<RatioResult> {
+  if (prompts.length === 0) return { ratio: null, error: null };
   const step = Math.max(1, Math.floor(prompts.length / samples));
   const picked = prompts.filter((_, i) => i % step === 0).slice(0, samples);
   let chars = 0;
@@ -178,10 +187,20 @@ export async function measureRatio(
   for (const p of picked) {
     try {
       tokens += await count(p.system, p.user);
-    } catch {
-      return null; // 하나라도 못 세면 표본이 편향된다. 통째로 포기한다.
+    } catch (err) {
+      // 하나라도 못 세면 표본이 편향된다. 통째로 포기하되, 이유는 남긴다.
+      const status = (err as { status?: number } | undefined)?.status;
+      const why = err instanceof Error ? err.message : String(err);
+      return {
+        ratio: null,
+        error:
+          status === 401 || status === 403
+            ? `키가 거절당했다 (HTTP ${status}). .env 의 ANTHROPIC_API_KEY 를 확인할 것 — ` +
+              "자리표시자(sk-ant-...)는 '값이 있다' 는 검사를 통과한다."
+            : why,
+      };
     }
     chars += p.system.length + p.user.length;
   }
-  return chars > 0 && tokens > 0 ? tokens / chars : null;
+  return { ratio: chars > 0 && tokens > 0 ? tokens / chars : null, error: null };
 }

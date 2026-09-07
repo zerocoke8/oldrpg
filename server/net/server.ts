@@ -141,7 +141,7 @@ export function startServer(ctx: Ctx, port: number, tx: (fn: () => void) => void
     const chosen = clientIp(req);
     console.log(
       `[mud] IP 판정 (첫 연결 한 번만): MUD_TRUST_PROXY=${TRUST_PROXY} · ` +
-        `X-Forwarded-For=${hops.length ? hops.join(" | ") : "(없음)"} · ` +
+        `홉 ${hops.length}개 [${hops.length ? hops.join(" | ") : "없음"}] · ` +
         `socket=${req.socket.remoteAddress ?? "?"} -> 쓰는 값 ${chosen}`,
     );
     /* 설정과 현실이 어긋나는 두 방향. 어느 쪽도 죽이지 않는다 — 판단은
@@ -160,6 +160,19 @@ export function startServer(ctx: Ctx, port: number, tx: (fn: () => void) => void
       console.warn(
         `[mud] ! 프록시 뒤인데 MUD_TRUST_PROXY=0 이다. 접속자 전원이 한 IP 버킷이 되어 ` +
           `서로를 밀어낸다. 홉이 ${hops.length}개이니 MUD_TRUST_PROXY=${hops.length} 를 볼 것.`,
+      );
+    } else if (hops.length > TRUST_PROXY) {
+      /* ★ 이 갈래가 없으면 "경고가 없다 = 맞다" 가 거짓이 된다. 홉이 설정보다
+         많을 때 채택되는 것은 오른쪽에서 n번째라 프록시 주소일 수 있는데,
+         지금까지 그 경우에 아무 말도 하지 않았다.
+         한 표본으로는 두 해석을 가를 수 없다 — 그래서 고르지 않고 둘 다 말한다.
+         가르는 것은 사람이고, 재료는 '쓰는 값이 그 사람의 공인 IP 인가' 다. */
+      console.warn(
+        `[mud] ! 홉이 ${hops.length}개인데 MUD_TRUST_PROXY=${TRUST_PROXY} 다. 둘 중 하나다 —\n` +
+          `[mud]   (가) 프록시가 ${hops.length}단이라 지금 쓰는 값이 프록시 주소다 ` +
+          `-> MUD_TRUST_PROXY=${hops.length}\n` +
+          "[mud]   (나) 접속자가 X-Forwarded-For 를 위조해 보냈다 -> 지금 값이 맞다\n" +
+          `[mud]   '쓰는 값 ${chosen}' 이 그 사람의 공인 IP 와 같은지로 가른다.`,
       );
     }
   }
