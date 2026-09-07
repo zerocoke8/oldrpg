@@ -22,6 +22,7 @@
     "test:combat": "tsx test/combat.ts",
     "test:npc": "tsx test/npc.ts",
     "test:items": "tsx test/items.ts",
+    "preflight": "tsx server/tools/preflight.ts",
     "pregen": "tsx server/tools/pregen.ts",
     "backup": "tsx server/tools/backup.ts",
     "restore": "tsx server/tools/restore.ts",

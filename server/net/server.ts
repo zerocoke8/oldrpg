@@ -58,8 +58,11 @@ const MAX_SOCKETS = Number(process.env.MUD_MAX_SOCKETS ?? 200);
  *    무조건 믿으면 IP 단위 예산이 통째로 우회된다.
  *  ★ 그리고 '가장 왼쪽' 이 아니라 '오른쪽에서 n번째' 를 쓴다. 프록시는 자기가
  *    실제로 본 주소를 뒤에 덧붙이므로, 클라이언트가 위조해 보낸 값은 왼쪽에
- *    남고 우리 프록시가 본 진짜 주소가 맨 뒤에 붙는다. */
-const TRUST_PROXY = Number(process.env.MUD_TRUST_PROXY ?? 0);
+ *    남고 우리 프록시가 본 진짜 주소가 맨 뒤에 붙는다.
+ *  ★ 모듈 로드가 아니라 startServer 에서 읽는다. 값이 프로세스가 아니라
+ *    '이 서버' 의 것이어야 검사가 조합별로 돌릴 수 있고, 배포에서는 어차피
+ *    프로세스마다 서버가 하나라 달라지는 것이 없다. */
+const trustProxy = (): number => Number(process.env.MUD_TRUST_PROXY ?? 0);
 
 export interface Listening {
   wss: WebSocketServer;
@@ -67,6 +70,7 @@ export interface Listening {
 }
 
 export function startServer(ctx: Ctx, port: number, tx: (fn: () => void) => void): Listening {
+  const TRUST_PROXY = trustProxy();
   const serveStatic = makeStaticHandler({ root: process.env.MUD_STATIC ?? "dist" });
   const http = createServer(serveStatic);
   /* noServer: 업그레이드를 우리가 직접 받는다. 같은 포트에서 정적 파일과
@@ -98,13 +102,66 @@ export function startServer(ctx: Ctx, port: number, tx: (fn: () => void) => void
   /** 요청을 보낸 쪽의 주소. 프록시 뒤에서는 remoteAddress 가 프록시 것이라
    *  '전원이 한 버킷' 이 되어 서로를 flooding 으로 밀어낸다. */
   function clientIp(req: IncomingMessage): string {
+    const hops = xffHops(req);
     if (TRUST_PROXY > 0) {
-      const xff = req.headers["x-forwarded-for"];
-      const list = (Array.isArray(xff) ? xff.join(",") : (xff ?? "")).split(",").map((v) => v.trim());
-      const hop = list[list.length - TRUST_PROXY];
+      const hop = hops[hops.length - TRUST_PROXY];
       if (hop) return hop;
     }
     return req.socket.remoteAddress ?? "unknown";
+  }
+
+  /** X-Forwarded-For 를 홉 목록으로. 헤더가 없으면 빈 배열이다
+   *  (''.split(',') 은 [''] 이라, 거르지 않으면 '홉이 하나 있다' 가 된다). */
+  function xffHops(req: IncomingMessage): string[] {
+    const xff = req.headers["x-forwarded-for"];
+    return (Array.isArray(xff) ? xff.join(",") : (xff ?? ""))
+      .split(",")
+      .map((v) => v.trim())
+      .filter(Boolean);
+  }
+
+  /* ★ MUD_TRUST_PROXY 는 '배포해 보기 전에는 맞는지 모르는' 유일한 설정이다.
+     프록시가 X-Forwarded-For 를 어떻게 쌓는지는 프록시가 정하고, 우리는 홉 수를
+     숫자로 적을 뿐이다. 틀려도 아무 일도 안 일어난다 — 조용히 IP 예산이
+     무의미해질 뿐이고(전원이 한 버킷), 그건 누가 쏟아부을 때까지 안 보인다.
+
+     그래서 첫 연결에서 실제로 도착한 헤더를 한 줄로 찍는다. 배포 뒤 로그
+     한 줄을 읽으면 그 숫자가 맞는지 알 수 있다 — 추측이 측정이 된다.
+     한 번만 찍는 이유: 접속마다 찍으면 로그가 IP 목록이 되고, 그건 우리가
+     보관하겠다고 한 적 없는 것이다. */
+  let ipDiagnosed = false;
+  function diagnoseIp(req: IncomingMessage): void {
+    if (ipDiagnosed) return;
+    const hops = xffHops(req);
+    /* ★ 진단할 것이 없으면 말하지 않는다. 프록시도 없고 설정도 0 이면 (로컬
+       개발과 검사가 전부 여기다) 이 줄은 정보가 아니라 소음이고, 소음이
+       섞이면 진짜로 찍혔을 때 사람이 안 읽는다. */
+    if (TRUST_PROXY === 0 && hops.length === 0) return;
+    ipDiagnosed = true;
+    const chosen = clientIp(req);
+    console.log(
+      `[mud] IP 판정 (첫 연결 한 번만): MUD_TRUST_PROXY=${TRUST_PROXY} · ` +
+        `X-Forwarded-For=${hops.length ? hops.join(" | ") : "(없음)"} · ` +
+        `socket=${req.socket.remoteAddress ?? "?"} -> 쓰는 값 ${chosen}`,
+    );
+    /* 설정과 현실이 어긋나는 두 방향. 어느 쪽도 죽이지 않는다 — 판단은
+       사람이 하고, 여기서는 '무엇을 보고 그렇게 됐는가' 만 말한다. */
+    if (TRUST_PROXY > 0 && hops.length === 0) {
+      console.warn(
+        `[mud] ! X-Forwarded-For 가 없는데 MUD_TRUST_PROXY=${TRUST_PROXY} 다. ` +
+          "프록시 뒤가 아니거나 헤더 이름이 다르다 — 지금은 socket 주소로 떨어지고 있다.",
+      );
+    } else if (TRUST_PROXY > 0 && hops.length < TRUST_PROXY) {
+      console.warn(
+        `[mud] ! 홉이 ${hops.length}개뿐인데 MUD_TRUST_PROXY=${TRUST_PROXY} 다. ` +
+          `MUD_TRUST_PROXY=${hops.length} 가 맞다 — 지금은 socket 주소로 떨어지고 있다.`,
+      );
+    } else if (TRUST_PROXY === 0 && hops.length > 0) {
+      console.warn(
+        `[mud] ! 프록시 뒤인데 MUD_TRUST_PROXY=0 이다. 접속자 전원이 한 IP 버킷이 되어 ` +
+          `서로를 밀어낸다. 홉이 ${hops.length}개이니 MUD_TRUST_PROXY=${hops.length} 를 볼 것.`,
+      );
+    }
   }
 
   const socketsPerIp = new Map<string, number>();
@@ -140,6 +197,7 @@ export function startServer(ctx: Ctx, port: number, tx: (fn: () => void) => void
   }
 
   wss.on("connection", (socket, req: IncomingMessage) => {
+    diagnoseIp(req);
     const ip = clientIp(req);
     const open = (socketsPerIp.get(ip) ?? 0) + 1;
     socketsPerIp.set(ip, open);

@@ -26,9 +26,10 @@ const PKG = JSON.parse(readFileSync("package.json", "utf8")) as {
   dependencies?: Record<string, string>;
   engines?: { node?: string };
 };
-import { runPregen } from "../server/tools/pregen";
+import { planPregen, runPregen } from "../server/tools/pregen";
 import { runBackup } from "../server/tools/backup";
 import { runRestore } from "../server/tools/restore";
+import { runPreflight } from "../server/tools/preflight";
 import { openDb } from "../server/db/open";
 import { makeQueries } from "../server/db/queries";
 import { PROTOCOL_VERSION, type ServerMsg } from "../shared/protocol";
@@ -645,6 +646,297 @@ async function main() {
   for (const f of [BK, `${BK}.json`, RESTORE_DB, `${RESTORE_DB}-wal`, `${RESTORE_DB}-shm`]) {
     rmSync(f, { force: true });
   }
+
+
+  /* ── ⑨ 배포를 한 번에 되게 하는 것들 ───────────────────────────────
+   *
+   * ★ 이 절이 보는 것은 전부 **"실기 배포로만 닫힌다" 고 미뤄 뒀던 것** 이다.
+   *   미뤄 둔 것을 목록으로만 남기면 배포한 날 하나씩 터지고, 터질 때마다
+   *   한 사이클(빌드+배포+재현)을 쓴다. 그래서 넷을 측정 가능한 것으로
+   *   바꿨고, 아래가 그 넷이 실제로 측정을 하는지 본다:
+   *
+   *     ⑨-a  DB 를 못 열 때 '무엇이 왜' 가 로그에 있는가 (볼륨 소유권)
+   *     ⑨-b  MUD_TRUST_PROXY 가 맞는지를 서버가 스스로 말하는가
+   *     ⑨-c  선생성 견적이 실제로 부를 자리와 같은 수를 세는가
+   *     ⑨-d  npm run preflight 가 운영 콘텐츠로 실제 판정을 내는가 */
+  section("⑨-a DB 를 못 열면 '무엇이 왜' 가 남는다 (볼륨 소유권)");
+  /* ★ 이 실패의 압도적 다수는 fly 볼륨 소유권이고, 그때 나오던 것은
+     "SQLITE_CANTOPEN: unable to open database file" 한 줄이었다 — 경로도
+     uid 도 없다. 배포한 사람이 로그에서 볼 수 있는 것이 "안 된다" 뿐이면
+     그 한 번의 실패에 하루가 간다. */
+  let openErr = "";
+  try {
+    openDb(join(tmpdir(), `mud-nope-${process.pid}`, "sub", "mud.db"));
+  } catch (e) {
+    openErr = e instanceof Error ? e.message : String(e);
+  }
+  check("★ 디렉터리가 없으면 그 디렉터리를 이름으로 말한다",
+    openErr.includes("가 없다") && openErr.includes("mud-nope"), openErr.slice(0, 160));
+  check("드라이버가 한 말도 그대로 남는다 (문장으로 감싸되 삼키지 않는다)",
+    /를 열 수 없다 — \S.*/.test(openErr), openErr.slice(0, 160));
+
+  /* 소유권 갈래는 root 로 돌면 재현되지 않는다 (root 는 모드를 무시한다).
+     조용히 통과시키는 대신 건너뛴 것을 말한다 — '초록' 과 '안 돌았다' 는
+     다른 명제다. */
+  if (typeof process.getuid === "function" && process.getuid() === 0) {
+    console.log("  skip 소유권 갈래는 root 로는 재현되지 않는다 (모드를 무시한다)");
+  } else {
+    const ro = join(tmpdir(), `mud-ro-${process.pid}`);
+    rmSync(ro, { recursive: true, force: true });
+    mkdirSync(ro, { recursive: true, mode: 0o500 });
+    let roErr = "";
+    try {
+      openDb(join(ro, "mud.db"));
+    } catch (e) {
+      roErr = e instanceof Error ? e.message : String(e);
+    }
+    check("★ 쓸 수 없으면 소유·모드·이 프로세스의 uid 를 함께 말한다",
+      roErr.includes("소유") && roErr.includes("모드"), roErr.slice(0, 200));
+    rmSync(ro, { recursive: true, force: true });
+  }
+
+  section("⑨-b MUD_TRUST_PROXY — 서버가 그 값이 맞는지 스스로 말한다");
+  /* ★ 이 설정만은 배포하기 전에 맞는지 알 방법이 없다. 프록시가 XFF 를
+     어떻게 쌓는지는 프록시가 정하고 우리는 홉 수를 숫자로 적을 뿐이다.
+     그리고 틀려도 **아무 일도 일어나지 않는다** — 조용히 IP 예산이
+     무의미해질 뿐(전원이 한 버킷)이고, 그건 누가 쏟아부을 때까지 안 보인다.
+     그래서 첫 연결에서 실제로 도착한 헤더를 한 줄로 찍게 했고, 아래가
+     그 한 줄이 실제로 판정을 담는지 본다. */
+  const XDB = join(tmpdir(), `mud-xff-${process.pid}.db`);
+  const savedTrust = process.env.MUD_TRUST_PROXY;
+  let xffPort = PORT + 20;
+
+  /** 헤더를 붙여 한 번 붙었다 떼고, 그 사이의 콘솔을 통째로 돌려준다. */
+  const probeIp = async (trust: string | undefined, xff: string | null): Promise<string> => {
+    for (const f of [XDB, `${XDB}-wal`, `${XDB}-shm`]) rmSync(f, { force: true });
+    if (trust === undefined) delete process.env.MUD_TRUST_PROXY;
+    else process.env.MUD_TRUST_PROXY = trust;
+    const port = xffPort++;
+    const out: string[] = [];
+    const realLog = console.log;
+    const realWarn = console.warn;
+    console.log = (...a: unknown[]) => out.push(a.map(String).join(" "));
+    console.warn = (...a: unknown[]) => out.push(a.map(String).join(" "));
+    let srv: ReturnType<typeof boot> | null = null;
+    try {
+      srv = boot(XDB, port, { ...FIXTURE, llm: "off" });
+      const sock = new WebSocket(`ws://127.0.0.1:${port}/ws`, {
+        headers: xff ? { "x-forwarded-for": xff } : {},
+      });
+      await new Promise<void>((res, rej) => {
+        sock.once("open", () => res());
+        sock.once("error", rej);
+      });
+      await sleep(120);
+      sock.terminate();
+    } finally {
+      console.log = realLog;
+      console.warn = realWarn;
+      if (srv) await srv.close();
+    }
+    return out.join("\n");
+  };
+
+  const okHop = await probeIp("1", "9.9.9.9");
+  check("★ 프록시가 본 주소를 쓴다 (socket 이 아니라)",
+    okHop.includes("쓰는 값 9.9.9.9"), okHop.match(/IP 판정.*/)?.[0] ?? okHop.slice(-200));
+  check("맞게 설정되어 있으면 경고하지 않는다", !okHop.includes("[mud] !"),
+    okHop.match(/\[mud] !.*/)?.[0] ?? "");
+
+  /* ★ 보안의 핵심: '가장 왼쪽' 이 아니라 '오른쪽에서 n번째' 다. 왼쪽은
+     클라이언트가 마음대로 써서 보낼 수 있고, 우리 프록시가 본 진짜 주소는
+     맨 뒤에 붙는다. 홉이 둘이면 뒤에서 둘째가 클라이언트다. */
+  const twoHops = await probeIp("2", "1.1.1.1, 2.2.2.2");
+  check("★ 오른쪽에서 n번째를 쓴다 (왼쪽을 믿으면 위조로 예산을 통째로 우회한다)",
+    twoHops.includes("쓰는 값 1.1.1.1"), twoHops.match(/IP 판정.*/)?.[0] ?? "");
+
+  const tooMany = await probeIp("3", "1.1.1.1, 2.2.2.2");
+  check("★ 홉 수가 실제보다 크면 맞는 값을 말해 준다",
+    tooMany.includes("MUD_TRUST_PROXY=2 가 맞다"), tooMany.match(/\[mud] !.*/)?.[0] ?? "경고 없음");
+
+  const behindProxy = await probeIp("0", "1.1.1.1");
+  check("★ 프록시 뒤인데 0 이면 '전원이 한 버킷' 을 경고한다",
+    behindProxy.includes("한 IP 버킷"), behindProxy.match(/\[mud] !.*/)?.[0] ?? "경고 없음");
+
+  const noProxy = await probeIp("1", null);
+  check("헤더가 안 오면 프록시 뒤가 아니라고 말한다",
+    noProxy.includes("X-Forwarded-For 가 없는데"), noProxy.match(/\[mud] !.*/)?.[0] ?? "경고 없음");
+
+  /* ★ 진단할 것이 없으면 말하지 않는다. 접속마다 IP 를 찍으면 그건 우리가
+     보관하겠다고 한 적 없는 것이고, 소음에 섞이면 진짜로 찍혔을 때 안 읽는다. */
+  const quietCase = await probeIp("0", null);
+  check("★ 프록시도 설정도 없으면 한 줄도 찍지 않는다 (로컬·검사가 전부 여기다)",
+    !quietCase.includes("IP 판정"), quietCase.match(/IP 판정.*/)?.[0] ?? "");
+
+  if (savedTrust === undefined) delete process.env.MUD_TRUST_PROXY;
+  else process.env.MUD_TRUST_PROXY = savedTrust;
+  for (const f of [XDB, `${XDB}-wal`, `${XDB}-shm`]) rmSync(f, { force: true });
+
+  section("⑨-c 선생성 견적 — 부르기 전에 '몇 번, 얼마' 를 안다");
+  const PDB = join(tmpdir(), `mud-plan-${process.pid}.db`);
+  for (const f of [PDB, `${PDB}-wal`, `${PDB}-shm`]) rmSync(f, { force: true });
+  const planOpts = { ...FIXTURE, llm: "off" } as const;
+  const plan = await planPregen(PDB, planOpts, quiet, null);
+
+  /* ★ 예상이 세계를 바꾸면 그건 예상이 아니다. runPregen 의 1단계는 자리를
+     '만들어서' 확인하는데(폴백 행), 이쪽은 state_hash 를 직접 계산해 조회만
+     한다 — 그 차이가 실제로 지켜지는지 본다. */
+  const pdb = openDb(PDB);
+  const textRows = (pdb.prepare("SELECT count(*) AS n FROM room_text").get() as { n: number }).n;
+  const lineRows = (pdb.prepare("SELECT count(*) AS n FROM npc_lines").get() as { n: number }).n;
+  pdb.close();
+  check("★ --dry-run 은 room_text·npc_lines 에 한 행도 쓰지 않는다",
+    textRows === 0 && lineRows === 0, `${textRows} / ${lineRows}`);
+
+  /* ★ 이 절의 핵심 판정. 견적이 '다른 수' 를 세면 그건 견적이 아니라 소설이다.
+     같은 빈 DB 에 실제로 돌려서 큐에 들어간 자리 수와 대조한다. */
+  let planRoomCalls = 0;
+  let planNpcCalls = 0;
+  const real = await runPregen(
+    PDB,
+    {
+      ...planOpts,
+      llmRenderer: async (r: RoomTextRequest) => {
+        planRoomCalls++;
+        return { text: `[생성] ${r.seed}`, source: "llm" as const, model: "fake", promptVersion: "v" };
+      },
+      llmNpcRenderer: async (r: NpcLineRequest) => {
+        planNpcCalls++;
+        return { text: `[생성] ${r.seed}`, source: "llm" as const, model: "fake", promptVersion: "v" };
+      },
+    },
+    quiet,
+  );
+  check("★ 견적의 호출 수 = 실제로 큐에 들어간 자리 수",
+    plan.estimate.calls === real.queuedRooms + real.queuedLines,
+    `견적 ${plan.estimate.calls} vs 실제 ${real.queuedRooms}+${real.queuedLines}`);
+  check("★ 그리고 실제로 그만큼 불렀다",
+    planRoomCalls + planNpcCalls === plan.estimate.calls,
+    `${planRoomCalls}+${planNpcCalls} vs ${plan.estimate.calls}`);
+  check("방과 대사를 따로 센다 (합만 맞고 갈래가 틀린 것을 잡는다)",
+    plan.rooms.todo === real.queuedRooms && plan.lines.todo === real.queuedLines,
+    JSON.stringify([plan.rooms, plan.lines, real.queuedRooms, real.queuedLines]));
+
+  /* 이미 확정본이 박힌 DB 에 다시 물으면 부를 것이 없다 — 견적이 '남은
+     자리' 를 세는 것이지 '세계의 크기' 를 세는 것이 아니다. */
+  const planAgain = await planPregen(PDB, planOpts, quiet, null);
+  check("★ 확정본이 있으면 견적이 0 이다 (세계의 크기가 아니라 남은 자리다)",
+    planAgain.estimate.calls === 0, `${planAgain.estimate.calls}`);
+  check("총 자리 수는 그대로다 (0 이 된 것은 '할 일' 뿐이다)",
+    planAgain.rooms.total === plan.rooms.total && planAgain.lines.total === plan.lines.total,
+    JSON.stringify([planAgain.rooms, planAgain.lines]));
+
+  /* 입력 토큰: 키가 없으면 추정(폭 2배), 세는 사람이 있으면 실측(폭 0). */
+  check("키가 없으면 입력 토큰이 '추정' 이라고 말한다 (폭이 남는다)",
+    !plan.estimate.inputMeasured && plan.estimate.inputTokens.hi > plan.estimate.inputTokens.lo,
+    JSON.stringify(plan.estimate.inputTokens));
+
+  for (const f of [PDB, `${PDB}-wal`, `${PDB}-shm`]) rmSync(f, { force: true });
+  let counted = 0;
+  const stubCount = async (system: string, user: string): Promise<number> => {
+    counted++;
+    return Math.ceil((system.length + user.length) / 1.4);
+  };
+  const measured = await planPregen(PDB, planOpts, quiet, stubCount);
+  check("★ 셀 수 있으면 입력 토큰이 실측이 된다 (폭이 닫힌다)",
+    measured.estimate.inputMeasured &&
+      measured.estimate.inputTokens.lo === measured.estimate.inputTokens.hi,
+    JSON.stringify(measured.estimate.inputTokens));
+  check("표본만 센다 (자리마다 세면 얻는 것이 소수점뿐이다)",
+    counted > 0 && counted < measured.estimate.calls, `${counted}/${measured.estimate.calls}`);
+  check("실측이 추정 폭 안에 있다 (환산이 자릿수를 놓치지 않았다)",
+    measured.estimate.inputTokens.lo >= plan.estimate.inputTokens.lo &&
+      measured.estimate.inputTokens.lo <= plan.estimate.inputTokens.hi,
+    JSON.stringify([plan.estimate.inputTokens, measured.estimate.inputTokens]));
+
+  /* ★ 네트워크가 막힌 기계에서도 도구는 답을 내야 한다. 세다가 던지면
+     '견적 없음' 이 아니라 '추정' 으로 내려앉는다. */
+  for (const f of [PDB, `${PDB}-wal`, `${PDB}-shm`]) rmSync(f, { force: true });
+  const fellBack = await planPregen(PDB, planOpts, quiet, async () => {
+    throw new Error("네트워크 없음");
+  });
+  check("★ 세다가 실패하면 추정으로 내려앉는다 (도구가 죽지 않는다)",
+    !fellBack.estimate.inputMeasured && fellBack.estimate.calls === plan.estimate.calls,
+    JSON.stringify(fellBack.estimate.inputTokens));
+
+  /* 단가를 모르는 모델에 아무 단가나 끌어다 쓰면 그 순간 보고가 거짓말이 된다. */
+  const savedModel = process.env.MUD_MODEL;
+  process.env.MUD_MODEL = "claude-어딘가-9";
+  for (const f of [PDB, `${PDB}-wal`, `${PDB}-shm`]) rmSync(f, { force: true });
+  const unknown = await planPregen(PDB, planOpts, quiet, null);
+  check("★ 단가를 모르는 모델이면 값을 지어내지 않는다 (usd = null)",
+    unknown.estimate.usd === null, JSON.stringify(unknown.estimate.usd));
+  check("그래도 호출 수는 말한다 (그건 세계가 정하는 실측이다)",
+    unknown.estimate.calls === plan.estimate.calls);
+  if (savedModel === undefined) delete process.env.MUD_MODEL;
+  else process.env.MUD_MODEL = savedModel;
+
+  /* --limit: 견적의 출력 폭은 사고 토큰 때문에 추정뿐이라, 작게 한 번
+     돌려 봐야만 닫힌다. 그러려면 '정확히 N 개' 여야 한다. */
+  for (const f of [PDB, `${PDB}-wal`, `${PDB}-shm`]) rmSync(f, { force: true });
+  let limited = 0;
+  const trial = await runPregen(
+    PDB,
+    {
+      ...planOpts,
+      limit: 3,
+      llmRenderer: async (r: RoomTextRequest) => {
+        limited++;
+        return { text: `[생성] ${r.seed}`, source: "llm" as const, model: "fake", promptVersion: "v" };
+      },
+    },
+    quiet,
+  );
+  check("★ --limit 3 이 정확히 3 자리만 만든다 (시험 주행이 청구서를 안 연다)",
+    limited === 3 && trial.queuedRooms + trial.queuedLines === 3,
+    `${limited} / ${trial.queuedRooms}+${trial.queuedLines}`);
+  check("상한에 걸려 멈춘 것을 결과가 말한다", trial.stoppedEarly, JSON.stringify(trial));
+  /* ★ 여기서 leftoverFallback 을 '남은 일' 로 읽으면 안 된다. 손도 안 댄
+     자리는 room_text 에 행이 아예 없어서 그 수에 안 들어가고, 그래서 상한
+     주행 뒤의 "폴백 0행" 은 '다 됐다' 가 아니다 (이 검사가 그걸 잡았다).
+     남은 자리를 세는 것은 --dry-run 쪽이고, 그 둘이 어긋나면 안 된다. */
+  check("★ 그런데 폴백 행 수는 0 이다 — '남은 일' 의 척도가 아니다",
+    trial.leftoverFallback === 0, `${trial.leftoverFallback}행`);
+  const afterTrial = await planPregen(PDB, planOpts, quiet, null);
+  check("★ 남은 자리는 --dry-run 이 센다 (전체 − 만든 것)",
+    afterTrial.estimate.calls === plan.estimate.calls - 3,
+    `${afterTrial.estimate.calls} vs ${plan.estimate.calls} - 3`);
+  for (const f of [PDB, `${PDB}-wal`, `${PDB}-shm`]) rmSync(f, { force: true });
+
+  section("⑨-d preflight — 운영 콘텐츠로 실제 판정을 내린다");
+  /* ★ 왜 이게 검사로 부족하고 도구가 따로 필요한가: 검사는 test/fixture.ts 의
+     고정 세계로 돈다 (CLAUDE.md). 그래서 "지금 커밋의 **운영** 콘텐츠로
+     서버가 뜨는가" 를 구조적으로 볼 수 없다. 그 답을 알게 되는 자리가
+     지금까지는 fly deploy 뒤의 로그였다. */
+  const preLog: string[] = [];
+  /* ★ counter=null. 안 주면 키가 있는 기계에서만 count_tokens 로 네트워크에
+     나가고, 그러면 같은 커밋이 기계에 따라 다르게 돈다 — 키 없는 기계는
+     영원히 초록, 키 있는 기계는 가끔 빨강이고 그 빨강이 회귀가 아니다. */
+  const pre1 = await runPreflight((s) => preLog.push(s), null);
+  check("★ 지금 커밋의 운영 콘텐츠로 preflight 가 통과한다", pre1.ok,
+    preLog.filter((l) => l.includes("FAIL")).join(" | "));
+  check("빈 DB 에 마이그레이션이 전부 걸린다고 말한다",
+    preLog.some((l) => l.includes("스키마 v") && l.includes("시드")),
+    preLog.find((l) => l.includes("스키마")) ?? "없음");
+  check("배포 뒤에만 닫히는 것을 목록으로 남긴다 (조용히 빠뜨리지 않는다)",
+    preLog.some((l) => l.includes("/data 소유권")) &&
+      preLog.some((l) => l.includes("MUD_TRUST_PROXY")));
+
+  /* ★ 돌연변이: 운영 콘텐츠가 깨지면 빨개져야 한다. 안 그러면 이 도구는
+     '언제나 초록' 이고, 언제나 초록인 관문은 관문이 아니다. */
+  const savedWorld = process.env.MUD_WORLD;
+  process.env.MUD_WORLD = join(tmpdir(), `mud-no-world-${process.pid}`);
+  const mutLog: string[] = [];
+  const pre2 = await runPreflight((s) => mutLog.push(s), null);
+  if (savedWorld === undefined) delete process.env.MUD_WORLD;
+  else process.env.MUD_WORLD = savedWorld;
+  check("★ 운영 콘텐츠가 깨지면 preflight 가 빨개진다 (관문이 실재한다)",
+    !pre2.ok && pre2.fails > 0, JSON.stringify(pre2));
+  /* ★ 등급까지 본다. 문구만 보면 같은 줄이 '경고' 로 내려앉아도 통과하고,
+     그러면 이 검사가 등급을 하나도 안 지키게 된다 (돌연변이가 잡았다). */
+  check("그리고 그것을 '경고' 가 아니라 '실패' 로 말한다",
+    mutLog.some((l) => l.startsWith("  FAIL") && l.includes("부팅에서 죽는다")),
+    mutLog.filter((l) => l.includes("부팅에서 죽는다")).join(" | ") || "없음");
 
   section("⑦ 진짜 브라우저로 — 빌드된 클라이언트가 같은 오리진의 /ws 로 붙는다");
   /* ★ 이게 이번 작업의 진짜 시험대다. 브라우저 테스트(test/browser.ts)는
