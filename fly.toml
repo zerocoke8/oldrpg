@@ -21,7 +21,7 @@
 # ★ 아직 실기로 배포해 본 적이 없다. 아래 값 중 사람이 정해야 하는 것:
 #   app 이름 · primary_region · 볼륨 이름과 크기 · VM 크기.
 
-app = 'oldrpg'
+app = 'oldtextrpg'
 primary_region = 'nrt'
 
 [build]
