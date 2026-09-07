@@ -10,11 +10,12 @@
  *   그 방의 생성된 텍스트가 전부 캐시 미스가 된다. 형식을 옮기는 작업에서
  *   가장 조용히 일어날 수 있는 사고가 그것이다. */
 
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import WebSocket from "ws";
 import { loadWorld, loadBrief } from "../server/content/world";
+import { openDb } from "../server/db/open";
 import { makeMap, seedIdOf, type MapData } from "../server/engine/map";
 import { loadMoods, loadTones, loadVoice } from "../server/narration/prompts";
 import { lines } from "../server/narration/lines";
@@ -323,6 +324,37 @@ async function main() {
   }
   check("★ 밸런스가 켜는 플래그를 세계가 선언 안 하면 거절한다",
     crossErr.includes("선언되지 않은 플래그"), crossErr || "통과해 버렸다");
+
+  /* ★ 거절이 '깨끗한' 거절인가 — boot() 이 자기가 연 DB 를 닫고 던졌는가.
+     이 검사가 없으면 이 결함은 리눅스에서 영원히 안 보인다. POSIX unlink 는
+     열린 파일도 지우므로 아무 검사도 안 물고, 실제로 그래서 살아남았다.
+     윈도우에서만 EBUSY 로 드러났다 (test/balance.ts 와 이 파일의 rmSync) —
+     OS 가 다르면 증상이 다를 뿐, 누수는 양쪽 모두에서 진짜다.
+
+     그래서 파일이 아니라 **잠금** 에 묻는다. journal_mode 를 바꾸는 것은 배타
+     잠금을 요구하므로 다른 연결이 살아 있으면 SQLITE_BUSY 다 — 같은 프로세스의
+     두 연결에도 성립하고 OS 에 무관하다.
+
+     opened 가드: 나중에 boot 이 openDb '앞' 에서 거절하도록 바뀌면 이 탐침은
+     아무것도 못 보게 된다. 그때 조용히 초록이 되면 검사가 스스로 조건을 만든
+     것이므로, 그 경우를 실패로 말한다. */
+  const opened = existsSync(`${DB}.x`);
+  let leak = "";
+  if (!opened) {
+    leak = "boot() 이 openDb 앞에서 던졌다 — 이 탐침은 더 이상 누수를 못 본다";
+  } else {
+    const probe = openDb(`${DB}.x`);
+    probe.pragma("busy_timeout = 100"); // openDb 의 5초를 기다려 줄 이유가 없다
+    try {
+      probe.pragma("journal_mode = DELETE");
+    } catch (e) {
+      leak = e instanceof Error ? e.message : String(e);
+    } finally {
+      probe.close();
+    }
+  }
+  check("★ 부팅이 거절해도 DB 연결을 남기지 않는다", leak === "",
+    leak || "SQLITE_BUSY — boot() 이 던질 때 자기가 연 연결을 닫지 않았다");
   for (const f of [`${DB}.x`, `${DB}.x-wal`, `${DB}.x-shm`]) rmSync(f, { force: true });
 
   ws.close();

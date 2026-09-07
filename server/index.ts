@@ -117,6 +117,37 @@ export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
   const map = makeMap(options.world ?? loadWorld());
 
   const db = openDb(dbPath);
+  /* ★ 여기부터는 '우리가 연 핸들' 이 있다. 이 아래의 거절(migrate 의 버전 가드,
+     seed 의 assertWorldData — 배치된 적이 정의에 없다 · 선언되지 않은 플래그를
+     켠다 · MAX_SENSITIVE)은 전부 이 핸들을 쥔 채로 던진다.
+
+     ★ 닫지 않으면 '부팅이 거절했다' 가 곧 '연결이 영영 열린 채 남았다' 가 된다.
+       리눅스에서는 아무도 못 봤다 — POSIX unlink 는 열린 파일도 지운다. 윈도우는
+       EBUSY 를 내고, test/balance.ts 와 test/world.ts 가 정확히 그 자리에서
+       죽었다. OS 가 다르면 증상이 다를 뿐 누수는 양쪽 모두에서 진짜다.
+     ★ 몸통을 bootOn 으로 뽑은 것은 openDb 이후 '전부' 를 감싸면서 180줄을
+       통째로 들여쓰지 않기 위해서다. 나중에 startServer 뒤에 검증을 늘리는
+       사람도 이 catch 안에 있게 된다 — 그게 이 모양의 요점이다. */
+  try {
+    return bootOn(db, dbPath, port, options, clock, balance, map);
+  } catch (err) {
+    db.close();
+    throw err;
+  }
+}
+
+/** boot() 의 몸통. 열린 db 를 넘겨받아, 성공하면 그 db 를 닫을 책임까지 담은
+ *  객체를 돌려준다 (반환값의 close()). 던지면 닫는 것은 boot() 의 catch 다. */
+function bootOn(
+  db: ReturnType<typeof openDb>,
+  dbPath: string,
+  port: number,
+  options: BootOptions,
+  clock: () => number,
+  balance: Balance,
+  /* makeMap 의 반환(GameMap)이다. MapData 는 그 입력이라 다른 타입이다. */
+  map: ReturnType<typeof makeMap>,
+) {
   migrate(db, clock());
   const q = makeQueries(db);
   const { seededRooms, reaped } = seed(db, q, map, balance, clock());

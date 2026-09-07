@@ -5,3 +5,5 @@ dist/
 *.db-shm
 .env
 test/shots/
+dist.bak-test
+secret-not-served.txt

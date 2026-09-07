@@ -192,9 +192,44 @@ export async function runPreflight(
     }
   }
 
-  // ── ④ 비밀 ──────────────────────────────────────────────────────────
-  section("④ 비밀 — 키가 이미지나 커밋으로 새지 않는가");
-  /* ★ 이 절만은 '되돌릴 수 없는' 실패를 막는다. 나머지는 다시 배포하면
+  // ── ④ 이미지로 새는 것 ──────────────────────────────────────────────
+  section("④ 이미지로 새는 것 — 키와 줄바꿈");
+
+  /* ★ fly deploy 는 git 이 아니라 **작업 디렉터리**를 빌드 컨텍스트로 올린다
+     (Dockerfile 의 COPY . . + .dockerignore). 그래서 커밋된 바이트가 LF 여도
+     이 기계의 트리가 CRLF 면 CRLF 가 그대로 이미지에 실린다.
+     그게 실제로 하는 일: prompts.ts 의 sections() 가 절 본문의 CR 을 남겨
+     **모델에게 가는 문자열**에 실어 보낸다 (방 묘사 한 번에 22개). 지금은
+     sections() 가 한 번 더 막지만, 그건 안전망이지 정상 상태가 아니다.
+     ★ 이미 CRLF 로 받은 클론은 .gitattributes 를 pull 해도 스스로 안 고쳐진다
+       — git 은 기존 작업 파일을 재정규화하지 않기 때문이다. 그래서 여기서 본다. */
+  const crlfIn = (dir: string): string[] => {
+    const out: string[] = [];
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      if (e.name === "node_modules" || e.name.startsWith(".")) continue;
+      const p = join(dir, e.name);
+      if (e.isDirectory()) out.push(...crlfIn(p));
+      else if (/\.(ts|tsx|md|json|sql)$/.test(e.name) && readFileSync(p, "utf8").includes("\r\n")) {
+        out.push(p);
+      }
+    }
+    return out;
+  };
+  const crlf = ["server", "shared", "content"].flatMap(crlfIn);
+  if (existsSync("Dockerfile") && readFileSync("Dockerfile", "utf8").includes("\r\n")) {
+    crlf.push("Dockerfile");
+  }
+  say(crlf.length === 0 ? "ok" : "fail",
+    crlf.length === 0
+      ? "작업 트리가 LF 다 (이 디렉터리가 그대로 이미지가 된다)"
+      : `작업 트리에 CRLF 파일이 ${crlf.length}개 있다 — fly 는 이 디렉터리를 올린다`,
+    crlf.length === 0
+      ? ""
+      : `${crlf.slice(0, 3).join(", ")}${crlf.length > 3 ? " …" : ""}\n` +
+        "       git config core.autocrlf false && git rm --cached -r . -q && git reset --hard",
+  );
+
+  /* ★ 아래 셋은 '되돌릴 수 없는' 실패를 막는다. 나머지는 다시 배포하면
      되지만, 키가 이미지 레이어나 커밋에 한 번 굽히면 그 키는 죽은 키다. */
   const listed = (file: string, needle: string): boolean =>
     existsSync(file) &&

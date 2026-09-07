@@ -58,6 +58,12 @@ flag guardian_slain true
 
 ### 검증
 
+**이 저장소는 node 22 로 돈다.** `package.json` 의 `engines` 는 `>=22` 라고만 적혀
+있고 강제되지 않는데, 24 이상에서 `npm ci` 를 하면 `better-sqlite3` 의 프리빌드가
+없어 소스 컴파일로 떨어진다 — 윈도우에는 컴파일러가 없으므로 거기서 그대로
+실패한다 (실측: 프리빌드는 node 22 = ABI 127 까지 있고 24 = ABI 137 은 404).
+배포 이미지도 `node:22-slim` 이라, 22 로 맞추는 것이 곧 프로덕션과 같아지는 것이다.
+
 ```bash
 npm run typecheck     # tsc --strict
 npm run lint          # 규칙 1을 import 검사로 강제 (아래 참조)
@@ -69,15 +75,43 @@ npm run test:combat   # 4a단계: 전투·리스폰·쿨다운·구경꾼·협�
 npm run test:npc      # 4b단계: 대사 생성·주제 권한·재렌더링 (48개 검사)
 npm run test:items    # 인벤토리: 전리품·몫의 문턱·영속·건네기 (70개 검사)
 npm run test:balance  # 밸런스 계약: 난이도 곡선·임무 완주·사다리·예고 (54개 검사)
-npm run test:world    # 지역 데이터: 스키마·문 짝·톤·목소리·개요 (76개 검사)
+npm run test:world    # 지역 데이터: 스키마·문 짝·톤·목소리·개요·부팅 누수 (77개 검사)
 npm run test:guild    # 길드 등급: 판정·원자적 차감·영속·등급 문 (25개 검사)
 npm run test:missions # 임무: 게시·공로·원자적 제출·돌려주기 (83개 검사)
 npm run test:author   # 저작 도구: 덮어쓰지 않음·물어본 좌표만·문 잇기 (58개 검사)
 npm run test:accounts # 계정: 덧옷·무덤 토큰·기기 토큰·오라클 (39개 검사)
-npm run test:deploy   # 배포 배관: 이미지 표면·정적 서빙·경로탈출·백업/복원 (82개 검사)
+npm run test:deploy   # 배포 배관: 이미지 표면·정적 서빙·경로탈출·백업/복원 (127개 검사)
 npm run test:browser  # 진짜 크로미움 — 데스크톱 창 3개 + 모바일(390x844) 1개
 npm run test:all      # lint + typecheck + 위 전부
 ```
+
+### 윈도우에서
+
+이 저장소는 리눅스에서만 만들어졌고, 처음 윈도우에 클론했을 때 **검사 17개 중
+4개가 깨졌다.** 원인은 넷이었고 그중 둘은 리눅스에서도 진짜였던 제품 결함이다
+(`boot()` 이 거절할 때 DB 핸들을 남긴 것, `openDb` 가 SQLITE_NOTADB 를 감싸지도
+닫지도 않은 것). POSIX 의 `unlink` 가 열린 파일도 지워 주기 때문에 리눅스에서는
+아무 증상이 없었을 뿐이다 — **다른 OS 는 다른 검사기였다.**
+
+```bash
+# node 22 를 시스템 설치 없이 쓰는 법 (관리자 권한이 필요 없다)
+#   nodejs.org 의 win-x64 **zip** 을 풀고 PATH 앞에 둔다
+export PATH="$HOME/.node22:$PATH"   # Git Bash
+$env:Path = "$HOME\.node22;$env:Path"   # PowerShell
+```
+
+- **줄바꿈**: `.gitattributes` 가 작업 트리를 LF 로 고정한다. 이미 CRLF 로 받은
+  클론은 그 파일을 pull 해도 스스로 안 고쳐지므로(git 은 기존 파일을 재정규화하지
+  않는다) 한 번 `git config core.autocrlf false && git rm --cached -r . -q &&
+  git reset --hard`. `npm run preflight` ④ 가 이 상태를 본다 — `fly deploy` 는
+  작업 디렉터리를 그대로 빌드 컨텍스트로 올리기 때문이다.
+- **건너뛰는 검사 둘**: `test:deploy` 는 윈도우에서 125/127 이다. SIGTERM 우아한
+  종료(윈도우에 시그널이 없다)와 `/data` 소유권(윈도우에 POSIX 모드가 없다)은
+  둘 다 리눅스 컨테이너를 지키는 항목이라 리눅스에서 닫는다. 조용히 통과시키지
+  않고 `skip` 으로 찍는다 — '초록' 과 '안 돌았다' 는 다른 명제다.
+- **심링크**: `test/deploy.ts` ⓪-e 는 윈도우에서 정션을 쓴다. NT 심볼릭 링크는
+  관리자/개발자 모드를 요구해서 EPERM 으로 **던지고**, 그러면 검사 하나가
+  빨개지는 것이 아니라 실행이 통째로 끝난다.
 
 ---
 

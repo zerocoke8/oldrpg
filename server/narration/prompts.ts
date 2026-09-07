@@ -16,7 +16,18 @@ const PROMPTS = join(HERE, "prompts");
 
 /** `# 절이름` 으로 나뉜 마크다운을 { 절이름: 본문 } 으로. HTML 주석은 버린다. */
 function sections(md: string): Record<string, string> {
-  const body = md.replace(/<!--[\s\S]*?-->/g, "");
+  /* ★ CR 을 먼저 턴다. 이 함수는 "\n" 으로 자르고, buf.join("\n") 뒤의 trim 은
+     절의 '바깥쪽' 만 걷는다 — CRLF 파일에서는 본문 각 줄 끝의 CR 이 그대로 남아
+     **모델에게 가는 문자열**에 실린다 (방 묘사 한 번에 22개, 프롬프트 .md 16개
+     합계 199개). 절 이름은 헤더 정규식의 \s* 가 CR 을 먹어 멀쩡하고, 부팅도 안
+     죽고, 화면도 안 비어서 — 이 오염은 어디에서도 티가 나지 않는다.
+
+     .gitattributes 가 1차 방어선이지만 그것은 git 을 지나온 파일만 지킨다:
+     이미 CRLF 로 받아 버린 클론은 그 파일을 pull 해도 작업 트리가 다시 쓰이지
+     않고(git 은 기존 파일을 재정규화하지 않는다), 편집기가 CRLF 로 저장하는
+     경우도 남는다. 그래서 문자열을 만드는 이 자리에서 한 번 더 막는다.
+     LF 입력에는 무연산이다. */
+  const body = md.replace(/\r\n?/g, "\n").replace(/<!--[\s\S]*?-->/g, "");
   const out: Record<string, string> = {};
   let name: string | null = null;
   let buf: string[] = [];

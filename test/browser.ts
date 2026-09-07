@@ -106,13 +106,28 @@ async function main() {
     },
     queue: { concurrency: 2 },
   });
+  /* ★ host 를 박지 않으면 vite 는 "localhost" 라는 **이름**에 바인딩하고, 그
+     이름을 node 가 dns.lookup 으로 푼다. 윈도우에서는 그 결과가 ::1(IPv6) 이
+     먼저라 서버가 [::1]:5199 에만 붙고, 아래에서 127.0.0.1 로 붙는 브라우저는
+     ERR_CONNECTION_REFUSED 를 받는다. 리눅스에서는 localhost 가 127.0.0.1 로
+     풀려 이미 같은 주소였다 — 그래서 아무도 못 봤고, 고침은 그 결과를 명시할
+     뿐 리눅스의 바인딩 주소를 바꾸지 않는다. */
   const vite = await createVite({
     root: "client",
-    server: { port: WEB_PORT, strictPort: true },
+    server: { host: "127.0.0.1", port: WEB_PORT, strictPort: true },
     define: { "import.meta.env.VITE_MUD_WS": JSON.stringify(`ws://127.0.0.1:${WS_PORT}/ws`) },
     logLevel: "warn",
   });
   await vite.listen();
+  /* ★ 위 host 가 사라지면 '브라우저가 못 붙는다' 는 증상으로만 나타나고, 그건
+     클라이언트 버그와 구별되지 않는다. 무엇이 어긋났는지 이름을 붙여 둔다. */
+  const bound = vite.httpServer?.address();
+  if (!bound || typeof bound === "string" || bound.address !== "127.0.0.1") {
+    throw new Error(
+      `vite 가 127.0.0.1 이 아니라 ${JSON.stringify(bound)} 에 붙었다 — ` +
+        "server.host 를 확인할 것 (윈도우에서 localhost 는 ::1 로 풀린다)",
+    );
+  }
 
   /* 이 이미지에는 크로미움이 미리 깔려 있다. playwright 버전이 다른 빌드를
      기대할 수 있으므로, 있으면 그 실행 파일을 직접 가리킨다 (다운로드 금지). */

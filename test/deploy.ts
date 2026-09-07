@@ -7,7 +7,7 @@
  *   IP 예산   프록시 뒤에서 무너지지 않고, 거절이 카운터를 영구히 적립하지 않는다
  *   선생성    운영 시작 전에 초기 문장을 전부 박아 둘 수 있고, 여러 번 돌려도 안전하다 */
 
-import { mkdirSync, rmSync, writeFileSync, existsSync, renameSync, readFileSync, cpSync, statSync, symlinkSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync, existsSync, renameSync, readFileSync, cpSync, statSync, symlinkSync, readdirSync, lstatSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
 import { build } from "vite";
@@ -164,22 +164,60 @@ async function main() {
     JSON.stringify(ignorePatterns));
   check("(대조) dist 는 컨텍스트에서 빠진다 — 빌드 스테이지가 다시 만든다",
     ignored("dist"));
+  /* ★ 이 검사 자신이 저장소 루트에 남기는 것들도 컨텍스트에서 빠져야 한다.
+     fly deploy 는 git 이 아니라 **작업 디렉터리**를 빌드 컨텍스트로 올리므로
+     (COPY . . + .dockerignore), .gitignore 만으로는 이미지에 들어가는 것을
+     못 막는다. dist.bak-test 는 진짜 dist 의 통째 사본이고, .gitignore 의
+     `dist/` 도 .dockerignore 의 `dist` 도 그 이름을 매치하지 않는다. */
+  check("★ 이 검사가 남기는 잔해도 컨텍스트에서 빠진다 (dist.bak-test · secret-not-served.txt)",
+    ignored("dist.bak-test") && ignored("secret-not-served.txt"),
+    JSON.stringify(ignorePatterns));
 
   /* ⓪-c 런타임이 fs 로 읽는 뿌리가 전부 COPY 트리 안에 있는가.
      갱신법: grep -rn "readFileSync\|readdirSync\|createReadStream" server/ */
-  const FS_ROOTS: { path: string; why: string }[] = [
+  /* ★ 뿌리는 두 종류다. 다섯은 **커밋된 소스**라 저장소에 실재해야 하고,
+     없으면 `COPY . .` 이 못 가져가 이미지가 그 파일 없이 뜬다. dist 하나만
+     **빌드 스테이지가 만드는 산출물**이다 — .gitignore 되어 있고, 바로 위
+     ⓪-b 가 "컨텍스트에서 빠진다" 를 명시적으로 단언한다. 그래서 같은 경로에
+     대해 ⓪-b 는 '없어야 한다', ⓪-c 는 '있어야 한다' 를 동시에 요구하고 있었다.
+     뒤엣것은 커밋의 성질이 아니라 **기계의 성질**이다 — '이 기계가 전에 한 번
+     npm run build 를 했는가'. 갓 클론한 기계에서는 반드시 빨갛고, 빌드해 둔
+     기계에서는 항상 초록이라 아무것도 재지 않았다.
+     그래서 dist 에는 디스크를 묻지 않고, 대신 아래에서 '빌드 스테이지가 정말
+     만드는가' 를 더 강하게 묻는다. */
+  const FS_ROOTS: { path: string; why: string; built?: true }[] = [
     { path: "server/db/schema.sql", why: "migrate.ts 가 첫 부팅에 통째로 실행한다" },
     { path: "server/db/migrations", why: "migrate.ts 가 버전마다 읽는다" },
     { path: "server/narration/prompts", why: "prompts.ts — 프롬프트·톤·무드·목소리" },
-    { path: "dist", why: "net/static.ts 의 MUD_STATIC 기본값" },
+    { path: "dist", why: "net/static.ts 의 MUD_STATIC 기본값", built: true },
     { path: "content/world", why: "content/world.ts 의 DEFAULT_DIR" },
     { path: "content/balance", why: "content/balance.ts 의 DEFAULT_DIR" },
   ];
   for (const r of FS_ROOTS) {
     check(`런타임이 읽는 ${r.path} 가 이미지에 들어간다 (${r.why})`,
-      copyDests.includes(r.path.split("/")[0]!) && existsSync(r.path),
+      copyDests.includes(r.path.split("/")[0]!) && (r.built || existsSync(r.path)),
       JSON.stringify(copyDests));
   }
+
+  /* ★ dist 에서 뺀 조건(existsSync)을 더 약한 것으로 바꾸는 것이 아니라, 옳은
+     자리에 더 강하게 되돌린다. 지금까지 ⓪ 은 **이미지의 dist 가 언제 만들어
+     지는지를 한 줄도 확인하지 않았다** — 빌드 스테이지에서 `RUN npm run build`
+     를 통째로 지워도 아무 검사도 물지 않았다 (낡은 dist/ 가 있는 기계에서는
+     ⓪-c 마저 초록이었다). 세 가지를 함께 본다:
+       1) 빌드 스테이지(첫 FROM ~ 두 번째 FROM) 안에서 build 를 돌리는가
+       2) 그 build 가 정말 클라이언트를 굽는가 (package.json 의 vite build)
+       3) COPY 의 **원본 경로**가 그 산출물인가 (/app/dist → /app/client/dist
+          같은 돌연변이는 목적지만 보면 안 잡힌다) */
+  const buildStage = dockerfile.slice(
+    dockerfile.indexOf("FROM"),
+    dockerfile.indexOf("FROM", dockerfile.indexOf("FROM") + 4),
+  );
+  const buildRuns = buildStage.split("\n").filter((l) => /^RUN\s/.test(l));
+  check("★ dist 는 빌드 스테이지가 만든다 (저장소에 없으므로 여기가 유일한 출처다)",
+    buildRuns.some((l) => /npm run build\b/.test(l)) &&
+      /vite build/.test(PKG.scripts.build ?? "") &&
+      /^COPY\s+--from=build\s+\/app\/dist\s/m.test(dockerfile),
+    JSON.stringify({ buildRuns: buildRuns.map((l) => l.replace(/\r/g, "")), build: PKG.scripts.build }));
 
   /* ⓪-d prune --omit=dev 뒤에도 남아야 할 것이 dependencies 에 있는가. */
   const bare = new Set<string>();
@@ -237,7 +275,11 @@ async function main() {
        realpath 로 해소해 import.meta.url 이 저장소의 실제 경로가 되고,
        ../../content 가 저장소의 content/ 를 가리켜 **트리에 없어도 초록**이
        된다. node_modules 만 심링크한다 (패키지 해소는 importer 의 realpath
-       에서 위로 올라가므로 폐포 밖으로 새지 않는다). */
+       에서 위로 올라가므로 폐포 밖으로 새지 않는다).
+       ★ 윈도우에서 갈리는 것은 링크의 '종류' 뿐이고(권한 때문에 정션이다),
+         이 금지는 정션에도 그대로 걸린다 — node 는 정션도 realpath 로 해소하고,
+         content 는 애초에 fs 가 재분석 지점을 그냥 따라간다. 즉 '무엇을
+         링크하는가' 는 플랫폼으로 갈리지 않는다. 아래 검사가 그것을 못 박는다. */
   const IMG = join(tmpdir(), `mud-img-${process.pid}`);
   const IMG_DB = join(tmpdir(), `mud-img-${process.pid}.db`);
   rmSync(IMG, { recursive: true, force: true });
@@ -249,11 +291,29 @@ async function main() {
   mkdirSync(join(IMG, "dist"), { recursive: true });
   writeFileSync(join(IMG, "dist/index.html"), "<!doctype html><title>img</title>");
   mkdirSync(join(IMG, "node_modules"), { recursive: true });
+  /* ★ 윈도우에서 type="dir" 은 NT 심볼릭 링크이고 SeCreateSymbolicLinkPrivilege
+     (관리자 또는 개발자 모드)를 요구한다 — 없으면 EPERM 으로 **던져서** main()
+     이 여기서 통째로 끝난다 (검사 하나가 빨개지는 것이 아니다). 정션은 같은
+     자리에서 권한 없이 만들어지고 디렉터리에만 쓸 수 있다.
+     비-win32 에서는 "dir" 로 평가돼 이전과 글자 그대로 같다 (POSIX 의 node 는
+     이 인자를 애초에 무시한다). */
+  const LINK_TYPE = process.platform === "win32" ? "junction" : "dir";
   for (const name of [...prodClosure].sort()) {
     const dst = join(IMG, "node_modules", name);
     mkdirSync(join(dst, ".."), { recursive: true });
-    if (!existsSync(dst)) symlinkSync(resolve("node_modules", name), dst, "dir");
+    if (!existsSync(dst)) symlinkSync(resolve("node_modules", name), dst, LINK_TYPE);
   }
+  /* ★ 링크해도 되는 것은 node_modules 뿐이라는 규약을 주석이 아니라 검사로
+     못 박는다 (.eslintrc.cjs 머리: "강제는 부르는 사람이 있어야 강제다").
+     server/shared/content 를 링크로 때우면 node 가 ESM 을 realpath 로 해소해
+     import.meta.url 이 저장소의 실제 경로가 되고, ../../content 가 저장소의
+     content/ 를 가리켜 **트리에 파일이 없어도 초록**이 된다. 링크 종류가
+     플랫폼 분기가 된 지금 그 구멍을 밟을 확률이 올라갔다. */
+  const linkedTop = readdirSync(IMG, { withFileTypes: true })
+    .filter((e) => lstatSync(join(IMG, e.name)).isSymbolicLink())
+    .map((e) => e.name);
+  check("★ IMG 의 최상위에는 링크가 하나도 없다 (링크는 node_modules 안에만 있다)",
+    linkedTop.length === 0, JSON.stringify(linkedTop));
   const IMG_PORT = PORT + 1;
   const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
     cwd: IMG,
@@ -285,8 +345,23 @@ async function main() {
   }
   child.kill("SIGTERM");
   for (let i = 0; i < 50 && exitCode === null; i++) await sleep(100);
-  check("★ SIGTERM 에 우아하게 exit 0 (CMD 가 래퍼 프로세스가 아니다)",
-    exitCode === 0, `exit=${exitCode} ${childErr.slice(-300)}`);
+  /* ★ 이 검사는 POSIX 에서만 뜻이 있다. 윈도우에는 시그널이 없어서
+     child.kill("SIGTERM") 이 TerminateProcess 로 내려가고, 자식은 핸들러를
+     돌릴 기회 없이 죽는다 (exit=null · signal=SIGTERM). 거기서 "exit 0" 을
+     요구하면 영원히 빨갛고, 그 빨강은 회귀가 아니라 플랫폼이다 — 사람이
+     빨강을 무시하는 법을 배우는 자리가 된다.
+     그렇다고 조용히 통과시키지도 않는다. 배포 대상은 리눅스 컨테이너이므로
+     '우아한 종료' 는 리눅스에서 닫아야 하는 항목이고, 윈도우에서는 그 사실을
+     말한다. */
+  if (process.platform === "win32") {
+    check("종료 신호에 프로세스가 실제로 끝난다 (우아한 종료는 리눅스에서 닫는다)",
+      exitCode !== null || child.killed,
+      `exit=${exitCode} killed=${child.killed}`);
+    console.log("  skip ★ SIGTERM 에 우아하게 exit 0 — 윈도우에는 POSIX 시그널이 없다 (배포 대상은 리눅스다)");
+  } else {
+    check("★ SIGTERM 에 우아하게 exit 0 (CMD 가 래퍼 프로세스가 아니다)",
+      exitCode === 0, `exit=${exitCode} ${childErr.slice(-300)}`);
+  }
   if (exitCode === null) child.kill("SIGKILL");
   rmSync(IMG, { recursive: true, force: true });
   for (const f of [IMG_DB, `${IMG_DB}-wal`, `${IMG_DB}-shm`]) rmSync(f, { force: true });
@@ -686,11 +761,46 @@ async function main() {
   check("드라이버가 한 말도 그대로 남는다 (문장으로 감싸되 삼키지 않는다)",
     /를 열 수 없다 — \S.*/.test(openErr), openErr.slice(0, 160));
 
-  /* 소유권 갈래는 root 로 돌면 재현되지 않는다 (root 는 모드를 무시한다).
-     조용히 통과시키는 대신 건너뛴 것을 말한다 — '초록' 과 '안 돌았다' 는
-     다른 명제다. */
-  if (typeof process.getuid === "function" && process.getuid() === 0) {
-    console.log("  skip 소유권 갈래는 root 로는 재현되지 않는다 (모드를 무시한다)");
+  /* ★ SQLite 는 게으르게 연다 — 파일이 SQLite 가 아니면 new Database 가 아니라
+     첫 PRAGMA 에서 터진다. 그 갈래가 감싸이지 않아 사람이 읽는 문장 대신
+     "file is not a database" 한 줄만 남았고, 핸들까지 샜다. 손상된 /data/mud.db
+     를 만나는 바로 그 순간의 경로다. */
+  const NOTDB = join(tmpdir(), `mud-notadb-${process.pid}.db`);
+  writeFileSync(NOTDB, "이 파일은 SQLite 가 아니다");
+  let notdbErr = "";
+  try {
+    openDb(NOTDB);
+  } catch (e) {
+    notdbErr = e instanceof Error ? e.message : String(e);
+  }
+  check("★ SQLite 가 아닌 파일도 사람이 읽는 문장으로 거절한다 (첫 PRAGMA 에서 터진다)",
+    notdbErr.includes("를 열 수 없다") && notdbErr.includes(NOTDB), notdbErr.slice(0, 160));
+  let notdbLeak = "";
+  try {
+    rmSync(NOTDB, { force: true });
+  } catch (e) {
+    notdbLeak = (e as NodeJS.ErrnoException).code ?? String(e);
+  }
+  check("★ 그리고 핸들을 남기지 않는다 (남으면 그 파일을 치울 수 없다)",
+    notdbLeak === "", `${notdbLeak} — openDb 가 PRAGMA 에서 던질 때 db.close() 를 안 했다`);
+
+  /* 소유권 갈래는 '쓸 수 없는 디렉터리' 를 만들 수 있어야 재현된다. 그게 안 되는
+     환경이 둘 있고, 조용히 통과시키는 대신 건너뛴 것을 말한다 — '초록' 과
+     '안 돌았다' 는 다른 명제다.
+       root      모드를 무시한다.
+       윈도우    POSIX 모드가 없다. mkdirSync 의 mode 0o500 은 무시되고
+                 디렉터리는 그냥 쓸 수 있다 — openDb 가 **성공**해 버린다.
+                 (그러면 검사가 빨개지는 데 그치지 않고, 열린 핸들이 남아
+                  바로 아래 rmSync 가 EBUSY 로 실행을 끝낸다.)
+     이 갈래가 지키는 것은 리눅스 컨테이너의 /data 소유권이므로, 리눅스에서
+     닫히면 된다. */
+  const cannotMakeReadOnly =
+    process.platform === "win32" || (typeof process.getuid === "function" && process.getuid() === 0);
+  if (cannotMakeReadOnly) {
+    console.log(
+      `  skip 소유권 갈래 — ${process.platform === "win32" ? "윈도우에는 POSIX 모드가 없다" : "root 는 모드를 무시한다"}` +
+        " (지키는 대상은 리눅스의 /data 다)",
+    );
   } else {
     const ro = join(tmpdir(), `mud-ro-${process.pid}`);
     rmSync(ro, { recursive: true, force: true });

@@ -63,11 +63,30 @@ export function openDb(path: string): Db {
     /* 원인은 그대로 매달아 둔다 — 위의 문장은 사람용이고, 스택은 도구용이다. */
     throw new Error(explainOpenFailure(path, err), { cause: err });
   }
-  db.pragma("journal_mode = WAL");
-  db.pragma("foreign_keys = ON"); // SQLite 기본값이 OFF 다. room_text 의 FK 는 실효성이 있다.
-  db.pragma("synchronous = NORMAL"); // WAL 과 짝. 커밋마다 fsync 하지 않는다.
-  // 하드 크래시 시 마지막 몇 건의 위치 쓰기를 잃을 수 있고, 그건 방 한 칸
-  // 물러나는 것이므로 수용한다. 이게 "이동마다 write-through" 를 공짜로 만든다.
-  db.pragma("busy_timeout = 5000"); // 3단계에 워커가 붙을 때를 위해 지금부터.
+  /* ★ SQLite 는 게으르게 연다. 파일이 SQLite 가 아니면 new Database 가 아니라
+     **첫 PRAGMA** 에서 SQLITE_NOTADB 로 터진다 — 그래서 위의 catch 가 그 경우를
+     못 잡았고, 두 가지가 함께 어긋났다:
+       (1) 사람이 읽는 문장 대신 드라이버 한 줄("file is not a database")만 남는다.
+           explainOpenFailure 가 있는 이유가 바로 그 한 줄을 없애는 것이었다.
+       (2) 핸들이 남는다. 손상된 /data/mud.db 를 치우려는 바로 그 순간
+           윈도우에서는 EBUSY 가 되고, 리눅스에서는 조용히 새는 채로 죽는다.
+     도달 가능한 경로다: 볼륨의 파일이 손상되거나, 엉뚱한 파일을 MUD_DB 로
+     가리키거나, 복원하다 만 사본이 그 자리에 있으면 여기로 온다. */
+  try {
+    db.pragma("journal_mode = WAL");
+    db.pragma("foreign_keys = ON"); // SQLite 기본값이 OFF 다. room_text 의 FK 는 실효성이 있다.
+    db.pragma("synchronous = NORMAL"); // WAL 과 짝. 커밋마다 fsync 하지 않는다.
+    // 하드 크래시 시 마지막 몇 건의 위치 쓰기를 잃을 수 있고, 그건 방 한 칸
+    // 물러나는 것이므로 수용한다. 이게 "이동마다 write-through" 를 공짜로 만든다.
+    db.pragma("busy_timeout = 5000"); // 3단계에 워커가 붙을 때를 위해 지금부터.
+  } catch (err) {
+    /* 닫기의 실패가 진짜 원인을 덮어서는 안 된다. */
+    try {
+      db.close();
+    } catch {
+      /* 이미 닫혔거나 닫을 수 없다 */
+    }
+    throw new Error(explainOpenFailure(path, err), { cause: err });
+  }
   return db;
 }

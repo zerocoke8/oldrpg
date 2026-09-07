@@ -6,3 +6,5 @@ dist
 *.db-wal
 *.db-shm
 test/shots
+dist.bak-test
+secret-not-served.txt
