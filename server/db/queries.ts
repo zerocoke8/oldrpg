@@ -137,7 +137,7 @@ export function makeQueries(db: Db) {
        ON CONFLICT (npc_id, topic, state_hash) DO NOTHING`,
     ),
     upgradeNpcLineFromFallback: db.prepare(
-      `UPDATE npc_lines SET text = @text, source = 'llm', model = @model,
+      `UPDATE npc_lines SET text = @text, source = @source, model = @model,
                             prompt_version = @prompt_version, updated_at = @now
        WHERE npc_id = @npc_id AND topic = @topic AND state_hash = @state_hash
          AND source = 'fallback'`,
@@ -175,7 +175,7 @@ export function makeQueries(db: Db) {
     /** 2단계에서 폴백을 LLM 확정본으로 승급시킨다. WHERE source='fallback' 이
      *  "딱 한 번" 을 표현하는 절이다 — 0행 매치는 오류가 아니다. */
     upgradeRoomTextFromFallback: db.prepare(
-      `UPDATE room_text SET text = @text, source = 'llm', model = @model,
+      `UPDATE room_text SET text = @text, source = @source, model = @model,
                             prompt_version = @prompt_version, updated_at = @now
        WHERE room_id = @room_id AND state_hash = @state_hash AND source = 'fallback'`,
     ),

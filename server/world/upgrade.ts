@@ -158,6 +158,11 @@ export function makeUpgradeService(
     // WHERE source='fallback' 이 "딱 한 번" 을 표현하는 절이다.
     // 0행 매치는 오류가 아니라 "남이 먼저 확정했다" 이다.
     q.upgradeRoomTextFromFallback.run({
+      /* ★ 렌더러가 선언한 출처를 그대로 쓴다. 전에는 SQL 이 'llm' 을 박아
+         두어서, 사람이 쓴 문장(authored)도 모델이 쓴 것으로 기록됐다 —
+         schema.sql 의 CHECK 는 처음부터 셋을 허용하고 있었는데 한 값이
+         도달할 수 없었다. */
+      source: result.source,
       text: result.text,
       model: result.model,
       prompt_version: result.promptVersion,
@@ -206,6 +211,7 @@ export function makeUpgradeService(
     if (result.source === "fallback") throw new Error(`렌더러가 폴백을 반환했다: ${key}`);
 
     q.upgradeNpcLineFromFallback.run({
+      source: result.source, // 방과 같은 이유 (위 주석)
       text: result.text,
       model: result.model,
       prompt_version: result.promptVersion,

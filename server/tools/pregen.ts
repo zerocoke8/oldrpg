@@ -290,15 +290,39 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  if (!(process.env.ANTHROPIC_API_KEY ?? process.env.ANTHROPIC_AUTH_TOKEN)) {
+  /* ★ --authored: 모델 대신 content/authored/ 의 손으로 쓴 문장을 박는다.
+     큐·멱등성·보고는 그대로 쓴다 — 갈리는 것은 렌더러 하나뿐이다. 그래서
+     "여러 번 돌려도 안전하다" 도, "폴백이 남으면 실패다" 도 그대로 성립한다.
+     키는 필요 없다 (호출이 아예 없다). */
+  const authored = args.includes("--authored");
+  if (!authored && !(process.env.ANTHROPIC_API_KEY ?? process.env.ANTHROPIC_AUTH_TOKEN)) {
     console.error(
       "ANTHROPIC_API_KEY 가 없다. 선생성은 '진짜 문장' 을 미리 박아 두는 것이 목적이라,\n" +
         "키 없이 돌면 폴백 행만 채운다 — 그건 첫 입장이 어차피 하는 일이다.\n" +
-        ".env 를 만들고 다시 돌릴 것. (부르지 않고 견적만: --dry-run)",
+        ".env 를 만들고 다시 돌릴 것. (부르지 않고 견적만: --dry-run,\n" +
+        " 손으로 쓴 문장을 박으려면: --authored)",
     );
     process.exit(1);
   }
-  const r = await runPregen(db, limit === null ? {} : { limit });
+  const opts: PregenOptions = limit === null ? {} : { limit };
+  if (authored) {
+    const { loadAuthored, makeAuthoredRenderer, makeAuthoredNpcRenderer } = await import(
+      "../narration/authored"
+    );
+    const { makeStaticRenderer, makeStaticNpcRenderer } = await import("../narration/static");
+    const { loadMoods, loadTails, loadTones } = await import("../narration/prompts");
+    const moods = loadMoods();
+    const tails = loadTails();
+    const bank = loadAuthored();
+    console.log(`[pregen] --authored: 방 ${bank.rooms.size}자리 · 대사 ${bank.npc.size}자리 (${bank.version})`);
+    /* 쓰인 것이 없는 자리는 폴백으로 떨어진다. 그러면 승급이 'fallback' 을
+       다시 써서 아무 일도 안 일어난 것이 되고, 아래 leftoverFallback 이
+       그만큼 남아 정확히 '아직 안 쓴 자리 수' 를 말한다. */
+    opts.llm = "off";
+    opts.llmRenderer = makeAuthoredRenderer(makeStaticRenderer(moods, tails, loadTones()), bank);
+    opts.llmNpcRenderer = makeAuthoredNpcRenderer(makeStaticNpcRenderer(moods, tails), bank);
+  }
+  const r = await runPregen(db, opts);
   console.log(`[pregen] 끝. 완료 ${r.done} · 실패 ${r.failed} · 포기 ${r.givenUp}`);
   /* ★ --limit 은 '남기는' 것이 목적이라 폴백이 남아도 실패가 아니다.
      여기서 1 로 끝내면 시험 주행이 언제나 빨갛고, 사람이 빨강을 무시하는
