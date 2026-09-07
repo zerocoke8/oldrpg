@@ -1,9 +1,12 @@
 /* 미니맵. 인수 조건 1이 눈에 보이는 곳이다.
  *
- * 프로토타입의 격자를 그대로 쓰되, 다른 플레이어의 점이 추가됐다.
- * 다른 플레이어는 '안개와 무관하게' 그린다 — 서버가 보내준 presence 는
- * 이미 "내가 볼 수 있는 사람" 으로 걸러진 것이므로, 클라이언트가 두 번째
- * 가시성 판정을 하면 서버와 어긋날 뿐이다.
+ * 프로토타입의 격자를 그대로 쓰되, 다른 플레이어의 점과 적이 나오는 자리가
+ * 추가됐다. 다른 플레이어에 대해 클라이언트는 가시성 판정을 하지 않는다 —
+ * 서버가 보내준 presence 는 이미 "내가 볼 수 있는 사람" 으로 걸러진 것이라,
+ * 여기서 두 번째 판정을 하면 서버와 어긋날 뿐이다.
+ *
+ * ★ 안개는 걷었다. 지역 안에서는 전부 보인다. 지역 '밖' 의 지도가 아예 오지
+ *   않는 것(서버측 안개)은 그대로다 — 그건 관심영역의 상한이지 연출이 아니다.
  *
  * ★ 5단계: 붙어 있는 칸을 누르면 그쪽으로 한 칸 간다 (모바일 조작).
  *   한 칸까지다 — 여러 칸 경로를 클라이언트가 계산하기 시작하면 그것은
@@ -12,22 +15,19 @@
  *   앞을 막는다" 고 답하는 것이 D패드와 완전히 같은 경로다 (규칙 1). */
 
 import type { Dir, Pos } from "../../shared/ids";
-import { roomIdOf } from "../../shared/ids";
-import type { Action, PlayerBrief, RegionView, SelfState } from "../../shared/protocol";
+import type { Action, PlayerBrief, RegionView } from "../../shared/protocol";
 import { C, win } from "../theme";
-import { isSeen } from "../state/store";
 
 const CELL = 16;
 
 export function Minimap(props: {
   region: RegionView;
-  self: SelfState;
   /** 화면에 그릴 '예측' 위치. self.pos(확정)와 다를 수 있다. */
   at: Pos;
   others: { player: PlayerBrief; pos: Pos }[];
   act: (a: Action) => void;
 }) {
-  const { region, self, at, others, act } = props;
+  const { region, at, others, act } = props;
 
   const othersAt = new Map<string, PlayerBrief[]>();
   for (const o of others) {
@@ -55,22 +55,20 @@ export function Minimap(props: {
     return null;
   };
 
-  /* 안개 칸도 '보이게' 그린다. 완전 투명으로 두면 격자 자체가 사라져서
-     내가 지도의 어디쯤에 있는지 알 수 없다. 벽인지 바닥인지는 여전히
-     감추므로 안개의 의미는 그대로다.
+  /* ★ 안개를 걷었다. 전에는 밟아 본 칸만 벽/바닥을 구분해 그렸다.
+     안개가 사는 이유는 '무엇이 기다리는지 모른다' 는 긴장인데, 이 게임에서
+     그 긴장은 방에 들어갔을 때의 묘사와 전투가 만든다. 지도가 감추는 것은
+     긴장이 아니라 같은 길을 두 번 걷게 만드는 불편이었다.
 
-     ★ 적이 배치되지 않은 지역(region.hostile === false)에서는 안개를 걷는다.
-       안개가 사는 이유는 '무엇이 기다리는지 모른다' 는 긴장인데, 전투가
-       일어날 수 없는 곳에는 그 긴장이 없다 — 남는 것은 마을에서 길을 두 번
-       걷게 만드는 불편뿐이다. 서버가 지역 타일을 어차피 전부 보내므로
-       (그게 '한 지역 = 관심영역' 이라는 서버측 안개다) 이건 순수한 렌더링
-       결정이고, 프로토콜이 나르는 것은 늘지 않는다. */
-  const bg = (x: number, y: number): string => {
-    const seen = !region.hostile || isSeen(self, roomIdOf({ region: region.id, x, y }));
-    if (!seen) return "#141c3a";
-    if (tile(x, y) === "#") return "#2b3563";
-    return "#5b6bab";
-  };
+     서버가 지역 타일을 전에도 전부 보내고 있었으므로(그게 '한 지역 =
+     관심영역' 이라는 서버측 안개다) 이것은 순수한 렌더링 결정이다 —
+     프로토콜이 나르는 것은 늘지 않는다. 지역 밖의 지도는 여전히 안 온다.
+     self.seen 은 그대로 살아 있다: '탐색한 방 N' 이 그것을 쓴다. */
+  const bg = (x: number, y: number): string => (tile(x, y) === "#" ? "#2b3563" : "#5b6bab");
+
+  /** 적이 배치된 칸. '지금 살아 있는가' 가 아니라 '여기서 나온다' 다 —
+   *  장소의 성질이라 변하지 않고, 그래서 스냅샷 한 번으로 충분하다. */
+  const foes = new Set(region.foes);
 
   return (
     <div style={{ ...win, padding: 8 }}>
@@ -85,11 +83,15 @@ export function Minimap(props: {
           Array.from({ length: region.width }).map((__, x) => {
             const here = sameRegion && x === at.x && y === at.y;
             const guests = othersAt.get(`${x},${y}`) ?? [];
+            const foe = foes.has(`${x},${y}`);
             const dir = dirTo(x, y);
             return (
               <div
                 key={`${x}-${y}`}
-                title={guests.map((g) => g.name).join(", ") || undefined}
+                title={
+                  [...guests.map((g) => g.name), ...(foe ? ["적이 나오는 자리"] : [])].join(", ") ||
+                  undefined
+                }
                 {...(dir
                   ? {
                       role: "button",
@@ -105,7 +107,11 @@ export function Minimap(props: {
                   borderRadius: 2,
                   // 내 칸은 배경색, 남은 점(dot). 같은 칸에 겹쳐도 둘 다 보인다 —
                   // 인수 조건이 정확히 그 상황("같은 방")이므로 여기가 중요하다.
-                  background: here ? C.gold : bg(x, y),
+                  //
+                  // 적이 나오는 칸은 바닥을 붉게 물들인다. 가운데에 그리지 않는
+                  // 이유: 거기는 사람의 자리다. 같은 칸에 사람과 적이 겹쳐도
+                  // 둘 다 보여야 하고, 그건 정확히 흔한 상황이다.
+                  background: here ? C.gold : foe ? "#6b3340" : bg(x, y),
                   outline: guests.length ? `2px solid ${C.other}` : "none",
                   outlineOffset: -2,
                   cursor: dir ? "pointer" : "default",

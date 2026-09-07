@@ -180,6 +180,15 @@ async function main() {
   check("A 화면에 '서쪽으로 사라졌다'", aLog2.some((t) => t.includes("서쪽으로 사라졌다")));
   const bLog2 = await logText(b);
   check("B 화면에 새 방의 묘사가 떴다 (Phase B)", bLog2.some((t) => t.includes("물방울")));
+  /* ★ 방을 옮기면 지난 방의 묘사는 걷힌다. 다섯 칸을 걸으면 묘사가 다섯 개
+     쌓이고 지금 서 있는 곳의 문장이 그 더미 아래에 묻힌다 — 읽으라고 만든
+     문장이 읽기 어려워진다. */
+  check("★ 지난 방의 묘사는 사라졌다 (지금 있는 곳의 문장이 묻히지 않는다)",
+    !bLog2.some((t) => t.includes("석조 교차로")), JSON.stringify(bLog2));
+  /* ★ 그런데 걷어내는 것은 묘사뿐이다. 말·전투·시스템 문구까지 지우면
+     그건 편의가 아니라 손실이다 — 걸었다고 방금 나눈 대화가 사라지면 안 된다. */
+  check("★ 묘사가 아닌 줄은 남는다 (로그를 통째로 비우지 않는다)",
+    bLog2.some((t) => t.includes("서 있다")), JSON.stringify(bLog2));
   await a.screenshot({ path: join(SHOTS, "2-A가본-이동.png") });
   await b.screenshot({ path: join(SHOTS, "3-B가본-새방.png") });
 
@@ -226,8 +235,11 @@ async function main() {
   // 아무도 가 본 적 없는 방으로 간다 — (4,3). 앞 절들이 (3,3)/(2,3) 만 밟았다.
   // 이미 확정된 방으로 가면 처음부터 생성본이 오므로 (그것도 정상이다)
   // '폴백 -> 교체' 를 볼 수 없다.
+  /* ★ 뱃지는 '화면에 지금 몇 개인가' 로 센다. 예전에는 이동 '전후의 차이' 로
+     쟀는데, 그건 지난 방의 묘사가 로그에 쌓여 있다는 전제 위에 있었다.
+     방을 옮기면 지난 묘사를 걷어내는 지금은 그 전제가 없다 — 그리고 이 절이
+     묻는 것도 원래 '지금 있는 줄이 폴백인가' 였지 개수 변화가 아니었다. */
   const badges = () => c.locator("text=새로 생성됨").count();
-  const badgesBefore = await badges();
   await c.keyboard.press("ArrowRight");
   await c.waitForSelector("text=부서진 갑옷 조각", { timeout: 5000 });
   const early = await logText(c);
@@ -235,7 +247,7 @@ async function main() {
   check("모델을 기다리지 않고 새 방 묘사가 먼저 떴다",
     early.some((t) => t.includes("부서진 갑옷 조각")));
   check("그 줄에는 아직 '새로 생성됨' 뱃지가 없다 (폴백이다)",
-    (await badges()) === badgesBefore, `${badgesBefore} -> ${await badges()}`);
+    (await badges()) === 0, `뱃지 ${await badges()}개: ${JSON.stringify(early)}`);
   await c.screenshot({ path: join(SHOTS, "6-폴백-먼저.png") });
 
   await sleep(LLM_MS + 900);
@@ -245,7 +257,7 @@ async function main() {
   check("그 줄의 내용이 생성본으로 바뀌었다",
     late.some((t) => t.includes("갑옷") && t.includes("물방울이 떨어지는 소리가 길게 이어진다")),
     JSON.stringify(late));
-  check("'새로 생성됨' 뱃지가 켜졌다", (await badges()) > badgesBefore);
+  check("'새로 생성됨' 뱃지가 켜졌다", (await badges()) === 1, `뱃지 ${await badges()}개`);
   await c.screenshot({ path: join(SHOTS, "7-교체-후.png") });
 
   console.log("\n⑨ 4a단계 — 실시간 전투 (진짜 시계로)");

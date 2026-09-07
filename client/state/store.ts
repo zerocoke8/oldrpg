@@ -128,12 +128,34 @@ export function reduce(st: UiState, m: ServerMsg | LocalMsg): UiState {
       // 출처가 생겨, 늦게 도착한 패치가 이미 정산된 위치를 되감는다).
       return st;
 
-    case "room.describe":
+    case "room.describe": {
       // 방이 바뀌면 대화창은 닫힌다. 서버가 '닫아라' 를 보내지 않는 이유는
       // 그럴 필요가 없기 때문이다 — 방에 그 NPC 가 없다는 구조화 사실에서
       // 순수하게 파생된다. (그래도 권위는 서버다: 닫히지 않은 창으로 물어도
       // world/dialogue.ts 가 같은 방인지 다시 본다.)
-      return { ...st, room: m.room, dialogue: keepDialogue(st.dialogue, m.room) };
+      //
+      /* ★ 다른 방으로 옮겼으면 **지난 방의 묘사**를 걷어낸다. 다섯 칸을
+         걸으면 로그에 묘사가 다섯 개 쌓이고, 지금 서 있는 곳의 문장은 그
+         더미의 맨 아래에 묻힌다 — 읽으라고 만든 문장이 읽기 어려워진다.
+
+         걷어내는 것은 'narr' 뿐이다. 말·외침·전투 결과·시스템 문구는 남는다:
+         걸었다고 방금 나눈 대화가 사라지면 그건 편의가 아니라 손실이다.
+
+         ★ 'room.describe 가 왔다' 가 아니라 '방 id 가 달라졌다' 로 판정한다.
+           이 메시지는 부활할 때도, 적이 돌아와 방의 구조가 바뀔 때도 온다
+           (index.ts 의 setOnRoomChanged). 그때는 같은 방이므로 지우지 않는다.
+
+         ★ 지운 줄에 대한 log.replace 가 뒤늦게 와도 안전하다 — 아래 map 이
+           id 를 못 찾고 아무 일도 하지 않는다. 승급이 늦게 도착하는 것은
+           2단계의 정상 동작이라 이 경우가 실제로 생긴다. */
+      const moved = st.room !== null && st.room.roomId !== m.room.roomId;
+      return {
+        ...st,
+        room: m.room,
+        dialogue: keepDialogue(st.dialogue, m.room),
+        ...(moved ? { log: st.log.filter((l) => l.kind !== "narr") } : {}),
+      };
+    }
 
     case "self.patch":
       if (!st.self) return st;

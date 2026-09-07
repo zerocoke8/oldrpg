@@ -235,7 +235,7 @@ export default function App() {
   return (
     <div style={shell}>
       <div style={{ display: "flex", gap: 10 }}>
-        <Minimap region={st.region} self={st.self} at={at} others={others} act={act} />
+        <Minimap region={st.region} at={at} others={others} act={act} />
         <Status
           self={st.self}
           region={st.region}

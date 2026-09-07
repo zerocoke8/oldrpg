@@ -114,14 +114,16 @@ export interface RegionSlice {
   width: number;
   height: number;
   tiles: string[];
-  /** 이 지역에 적 배치가 하나라도 있는가. 미니맵의 안개가 여기에 달렸다.
+  /** 적이 **배치된** 칸들 (`"x,y"`). 미니맵이 여기에 표시를 찍는다.
    *
-   *  ★ 왜 데이터에서 파생하고 지역 파일에 플래그를 두지 않는가: 플래그는
-   *    현실과 어긋날 수 있다 — '안전하다' 고 적어 두고 적을 하나 놓으면
-   *    거짓말이 되고, 아무도 안 알려 준다. 배치가 비어 있다는 것은 그 지역에서
-   *    전투가 **일어날 수 없다** 는 뜻이라 어긋날 여지가 없다.
-   *    (지역에 적을 하나 놓으면 그 순간 안개가 돌아온다. 그게 맞는 동작이다.) */
-  hostile: boolean;
+   *  ★ '지금 살아 있는 적' 이 아니라 '배치' 다. 살아 있는지는 시시각각 변하고
+   *    (전투·리스폰) 그걸 지도에 실시간으로 반영하려면 밀어 주는 경로가
+   *    새로 필요하다. 반면 배치는 지역 데이터라 변하지 않으므로 스냅샷 한 번에
+   *    실려 나가면 끝이다. 지도가 말하는 것도 그쪽이 맞다 — "여기서 뭔가
+   *    나온다" 는 장소의 성질이고, "지금 서 있는가" 는 방에 들어가면 안다.
+   *  ★ 스포일러가 아니다: 격자와 벽/바닥은 전에도 전부 실려 있었고, 씨앗도
+   *    문장도 여기 없다 (프로토콜 불변식 2). 적의 정체도 안 나간다 — 좌표뿐이다. */
+  foes: string[];
 }
 
 const sha = (s: string, n: number): string =>
@@ -328,7 +330,7 @@ export function makeMap(data: MapData): GameMap {
         width: Math.max(...r.tiles.map((t) => t.length)),
         height: r.tiles.length,
         tiles: [...r.tiles],
-        hostile: Object.keys(r.enemies).length > 0,
+        foes: Object.keys(r.enemies).sort(),
       };
     },
   };
