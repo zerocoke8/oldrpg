@@ -470,6 +470,32 @@ async function main() {
     snap1.self.seen.some((r) => r.startsWith("b1:")) &&
       snap1.self.seen.some((r) => r.startsWith("b2:")));
 
+  /* ④' 안개를 걷을지는 '적 배치가 있는가' 가 정한다.
+     안개가 사는 이유는 '무엇이 기다리는지 모른다' 는 긴장이고, 전투가 일어날
+     수 없는 지역에는 그 긴장이 없다 — 남는 것은 마을에서 길을 두 번 걷게
+     만드는 불편뿐이다. 그래서 클라이언트가 그 한 칸을 안 가리는데, 무엇을
+     보고 정하는지가 여기서 갈린다.
+     ★ 지역 파일의 플래그가 아니라 배치에서 파생하는 이유: 플래그는 현실과
+       어긋날 수 있고(안전하다고 적어 두고 적을 놓으면 거짓말이다) 아무도
+       안 알려 준다. 배치가 비었다는 것은 어긋날 수 없는 사실이다. */
+  const noFoes: MapData = {
+    ...FIXTURE_WORLD,
+    regions: FIXTURE_WORLD.regions.map((r) => (r.id === "b2" ? { ...r, enemies: {} } : r)),
+  };
+  const foes = makeMap(FIXTURE_WORLD);
+  const safe = makeMap(noFoes);
+  check("★ 적이 배치된 지역은 hostile 이다 (안개가 남는다)",
+    foes.view("b2").hostile === true, JSON.stringify(foes.view("b2").hostile));
+  check("★ 적 배치를 비우면 hostile 이 아니다 (안개를 걷는다)",
+    safe.view("b2").hostile === false, JSON.stringify(safe.view("b2").hostile));
+  check("다른 지역은 그대로다 (지역마다 따로 판정한다)",
+    safe.view("b1").hostile === true && safe.view("b3").hostile === true);
+  /* ★ 안개를 걷는 것이 '더 보낸다' 는 뜻이면 안 된다. 격자는 전에도 전부
+     실려 있었고(그게 '한 지역 = 관심영역' 이라는 서버측 안개다), 이 결정은
+     순수한 렌더링이다. 프로토콜이 나르는 것이 늘면 불변식 2 가 흔들린다. */
+  check("★ 타일은 두 경우가 글자 그대로 같다 (더 보내는 것이 아니다)",
+    JSON.stringify(safe.view("b2").tiles) === JSON.stringify(foes.view("b2").tiles));
+
   // ── ⑤ 관심영역 ─────────────────────────────────────────────────────
   section("⑤ 관심영역 — 다른 지역의 사람은 보이지 않는다");
   alice.clear();

@@ -114,6 +114,14 @@ export interface RegionSlice {
   width: number;
   height: number;
   tiles: string[];
+  /** 이 지역에 적 배치가 하나라도 있는가. 미니맵의 안개가 여기에 달렸다.
+   *
+   *  ★ 왜 데이터에서 파생하고 지역 파일에 플래그를 두지 않는가: 플래그는
+   *    현실과 어긋날 수 있다 — '안전하다' 고 적어 두고 적을 하나 놓으면
+   *    거짓말이 되고, 아무도 안 알려 준다. 배치가 비어 있다는 것은 그 지역에서
+   *    전투가 **일어날 수 없다** 는 뜻이라 어긋날 여지가 없다.
+   *    (지역에 적을 하나 놓으면 그 순간 안개가 돌아온다. 그게 맞는 동작이다.) */
+  hostile: boolean;
 }
 
 const sha = (s: string, n: number): string =>
@@ -320,6 +328,7 @@ export function makeMap(data: MapData): GameMap {
         width: Math.max(...r.tiles.map((t) => t.length)),
         height: r.tiles.length,
         tiles: [...r.tiles],
+        hostile: Object.keys(r.enemies).length > 0,
       };
     },
   };

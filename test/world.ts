@@ -161,6 +161,19 @@ async function main() {
     check(`${r.id}: 브리프에 개요가 있다`, (b.overview ?? "").trim().length >= 100,
       `${(b.overview ?? "").length}자 — 없으면 authorRegion 이 모델로 새로 만든다`);
   }
+  /* ①⁗ 미니맵의 안개는 '적 배치가 있는가' 에서 파생된다 (test/regions.ts ④' 가
+     그 규칙 자체를 본다). 여기서 보는 것은 **운영 세계가 실제로 그 규칙과
+     맞물려 있는가** 다 — 규칙이 맞아도 모든 지역에 적이 있으면 이 기능은
+     아무 데서도 안 켜지고, 그건 코드가 아니라 세계가 결정한다. */
+  const safeRegions = map.regions().filter((r) => !map.view(r.id).hostile).map((r) => r.id);
+  check("★ 안개를 걷는 지역이 실제로 있다 (없으면 이 기능은 죽은 코드다)",
+    safeRegions.length > 0, `비전투 지역: ${safeRegions.join(", ") || "없음"}`);
+  for (const r of map.regions()) {
+    const placed = Object.keys(r.enemies).length;
+    check(`${r.id}: hostile 이 적 배치와 일치한다 (적 ${placed})`,
+      map.view(r.id).hostile === placed > 0);
+  }
+
   section("② 씨앗은 한 글자도 바뀌지 않았다 (규칙 3)");
   /* seed_id 는 내용 파생이다 — 하나라도 어긋나면 그 방의 생성된 텍스트가
      전부 날아간다.

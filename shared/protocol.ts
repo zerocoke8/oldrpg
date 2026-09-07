@@ -252,6 +252,11 @@ export interface RegionView {
   width: number;
   height: number;
   tiles: string[];
+  /** 이 지역에 적 배치가 있는가. false 면 미니맵이 안개를 걷는다 —
+   *  전투가 일어날 수 없는 곳에서 지도를 감추는 것은 긴장이 아니라 불편이다.
+   *  (스포일러가 아니다: 격자와 벽/바닥은 어차피 전부 실려 있었고,
+   *   씨앗도 문장도 여기 없다 — 프로토콜 불변식 2 는 그대로다.) */
+  hostile: boolean;
 }
 
 /** 방의 구조화 상태. 프로즈는 한 글자도 없다. */

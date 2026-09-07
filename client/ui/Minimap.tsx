@@ -57,9 +57,16 @@ export function Minimap(props: {
 
   /* 안개 칸도 '보이게' 그린다. 완전 투명으로 두면 격자 자체가 사라져서
      내가 지도의 어디쯤에 있는지 알 수 없다. 벽인지 바닥인지는 여전히
-     감추므로 안개의 의미는 그대로다. */
+     감추므로 안개의 의미는 그대로다.
+
+     ★ 적이 배치되지 않은 지역(region.hostile === false)에서는 안개를 걷는다.
+       안개가 사는 이유는 '무엇이 기다리는지 모른다' 는 긴장인데, 전투가
+       일어날 수 없는 곳에는 그 긴장이 없다 — 남는 것은 마을에서 길을 두 번
+       걷게 만드는 불편뿐이다. 서버가 지역 타일을 어차피 전부 보내므로
+       (그게 '한 지역 = 관심영역' 이라는 서버측 안개다) 이건 순수한 렌더링
+       결정이고, 프로토콜이 나르는 것은 늘지 않는다. */
   const bg = (x: number, y: number): string => {
-    const seen = isSeen(self, roomIdOf({ region: region.id, x, y }));
+    const seen = !region.hostile || isSeen(self, roomIdOf({ region: region.id, x, y }));
     if (!seen) return "#141c3a";
     if (tile(x, y) === "#") return "#2b3563";
     return "#5b6bab";
