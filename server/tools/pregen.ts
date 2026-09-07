@@ -35,6 +35,8 @@
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { boot, type BootOptions } from "../index";
+import { openDb } from "../db/open";
+import type { Authored } from "../narration/authored";
 import { loadMoods, loadNpcPrompt, loadRoomPrompt, loadTones, regionOfRoomId } from "../narration/prompts";
 import { moodTextFor } from "../narration/static";
 import { topicOf } from "../engine/npcs";
@@ -257,6 +259,33 @@ export async function planPregen(
   }
 }
 
+/** --redo 의 알맹이. 손으로 쓴 문장이 있는 자리의 '손으로 쓰지 않은' 행을 지운다.
+ *
+ *  ★ 지우는 범위가 이 함수의 전부다. authored 가 **있는** 자리만 본다 —
+ *    아직 안 쓴 자리의 생성본은 지워도 되는 것이 아니라 돈을 주고 산 것이다.
+ *    state_hash 를 가리지 않는 이유는 반대다: 플래그가 바뀐 옛 상태의 행도
+ *    같은 자리의 낡은 캐시이므로 함께 지운다.
+ *  ★ 이미 authored 인 행은 남긴다 (source != 'authored'). 지웠다 다시 쓰면
+ *    updated_at 만 흔들리고 결과는 같다. */
+export function dropStaleAuthoredSlots(dbPath: string, bank: Authored): number {
+  const conn = openDb(dbPath);
+  try {
+    const dropRoom = conn.prepare("DELETE FROM room_text WHERE room_id = ? AND source != 'authored'");
+    const dropNpc = conn.prepare(
+      "DELETE FROM npc_lines WHERE npc_id = ? AND topic = ? AND source != 'authored'",
+    );
+    let gone = 0;
+    for (const roomId of bank.rooms.keys()) gone += dropRoom.run(roomId).changes;
+    for (const key of bank.npc.keys()) {
+      const i = key.indexOf("/");
+      if (i > 0) gone += dropNpc.run(key.slice(0, i), key.slice(i + 1)).changes;
+    }
+    return gone;
+  } finally {
+    conn.close();
+  }
+}
+
 /* tsx 로 이 파일을 '직접' 실행할 때만 돈다. 테스트는 runPregen 을 부른다. */
 const isEntry = (() => {
   const arg = process.argv[1];
@@ -321,6 +350,20 @@ async function main(): Promise<void> {
     opts.llm = "off";
     opts.llmRenderer = makeAuthoredRenderer(makeStaticRenderer(moods, tails, loadTones()), bank);
     opts.llmNpcRenderer = makeAuthoredNpcRenderer(makeStaticNpcRenderer(moods, tails), bank);
+
+    /* ★ --redo: 손으로 쓴 문장이 있는 자리는 **이미 확정된 것도** 다시 쓴다.
+       승급은 WHERE source='fallback' 이라, 그 자리에 모델이 만든 행이 이미
+       있으면 건너뛴다. 그건 모델끼리는 옳은 규칙이지만(생성은 딱 한 번),
+       사람이 일부러 쓴 문장이 캐시보다 아래일 이유는 없다.
+
+       지우는 것은 **authored 가 있는 자리**의 authored 아닌 행뿐이다. 아직
+       안 쓴 자리의 생성본은 건드리지 않는다 — 그건 지워도 되는 것이 아니라
+       돈을 주고 산 것이다. state_hash 를 가리지 않고 그 자리를 통째로 지우는
+       이유는 플래그가 바뀐 옛 상태의 행도 함께 낡았기 때문이다. */
+    if (args.includes("--redo")) {
+      const gone = dropStaleAuthoredSlots(db, bank);
+      console.log(`[pregen] --redo: 손으로 쓴 자리의 옛 행 ${gone}개를 지웠다 (파일이 원본이다)`);
+    }
   }
   const r = await runPregen(db, opts);
   console.log(`[pregen] 끝. 완료 ${r.done} · 실패 ${r.failed} · 포기 ${r.givenUp}`);

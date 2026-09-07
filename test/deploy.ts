@@ -26,7 +26,8 @@ const PKG = JSON.parse(readFileSync("package.json", "utf8")) as {
   dependencies?: Record<string, string>;
   engines?: { node?: string };
 };
-import { planPregen, runPregen } from "../server/tools/pregen";
+import { dropStaleAuthoredSlots, planPregen, runPregen } from "../server/tools/pregen";
+import type { Authored } from "../server/narration/authored";
 import { runBackup } from "../server/tools/backup";
 import { runRestore } from "../server/tools/restore";
 import { runPreflight } from "../server/tools/preflight";
@@ -1050,6 +1051,42 @@ async function main() {
   check("★ 남은 자리는 --dry-run 이 센다 (전체 − 만든 것)",
     afterTrial.estimate.calls === plan.estimate.calls - 3,
     `${afterTrial.estimate.calls} vs ${plan.estimate.calls} - 3`);
+
+  /* ★ --redo: 손으로 쓴 문장이 있는 자리는 이미 확정된 것도 다시 쓴다.
+     승급이 WHERE source='fallback' 이라, 그 자리에 모델이 만든 행이 이미 있으면
+     건너뛴다 — 모델끼리는 옳은 규칙이지만(생성은 딱 한 번) 사람이 일부러 쓴
+     문장이 캐시보다 아래일 이유는 없다.
+     ★ 이 검사의 요점은 지우는 **범위**다. 안 쓴 자리의 생성본까지 지우면
+       그건 편의가 아니라 돈을 버리는 것이다 (실제 운영에서 22방이 그 상태였다). */
+  for (const f of [PDB, `${PDB}-wal`, `${PDB}-shm`]) rmSync(f, { force: true });
+  const bank: Authored = {
+    version: "authored.test",
+    rooms: new Map([["b1:3,3", [{ when: {}, text: "손으로 쓴 문장이다." }]]]),
+    npc: new Map(),
+  };
+  await runPregen(
+    PDB,
+    {
+      ...planOpts,
+      llmRenderer: async (r: RoomTextRequest) => ({
+        text: `[모델] ${r.seed}`, source: "llm" as const, model: "fake", promptVersion: "v",
+      }),
+    },
+    quiet,
+  );
+  const rdb = openDb(PDB);
+  const before = rdb.prepare("SELECT count(*) AS n FROM room_text WHERE source='llm'").get() as { n: number };
+  rdb.close();
+  const dropped = dropStaleAuthoredSlots(PDB, bank);
+  const adb = openDb(PDB);
+  const left = adb.prepare("SELECT count(*) AS n FROM room_text WHERE source='llm'").get() as { n: number };
+  const mine = adb.prepare("SELECT count(*) AS n FROM room_text WHERE room_id='b1:3,3'").get() as { n: number };
+  adb.close();
+  check("★ 손으로 쓴 자리의 옛 행만 지운다", dropped === 1 && mine.n === 0,
+    `지운 것 ${dropped} · 그 방의 남은 행 ${mine.n}`);
+  check("★ 안 쓴 자리의 생성본은 건드리지 않는다 (그건 돈을 주고 산 것이다)",
+    left.n === before.n - 1, `${before.n} -> ${left.n}`);
+
   for (const f of [PDB, `${PDB}-wal`, `${PDB}-shm`]) rmSync(f, { force: true });
 
   section("⑨-d preflight — 운영 콘텐츠로 실제 판정을 내린다");
