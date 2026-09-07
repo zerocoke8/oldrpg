@@ -1097,17 +1097,19 @@ fly secrets set ANTHROPIC_API_KEY="$(cat)" --app <앱이름>   # 붙여넣고 Ct
 #   ★ .env 를 통째로 넣지 말 것. MUD_DB 줄이 섞이면 이미지의 /data/mud.db 를
 #     덮어써서 DB 가 볼륨 밖에 생기고, 재배포마다 세계가 사라진다
 
-# 4. 배포. --ha=false 는 머신이 2대로 뜨는 것을 막는다 (플래그를 모른다고 하면 뺀다)
+# 4. 배포. ★ --ha 의 기본값이 true 다 (flyctl 0.4.99 에서 확인) — 그냥 배포하면
+#    예비 머신이 하나 더 뜨고, 이 앱에서 그건 세계가 둘이라는 뜻이다
 fly deploy --ha=false --app <앱이름>
+#    로컬에 도커가 없으면 --remote-only 를 더한다
 
 # 5. ★ 다른 어떤 확인보다 먼저 — 머신 1개 · 볼륨 1개. 둘이면 세계가 둘이다
 fly status --app <앱이름>
 fly volumes list --app <앱이름>
 fly scale count 1 --app <앱이름>          # 2대일 때만
 
-# 6. 첫 부팅 로그를 눈으로 읽는다. ★ grep 에 파이프하지 말 것 —
-#    fly logs 는 tail 이라 끝나지 않고, 버퍼링 때문에 '성공' 과 '미출력' 이 같아 보인다
-fly logs --app <앱이름>                    # 읽고 Ctrl-C
+# 6. 첫 부팅 로그. ★ --no-tail(-n) 을 붙인다. 안 붙이면 스트리밍이라 끝나지 않고,
+#    grep 에 물리면 버퍼링 때문에 '성공' 과 '미출력' 이 같아 보인다
+fly logs --no-tail --app <앱이름>
 #   [db] schema v1 -> v2 … v5 -> v6   네이티브 애드온이 살아 있다
 #   [mud] … db=/data/mud.db · rooms=164 (시드 164행)   볼륨 위 DB 를 열었다
 #   [mud] 서술: 방=claude-opus-5 …    키가 실렸다 ('폴백' 이면 3번이 안 된 것)
@@ -1116,10 +1118,11 @@ fly logs --app <앱이름>                    # 읽고 Ctrl-C
 
 # 7. 브라우저로 두 탭. 그 다음에야 홉 수가 로그에 찍힌다 (첫 ws 연결에 한 번)
 open https://<앱이름>.fly.dev
-fly logs --app <앱이름>                    # "IP 판정" 줄을 찾는다
+fly logs --no-tail --app <앱이름> | grep "IP 판정"
 #   ★ 경고가 없다고 맞는 것이 아니다. '쓰는 값' 이 접속자의 공인 IP 인지로 판정한다
 
-# 8. 선생성. -C 는 셸을 안 거칠 수 있으므로 대화형으로 들어가서 친다
+# 8. 선생성. 진행 로그를 봐야 하므로 대화형으로 들어간다
+#    (ssh 는 기본이 root 다 — `-u node` 로 바꿀 수 있다. 아래 10번을 볼 것)
 fly ssh console --app <앱이름>
   cd /app                                  # ★ 없으면 npm error enoent
   npm run pregen -- --dry-run              # 무료. db= 가 /data/mud.db 인지 볼 것
@@ -1134,6 +1137,14 @@ fly ssh sftp get /data/backups/mud-<시각>-<해시>.db
 fly ssh sftp get /data/backups/mud-<시각>-<해시>.db.json    # ★ 매니페스트도
 MUD_DB=/tmp/verify.db npm run restore -- ./mud-<시각>-<해시>.db --dry-run
 #   '적중 방 164/164 (100%)' 까지 봐야 그 파일이 진짜 백업이다
+
+# 10. 소유권 되돌리기. ssh 는 root 로 붙으므로 8·9번의 도구가 만든 파일이
+#     root 소유로 남고, uid 1000 으로 도는 서버가 다음 재시작에서 못 읽는다
+fly ssh console --app <앱이름> -C "ls -ln /data"          # 1000 이 아닌 것이 있나
+fly ssh console --app <앱이름> -C "chown -R 1000:1000 /data"
+fly machines restart <머신ID> --app <앱이름>
+fly logs --no-tail --app <앱이름>   # "를 열 수 없다" 가 없고, schema 줄도 없어야 한다
+#   ★ schema 줄이 다시 찍히면 볼륨이 안 붙은 것이다 (새 DB 를 만든 것)
 ```
 
 **`fly launch` 가 아니라 `fly apps create` 인 이유**: `fly.toml` 은 손으로 쓴
@@ -1144,9 +1155,24 @@ MUD_DB=/tmp/verify.db npm run restore -- ./mud-<시각>-<해시>.db --dry-run
 굳이 `launch` 를 쓰려면 `--no-deploy --copy-config` 로 부르고 끝나자마자
 `git diff fly.toml` 을 볼 것.
 
-**여기서 `--ha=false` · `--copy-config` · `sftp` 문법은 확인하지 못했다.** 이
-환경에서 fly.io 에 접근할 수 없다. 플래그를 모른다고 하면 빼고, 대신 5번의
-머신·볼륨 개수 확인을 반드시 할 것 — 그 확인이 플래그가 하려던 일의 사후 판정이다.
+**위 명령은 flyctl 0.4.99 에서 실물로 확인했다** (`--help` 대조). 특히 셋:
+
+- `fly deploy --ha` 의 **기본값이 `true`** 다 — 그냥 배포하면 예비 머신이 하나
+  더 뜬다. 이 앱에서 머신 둘은 **세계 둘**이므로 `--ha=false` 는 선택이 아니다
+  (그래도 5번에서 개수를 센다 — 플래그는 의도이고 개수가 사실이다).
+- `fly logs --no-tail`(`-n`) 이 있다. 이게 없으면 `fly logs` 는 스스로 끝나지
+  않아 파이프가 성립하지 않는다.
+- `fly ssh console` 의 기본 사용자는 **root** 다. 그래서 8·9번의 도구가
+  `/data` 에 만드는 파일(`-wal`·`-shm`·`backups/`)이 root 소유로 남고, uid 1000
+  으로 도는 서버가 다음 재시작에서 못 읽을 수 있다 — 10번이 그것을 되돌린다.
+
+아직 확인하지 못한 것은 **동작**이지 이름이 아니다: `[mounts] initial_size` 가
+배포 중에 볼륨을 자동 생성하는지, fly 볼륨이 정말 root 소유로 마운트되는지,
+`-C` 가 셸을 거치는지. 셋 다 5·6번의 눈으로 닫힌다.
+
+★ `fly ssh sftp put` 이 존재하므로, 선생성을 **노트북에서 돌리고 결과만 올리는**
+경로도 열려 있다 (`npm run pregen` → `npm run backup` → `sftp put` →
+`npm run restore`). 컨테이너 안에서 15~50분을 도는 것이 부담이면 그쪽이 낫다.
 
 `npm run preflight` 가 이 순서의 0번이다. 검사(`test:all`)는 `test/fixture.ts`
 의 **고정 세계**로 돌기 때문에 (그래야 게임 내용을 바꿔도 프로토콜 검사가 안
