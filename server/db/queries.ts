@@ -52,6 +52,16 @@ export interface MissionRow {
   done_at: number | null;
 }
 
+/** accounts 한 행 (마이그레이션 006). secret 은 PHC 꼴 문자열 하나다. */
+export interface AccountRow {
+  id: string;
+  name_key: string;
+  name: string;
+  secret: string;
+  created_at: number;
+  last_login_at: number | null;
+}
+
 export interface PlayerRow {
   id: string;
   name: string;
@@ -64,6 +74,8 @@ export interface PlayerRow {
   seen: string;
   /** 길드 등급. 0 은 미등록 (마이그레이션 004). */
   rank: number;
+  /** 계정 (마이그레이션 006). null 이면 익명 캐릭터다. */
+  account_id: string | null;
   created_at: number;
   last_seen_at: number;
 }
@@ -172,6 +184,53 @@ export function makeQueries(db: Db) {
     playerByTokenHash: db.prepare<[string], PlayerRow>(
       "SELECT * FROM players WHERE token_hash = ?",
     ),
+    // ── 계정 (마이그레이션 006) ──────────────────────────────────────────
+    /** 조회는 언제나 정규화된 name_key 로. DDL 의 CHECK 가 그것을 강제한다. */
+    accountByNameKey: db.prepare<[string], AccountRow>(
+      "SELECT * FROM accounts WHERE name_key = ?",
+    ),
+    accountById: db.prepare<[string], AccountRow>("SELECT * FROM accounts WHERE id = ?"),
+    insertAccount: db.prepare(
+      `INSERT INTO accounts (id, name_key, name, secret, created_at)
+       VALUES (@id, @name_key, @name, @secret, @now)`,
+    ),
+    /** 로그인 성공 뒤. 파라미터가 낡았으면 secret 도 함께 다시 쓴다
+     *  ('다음 로그인에 재해시' — 그래서 N 을 올리는 것이 마이그레이션이 아니다). */
+    touchAccount: db.prepare(
+      "UPDATE accounts SET last_login_at = @now, secret = @secret WHERE id = @id",
+    ),
+    /** 계정의 캐릭터. 오늘은 하나뿐이지만 그건 UI 가 없어서이지 제약이 아니다. */
+    playersOfAccount: db.prepare<[string], PlayerRow>(
+      "SELECT * FROM players WHERE account_id = ? ORDER BY created_at",
+    ),
+    bindPlayerToAccount: db.prepare(
+      "UPDATE players SET account_id = @account_id WHERE id = @id AND account_id IS NULL",
+    ),
+    /** ★ 무덤 토큰. 계정에 묶이는 순간 익명 재개 토큰을 아무도 모르는 난수로
+     *  덮어써 영구히 죽인다. token_hash 가 NOT NULL UNIQUE 라 비울 수는 없다. */
+    buryPlayerToken: db.prepare("UPDATE players SET token_hash = @token_hash WHERE id = @id"),
+
+    // ── 기기 토큰 (마이그레이션 006) ────────────────────────────────────
+    /** ★ playerByTokenHash 와 나란히 쓰인다. 둘 다 miss 면 같은 신규 생성
+     *  경로로 흘러야 한다 — 아니면 '그 토큰이 있는가' 오라클이 하나 생긴다. */
+    playerByDeviceToken: db.prepare<[string], PlayerRow>(
+      `SELECT p.* FROM players p
+         JOIN player_tokens t ON t.player_id = p.id
+        WHERE t.token_hash = ?`,
+    ),
+    insertDeviceToken: db.prepare(
+      `INSERT INTO player_tokens (token_hash, player_id, created_at, last_used_at)
+       VALUES (@token_hash, @player_id, @now, @now)`,
+    ),
+    touchDeviceToken: db.prepare(
+      "UPDATE player_tokens SET last_used_at = @now WHERE token_hash = @token_hash",
+    ),
+    deviceTokensOf: db.prepare<[string], { token_hash: string; last_used_at: number }>(
+      "SELECT token_hash, last_used_at FROM player_tokens WHERE player_id = ? ORDER BY last_used_at DESC",
+    ),
+    /** 기기 상한을 넘으면 가장 오래 안 쓴 것부터 축출한다. */
+    dropDeviceToken: db.prepare("DELETE FROM player_tokens WHERE token_hash = ?"),
+
     insertPlayer: db.prepare(
       `INSERT INTO players (id, name, token_hash, region, x, y, hp, max_hp, seen,
                             created_at, last_seen_at)

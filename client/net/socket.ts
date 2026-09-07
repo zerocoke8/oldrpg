@@ -45,6 +45,9 @@ export interface Socket {
   /** 프레임이 실제로 나갔으면 true. 소켓이 닫혀 있으면 false —
    *  호출자는 이때 낙관적 예측을 하면 안 된다 (서버가 볼 수 없는 이동이다). */
   send(msg: ClientMsg): boolean;
+  /** 다음 접속에 계정 자격을 실어 보내고 지금 연결을 끊는다.
+   *  계정은 hello 의 일부라, '로그인' 은 곧 '자격을 들고 다시 붙는 것' 이다. */
+  authenticate(auth: NonNullable<Extract<ClientMsg, { t: "hello" }>["auth"]>): void;
   close(): void;
 }
 
@@ -60,18 +63,26 @@ export function connect(handlers: {
    *  replaced 에 재접속하면 같은 탭 두 개가 무한 강퇴 핑퐁을 한다. */
   let allowRetry = true;
 
+  /* 다음 접속 한 번에만 실을 자격. ★ 메모리에만 있고 저장하지 않는다 —
+     비밀번호를 localStorage 에 두면 그 순간부터 그게 진짜 자격증명이 된다.
+     성공하면 서버가 기기 토큰을 주고, 그 뒤로는 지금까지와 똑같다. */
+  let pendingAuth: NonNullable<Extract<ClientMsg, { t: "hello" }>["auth"]> | null = null;
+
   const open = (): void => {
     ws = new WebSocket(WS_URL);
 
     ws.onopen = () => {
       retry = 0;
       handlers.onOpen();
+      const auth = pendingAuth;
+      pendingAuth = null; // 한 번만 쓴다. 실패해도 다시 보내지 않는다.
       ws?.send(
         JSON.stringify({
           t: "hello",
           pv: PROTOCOL_VERSION,
           token: loadToken(),
           name: null,
+          ...(auth ? { auth } : {}),
         } satisfies ClientMsg),
       );
     };
@@ -113,6 +124,15 @@ export function connect(handlers: {
       if (ws?.readyState !== WebSocket.OPEN) return false;
       ws.send(JSON.stringify(msg));
       return true;
+    },
+    authenticate(auth) {
+      pendingAuth = auth;
+      /* 실패로 끊긴 뒤에도 다시 시도할 수 있어야 한다 (auth_failed 는
+         reconnect:false 라 자동 재접속이 꺼져 있다). */
+      allowRetry = true;
+      closedByUs = false;
+      if (ws && ws.readyState === WebSocket.OPEN) ws.close();
+      else open();
     },
     close() {
       closedByUs = true;

@@ -59,6 +59,10 @@ export interface Limits {
   /** 지역 발화의 길이 상한. say 보다 짧다 — 팬아웃이 접속자 수에 비례하므로
    *  같은 200자가 N 배만큼 비싸다. */
   yellMaxLen: number;
+  /** 계정 이름의 길이 상한과 비밀번호의 최소 길이. 클라이언트가 폼에서
+   *  미리 알려 줄 수 있게 welcome 으로 내려간다 — 판정은 언제나 서버다. */
+  accountNameMaxLen: number;
+  passwordMinLen: number;
   /** 지역 발화의 예산. 초당이 아니라 '분당' 인 이유: 초당 버킷은 '1초에 한
    *  번씩 영원히' 를 허용하는데, 지역 채널의 학대는 순간 폭주가 아니라
    *  지속성이다. */
@@ -160,6 +164,24 @@ export interface Hello {
   /** 최초 접속에만 참고. 서버가 정제하고 확정 이름은 welcome 으로 돌려준다.
    *  resume 시에는 무시한다 — 탭을 다시 열었다고 이름이 바뀌지 않는다. */
   name: string | null;
+  /** 계정으로 들어온다. 없으면 지금까지와 글자 하나도 다르지 않은 익명 경로다.
+   *
+   *  ★ 왜 HTTP 가 아니라 여기인가: hello 가 이미 신원 핸드셰이크다. 별도
+   *    엔드포인트를 열면 이 저장소의 첫 HTTP API 표면이 생기고, 그 응답이
+   *    사람이 읽을 문장을 나르는 순간 불변식 (1)("문장을 올리는 메시지는 log
+   *    하나뿐")이 절반만 참이 된다. 여기라면 실패는 이미 있는 error{message}
+   *    로 가고 — 그건 이미 명문화된 예외다 — 새 채널이 생기지 않는다.
+   *
+   *  ★ register 는 '지금 이 캐릭터를 계정에 묶는다' 이기도 하다. token 을 함께
+   *    보내면 그 익명 캐릭터가 그대로 계정의 것이 된다 (덧옷이지 새 시작이
+   *    아니다). login 은 반대로 그 계정의 캐릭터로 들어간다.
+   *
+   *  ★ 옛 서버에 새 클라이언트가 붙어도 이 필드는 그냥 무시된다 (가산). */
+  auth?: {
+    kind: "register" | "login";
+    name: string;
+    password: string;
+  };
 }
 
 export interface ActionMsg {
@@ -198,6 +220,9 @@ export interface SelfState {
   rank: RankView;
   /** 진행 중인 임무. 재접속해도 일지가 복원돼야 하므로 스냅샷이 싣는다. */
   missions: MissionView[];
+  /** 계정 이름. 익명이면 null. 화면이 '로그인되어 있는가' 를 아는 유일한 길이고,
+   *  이름은 서버가 준 원형 그대로다 (클라이언트가 대소문자를 만들지 않는다). */
+  account: string | null;
 }
 
 /** 길드 등급. 숫자와 이름이 함께 온다. */
@@ -398,6 +423,7 @@ export type ErrorCode =
   | "bad_message" // seq 를 뽑을 수조차 없는 프레임
   | "bad_seq" // seq 역행 또는 중복
   | "replaced" // 같은 토큰의 새 소켓이 이 캐릭터를 가져갔다
+  | "auth_failed" // 계정 이름이나 비밀번호가 맞지 않는다 / 그 이름은 이미 있다
   | "flooding" // 프레임 폭주 (액션 레이트리밋과 별개, 소켓 계층)
   | "shutdown"
   | "internal";

@@ -27,6 +27,9 @@ export function Status(props: {
         {/* 등급의 '이름' 은 서버가 붙여 보낸다 — 클라이언트가 숫자로 문구를
             조립하지 않는다 (프로토콜 불변식 1). */}
         {self.rank.name && <span style={{ color: C.gold }}> · {self.rank.name}</span>}
+        {/* 계정 이름도 서버가 준 원형 그대로다. 없으면 익명이라는 뜻이고,
+            그것을 문장으로 말하지 않는다 — 표시가 없는 것이 그 사실이다. */}
+        {self.account && <span style={{ color: C.other }}> · @{self.account}</span>}
         {!connected && <span style={{ color: C.red }}> · 연결 끊김</span>}
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>

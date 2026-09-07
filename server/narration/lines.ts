@@ -73,6 +73,14 @@ export const lines = {
   unparsed: (raw: string): string => `"${raw}" — 무엇을 하려는지 알 수 없다.`,
   sayEmpty: "할 말이 없다.",
   sayTooLong: "그렇게 긴 말은 숨이 차서 못 한다.",
+  /* 계정. 문장이 코드에 인라인되지 않도록 여기 둔다 — 화면에 뜨는 것은
+     error{message} 이고, 그건 이미 명문화된 예외 채널이다.
+     ★ 로그인 거절이 한 문장인 것이 요점이다. '그런 이름이 없다' 와 '비밀번호가
+       틀렸다' 를 갈라 말하면 그 자체가 이름 열거 오라클이 된다. */
+  authRefused: "이름이나 비밀번호가 맞지 않습니다.",
+  authTaken: "그 이름은 이미 쓰이고 있습니다.",
+  authBadName: "계정 이름이 비었거나 너무 깁니다.",
+  authBadPassword: "비밀번호가 너무 짧거나 깁니다.",
   yellTooLong: "그렇게 길게는 외칠 수 없다.",
   yellCooling: "목이 아직 트이지 않았다.",
 

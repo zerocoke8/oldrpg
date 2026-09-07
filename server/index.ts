@@ -235,7 +235,7 @@ export function boot(dbPath = DB_PATH, port = PORT, options: BootOptions = {}) {
     emit.send(s, { t: "room.describe", room: presence.roomView(s.pos, s) });
   });
 
-  const listening = startServer(ctx, port);
+  const listening = startServer(ctx, port, (fn: () => void) => db.transaction(fn)());
   const wss = listening.wss;
 
   console.log(

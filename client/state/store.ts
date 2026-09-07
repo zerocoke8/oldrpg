@@ -89,6 +89,14 @@ const pushLog = (log: LogLine[], line: LogLine): LogLine[] => {
 export function reduce(st: UiState, m: ServerMsg | LocalMsg): UiState {
   switch (m.t) {
     case "__conn":
+      /* ★ error{} 가 남긴 문장을 덮지 않는다. 서버가 이유를 말하고 소켓을
+         닫으면 close 가 곧바로 뒤따라오는데, 그때 "연결이 끊겼다" 로
+         갈아치우면 사람은 **왜** 끊겼는지를 영영 못 본다 (계정 거절이 정확히
+         그 모양이다: 이유 한 줄 + 즉시 종료). 이미 닫힘으로 표시된 상태의
+         문장은 그것이 진짜 이유다. */
+      if (st.status === "closed" && st.notice && m.status !== "live") {
+        return { ...st, status: m.status };
+      }
       return { ...st, status: m.status, notice: m.notice };
 
     case "welcome":

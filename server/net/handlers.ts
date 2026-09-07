@@ -39,6 +39,7 @@ import type { Balance } from "../engine/enemies";
 import type { Emit } from "./emit";
 import type { Presence } from "./presence";
 import { canSee, GRACE_MS, type Registry, type Session } from "./session";
+import { issueDeviceToken, type AuthResolved } from "./accounts";
 
 export const LIMITS: Limits = {
   sayMaxLen: 200,
@@ -46,6 +47,8 @@ export const LIMITS: Limits = {
   nameMaxLen: 16,
   actionsPerSec: 20,
   resyncPerSec: 1,
+  accountNameMaxLen: 24,
+  passwordMinLen: 8,
   yellMaxLen: 120,
   yellPerMin: 6,
   framesPerSec: 40,
@@ -57,6 +60,13 @@ export const LIMITS: Limits = {
 const SCHEMAS = makeActionSchemas(LIMITS);
 
 const sha256 = (s: string): string => createHash("sha256").update(s, "utf8").digest("hex");
+
+/** 계정 이름. 기기 토큰으로 재개하는 경우 resolved 가 없으므로 여기서 읽는다.
+ *  이름을 클라이언트가 만들지 않는 것이 요점이다 (불변식 1). */
+function accountNameOf(ctx: Ctx, accountId: string | null): string | null {
+  if (!accountId) return null;
+  return ctx.q.accountById.get(accountId)?.name ?? null;
+}
 
 export interface Ctx {
   reg: Registry;
@@ -154,14 +164,31 @@ export function handleHello(
    *  신규 생성으로 흡수되므로). 거절 모양은 두 경로가 동일해서
    *  "그 토큰이 존재하는가" 를 묻는 오라클이 되지 않는다. */
   mayCreate: () => boolean,
+  /** 계정으로 들어온 경우. resolveAuth 가 이미 검증을 끝냈고, 여기서는
+   *  '누구의 캐릭터인가' 로만 쓴다 — 비밀번호는 여기까지 오지 않는다. */
+  resolved?: AuthResolved,
 ): HelloOutcome | { error: "protocol_version" | "flooding" } {
   if (env.pv !== PROTOCOL_VERSION) return { error: "protocol_version" };
 
   const now = ctx.clock();
 
-  // 토큰 조회. '알 수 없는 토큰'도 오류가 아니라 신규 생성으로 흡수한다 —
-  // 그러지 않으면 토큰 존재 여부를 묻는 오라클이 된다.
-  const row = env.token ? ctx.q.playerByTokenHash.get(sha256(env.token)) : undefined;
+  /* 토큰 조회. '알 수 없는 토큰'도 오류가 아니라 신규 생성으로 흡수한다 —
+     그러지 않으면 토큰 존재 여부를 묻는 오라클이 된다.
+
+     ★ 기기 토큰(player_tokens)이 두 번째 자리다. 둘 다 miss 면 **같은**
+       신규 생성 경로로 흘러야 한다 — 갈라지면 오라클이 하나 더 생긴다.
+       계정으로 들어온 경우에는 resolved 가 이미 캐릭터를 정했으므로
+       토큰 조회를 아예 건너뛴다. */
+  const hash = env.token ? sha256(env.token) : null;
+  const byDevice = hash ? ctx.q.playerByDeviceToken.get(hash) : undefined;
+  if (byDevice && hash) ctx.q.touchDeviceToken.run({ token_hash: hash, now });
+  const row = resolved
+    ? resolved.playerId
+      ? ctx.q.playersOfAccount.all(resolved.accountId).find((p) => p.id === resolved.playerId)
+      : undefined
+    : hash
+      ? (ctx.q.playerByTokenHash.get(hash) ?? byDevice)
+      : undefined;
 
   let playerId: string;
   let name: string;
@@ -177,7 +204,8 @@ export function handleHello(
   if (row) {
     playerId = row.id;
     name = row.name;
-    token = env.token!;
+    // 계정으로 들어왔으면 방금 발급한 기기 토큰이 이 연결의 토큰이다.
+    token = resolved ? resolved.deviceToken : env.token!;
     pos = { region: row.region, x: row.x, y: row.y };
     // 저장된 좌표가 벽 안이면(맵이 바뀌었으면) 스폰으로 이송한다.
     // 메모리 권위 위치가 '처음 확립되는' 지점이 여기라, 검증도 여기가 맞다.
@@ -238,6 +266,17 @@ export function handleHello(
       seen: JSON.stringify([...seen]),
       now,
     });
+    /* 계정이 캐릭터를 아직 안 가진 경우 — 방금 만든 것을 묶는다.
+       익명 재개 토큰은 그 자리에서 죽이고(무덤 토큰) 기기 토큰을 준다.
+       ★ 이 순서여야 예산(mayCreate)이 계정 경로에도 그대로 걸린다. */
+    if (resolved) {
+      ctx.q.bindPlayerToAccount.run({ account_id: resolved.accountId, id: playerId });
+      ctx.q.buryPlayerToken.run({
+        token_hash: sha256(randomBytes(32).toString("hex")),
+        id: playerId,
+      });
+      token = issueDeviceToken(ctx.q, playerId, now);
+    }
   }
 
   const connId = ctx.reg.newConnId();
@@ -279,6 +318,7 @@ export function handleHello(
     existing.maxHp = maxHp;
     existing.rank = rank;
     existing.seen = seen;
+    if (resolved) existing.account = resolved.accountName;
     // 살아 있는 소켓 교체든 유예 입양이든, 관찰자는 그가 떠났다는 말을 들은
     // 적이 없다. 그래서 돌아왔다는 말도 필요 없다 — 둘 다 조용하다.
     return { session: existing, token, displaced, revived, adopted: true };
@@ -294,6 +334,7 @@ export function handleHello(
     hp,
     maxHp,
     rank,
+    account: resolved?.accountName ?? accountNameOf(ctx, row?.account_id ?? null),
     lastSeq: 0,
     logPrefix: randomBytes(4).toString("hex"),
     logN: 1,

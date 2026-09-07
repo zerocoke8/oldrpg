@@ -774,6 +774,46 @@ async function main() {
   check("반대편 문으로 돌아온다", (await regionNameOf(a)) === "지하 1층", await regionNameOf(a));
   check("들어왔던 칸이다", (await posOf(a)) === "5,5", await posOf(a));
 
+  /* ── ⑱ 계정 (마이그레이션 006) ──────────────────────────────────────
+     ★ 여기서만 확인되는 것: 폼이 실제로 서버에 닿고, 지금 캐릭터가 그대로
+       계정의 것이 된다는 것. 서버 검사는 hello 를 손으로 만들어 보내므로
+       '사람이 누를 수 있는가' 는 못 본다. */
+  console.log("\n⑱ 계정 — 폼이 서버에 닿고, 지금 캐릭터가 그대로 계정의 것이 된다");
+  const beforePos = await posOf(a);
+  check("(전제) 아직 익명이다 — 상태창에 계정 표시가 없다",
+    !(await a.locator("body").innerText()).includes("@"));
+  await a.getByRole("button", { name: "계정 만들기", exact: true }).click();
+  await sleep(200);
+  check("계정 폼이 열렸다", (await a.locator("input[type=password]").count()) > 0);
+  await a.locator("input[autocomplete=username]").fill("브라우저계정");
+  await a.locator("input[type=password]").fill("열려라참깨여덟자");
+  await a.screenshot({ path: join(SHOTS, "25-계정-폼.png") });
+  await a.locator("button:text-is('만들기')").click();
+  /* 계정은 hello 의 일부라 '만들기' 는 곧 자격을 들고 다시 붙는 것이다 —
+     소켓이 끊겼다 붙고 스냅샷이 새로 온다. scrypt 가 ~95ms 이므로 넉넉히. */
+  await a.waitForSelector("text=@브라우저계정", { timeout: 15_000 });
+  check("★ 상태창에 계정 이름이 떴다 (서버가 준 원형 그대로)", true);
+  check("★ 같은 캐릭터다 — 서 있던 칸이 그대로다 (새로 시작하지 않았다)",
+    (await posOf(a)) === beforePos, `${beforePos} -> ${await posOf(a)}`);
+  check("비밀번호가 화면 어디에도 남지 않았다",
+    !(await a.locator("body").innerText()).includes("열려라참깨"));
+  await a.screenshot({ path: join(SHOTS, "26-계정-묶임.png") });
+  /* 같은 이름으로 다시 만들려 하면 서버가 거절하고, 그 문장은 서버가 만든다.
+     ★ 이제 메뉴 라벨이 '계정' 이고 폼의 기본 탭이 '로그인' 이다 (이미 묶여
+     있으므로). 만들기 탭으로 옮겨야 같은 갈래를 탄다. */
+  /* 커맨드 창의 라벨은 span 안에 있어 :text-is 가 안 잡는다. 접근성 이름으로
+     고른다 — '계정' 과 '계정 만들기' 를 정확히 갈라야 하는 자리다. */
+  await a.getByRole("button", { name: "계정", exact: true }).click();
+  await sleep(200);
+  await a.locator("button:text-is('계정 만들기')").click();
+  await a.locator("input[autocomplete=username]").fill("브라우저계정");
+  await a.locator("input[type=password]").fill("열려라참깨여덟자");
+  await a.locator("button:text-is('만들기')").click();
+  await sleep(3000);
+  check("★ 중복 이름은 서버가 만든 문장으로 거절된다",
+    (await a.locator("body").innerText()).includes("이미 쓰이고"),
+    (await a.locator("body").innerText()).slice(-200));
+
   await browser.close();
   await vite.close();
   await server.close();

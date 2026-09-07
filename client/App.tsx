@@ -25,6 +25,7 @@ import { Dpad } from "./ui/Dpad";
 import { Log } from "./ui/Log";
 import { Minimap } from "./ui/Minimap";
 import { Status } from "./ui/Status";
+import { Account } from "./ui/Account";
 import { TextInput } from "./ui/TextInput";
 import { C, FONT, win } from "./theme";
 
@@ -37,6 +38,8 @@ export default function App() {
 
   /* 커맨드 창의 상태. 서버는 이걸 전혀 모른다 — 순수한 화면 상태다. */
   const [mode, setMode] = useState<Mode>("field");
+  /** 계정 폼이 열려 있는가. 메뉴에서 켜고 폼이 스스로 끈다. */
+  const [showAccount, setShowAccount] = useState(false);
   const [path, setPath] = useState<string[]>([]);
   const [cursor, setCursor] = useState(0);
   const [cmd, setCmd] = useState("");
@@ -110,6 +113,12 @@ export default function App() {
       if (it.items) {
         setPath((p) => [...p, it.id]);
         setCursor(0);
+      } else if (it.panel === "account") {
+        /* 커맨드 창을 닫고 폼에 조종을 넘긴다 — 입력창으로 갈 때와 같은
+           이유다. 폼 위에서 화살표가 여전히 메뉴 커서면 사람은 자기가 어느
+           모드에 있는지 알 수 없다. */
+        setShowAccount(true);
+        setMode("field");
       } else if (it.focus !== undefined) {
         /* 입력창에 조종을 넘기고 메뉴는 닫는다. 커맨드 모드로 남겨 두면
            타이핑을 마치고 입력창을 나왔을 때 화살표가 여전히 커서라서,
@@ -199,10 +208,26 @@ export default function App() {
     gap: 10,
   };
 
+  const accountPanel = showAccount ? (
+    <Account
+      account={st.self?.account ?? null}
+      nameMaxLen={st.limits?.accountNameMaxLen ?? 24}
+      passwordMinLen={st.limits?.passwordMinLen ?? 8}
+      onClose={() => setShowAccount(false)}
+      onSubmit={(kind, name, password) => {
+        setShowAccount(false);
+        /* 계정은 hello 의 일부라, '로그인' 은 곧 자격을 들고 다시 붙는 것이다.
+           비밀번호는 여기서 소켓으로만 가고 어디에도 저장되지 않는다. */
+        sock.current?.authenticate({ kind, name, password });
+      }}
+    />
+  ) : null;
+
   if (!st.self || !st.region) {
     return (
       <div style={shell}>
         <div style={{ ...win, color: C.dim }}>{st.notice ?? "어둠에 눈이 익어간다…"}</div>
+        {accountPanel}
       </div>
     );
   }
@@ -225,8 +250,11 @@ export default function App() {
 
       <Log lines={st.log} swipe={swipe} />
 
-      {/* error{} 는 계약 위반이므로 서사 로그가 아니라 여기에 뜬다. */}
+      {/* error{} 는 계약 위반이므로 서사 로그가 아니라 여기에 뜬다.
+          계정 실패도 이 자리로 온다 — 문장은 전부 서버가 만든 것이다. */}
       {st.notice && <div style={{ ...win, color: C.red, fontSize: 13 }}>{st.notice}</div>}
+
+      {accountPanel}
 
       <div style={{ display: "flex", gap: 10, alignItems: "stretch" }}>
         <Dpad act={act} />

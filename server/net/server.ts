@@ -11,6 +11,8 @@ import { zEnvelope } from "../../shared/validators";
 import type { Emit } from "./emit";
 import type { Presence } from "./presence";
 import type { Registry, Session } from "./session";
+import { resolveAuth } from "./accounts";
+import { lines } from "../narration/lines";
 import {
   handleAction,
   handleClose,
@@ -30,6 +32,10 @@ interface Conn {
   socket: WebSocket;
   ip: string;
   session: Session | null;
+  /** hello 를 받고 계정 검증(scrypt)을 기다리는 중. 그 사이에 온 프레임은
+   *  조용히 버린다 — 세션이 아직 없어서 ack 를 보낼 대상이 없고, 연결을
+   *  끊으면 정상적인 클라이언트가 경합으로 죽는다. */
+  helloPending: boolean;
   epoch: number;
   frameTokens: number;
   lastRefill: number;
@@ -60,7 +66,7 @@ export interface Listening {
   close(): Promise<void>;
 }
 
-export function startServer(ctx: Ctx, port: number): Listening {
+export function startServer(ctx: Ctx, port: number, tx: (fn: () => void) => void): Listening {
   const serveStatic = makeStaticHandler({ root: process.env.MUD_STATIC ?? "dist" });
   const http = createServer(serveStatic);
   /* noServer: 업그레이드를 우리가 직접 받는다. 같은 포트에서 정적 파일과
@@ -153,6 +159,7 @@ export function startServer(ctx: Ctx, port: number): Listening {
       socket,
       ip,
       session: null,
+      helloPending: false,
       epoch: 0,
       frameTokens: LIMITS.framesPerSec,
       lastRefill: ctx.clock(),
@@ -196,30 +203,74 @@ export function startServer(ctx: Ctx, port: number): Listening {
       }
 
       if (env.data.t === "hello") {
-        if (conn.session) {
+        if (conn.session || conn.helloPending) {
           // 연결당 정확히 한 번. 두 번째 hello 는 계약 위반이다.
           fatal(conn, "bad_message", "hello 는 연결당 한 번만 보냅니다.", false);
           return;
         }
-        const out = handleHello(ctx, socket, env.data, () => mayCreateCharacter(ip));
-        if ("error" in out) {
-          if (out.error === "flooding") {
-            // 거절 모양이 token:null 경로와 '동일' 해야 한다 — 다르면
-            // "그 토큰이 존재하는가" 를 묻는 오라클이 된다.
-            fatal(conn, "flooding", "새 캐릭터를 너무 자주 만들고 있습니다.", false);
-          } else {
-            fatal(conn, "protocol_version", "클라이언트가 낡았습니다. 새로고침하세요.", false);
+        const hello = env.data;
+        /* ★ 계정이 붙으면서 이 갈래가 비동기가 됐다 (scrypt 는 이벤트 루프를
+           막으면 안 된다 — 동기로 여덟 번이면 705ms 다). 그동안 conn.session
+           은 여전히 null 이므로 helloPending 이 그 창을 든다. */
+        conn.helloPending = true;
+        void (async () => {
+          const auth = hello.auth
+            ? await resolveAuth(
+                ctx.q,
+                tx,
+                hello.auth,
+                hello.token,
+                ctx.clock(),
+                {
+                  badName: lines.authBadName,
+                  badPassword: lines.authBadPassword,
+                  taken: lines.authTaken,
+                  refused: lines.authRefused,
+                },
+              )
+            : null;
+          if (conn.dead) return;
+          if (auth && !auth.ok) {
+            conn.helloPending = false;
+            /* reconnect:false — 자격이 틀린 채로 재접속하면 같은 실패를
+               무한히 반복한다. 사람이 고쳐서 다시 눌러야 한다. */
+            fatal(conn, "auth_failed", auth.message, false);
+            return;
           }
-          return;
-        }
-        conn.session = out.session;
-        conn.epoch = out.session.connId;
-        sendConnectBurst(ctx, out.session, out.token, out.displaced, out.revived);
-        // 도착 방출은 '신규' 일 때만. 입양이면 아무도 그가 떠났다는 말을
-        // 들은 적이 없으므로 돌아왔다는 말도 필요 없다.
-        if (!out.adopted) ctx.presence.announceArrival(out.session);
+          const out = handleHello(
+            ctx,
+            socket,
+            hello,
+            () => mayCreateCharacter(ip),
+            auth?.ok ? auth.resolved : undefined,
+          );
+          conn.helloPending = false;
+          if ("error" in out) {
+            if (out.error === "flooding") {
+              // 거절 모양이 token:null 경로와 '동일' 해야 한다 — 다르면
+              // "그 토큰이 존재하는가" 를 묻는 오라클이 된다.
+              fatal(conn, "flooding", "새 캐릭터를 너무 자주 만들고 있습니다.", false);
+            } else {
+              fatal(conn, "protocol_version", "클라이언트가 낡았습니다. 새로고침하세요.", false);
+            }
+            return;
+          }
+          conn.session = out.session;
+          conn.epoch = out.session.connId;
+          sendConnectBurst(ctx, out.session, out.token, out.displaced, out.revived);
+          // 도착 방출은 '신규' 일 때만. 입양이면 아무도 그가 떠났다는 말을
+          // 들은 적이 없으므로 돌아왔다는 말도 필요 없다.
+          if (!out.adopted) ctx.presence.announceArrival(out.session);
+        })().catch((err: unknown) => {
+          conn.helloPending = false;
+          console.error("[net] hello", err);
+          if (!conn.dead) fatal(conn, "internal", "접속 처리에 실패했습니다.", true);
+        });
         return;
       }
+
+      // 계정 검증을 기다리는 동안 온 프레임. 조용히 버린다 (위 주석 참조).
+      if (conn.helloPending) return;
 
       if (!conn.session) {
         // hello 전에 온 action/pong. 액션이면 seq 가 있으므로 ack 로 답하는 것이

@@ -37,6 +37,17 @@ export const zEnvelope = z.discriminatedUnion("t", [
       .nullable(),
     // 이름은 여기서 클램프하지 않고 sanitizeName 이 자른다. 다만 무한 문자열은 막는다.
     name: z.string().max(256).nullable(),
+    /* 계정. 길이의 '옳은' 상한은 handlers 가 LIMITS 로 다시 본다 — 여기서는
+       무한 문자열만 막는다 (say 와 같은 분업: 형식은 스키마, 세계의 사실은
+       핸들러). 비밀번호를 로그에 남기지 않는 책임은 호출부에 있다. */
+    auth: z
+      .object({
+        kind: z.enum(["register", "login"]),
+        name: z.string().max(256),
+        password: z.string().max(512),
+      })
+      .strict()
+      .optional(),
   }),
   z.object({
     t: z.literal("action"),

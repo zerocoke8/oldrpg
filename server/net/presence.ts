@@ -87,6 +87,7 @@ export function makePresence(
         items: itemsOf(self.playerId),
         rank: rankOf(self.rank),
         missions: missionsOf(self.playerId),
+        account: self.account,
       },
       region: map.view(self.pos.region),
       room: roomView(self.pos, self),

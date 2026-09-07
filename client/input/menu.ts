@@ -34,6 +34,9 @@ export interface MenuItem {
   note?: string;
   /** 항목이 없을 때 대신 보여줄 한 줄. */
   empty?: string;
+  /** 고르면 계정 폼을 연다. 액션이 아니라 화면의 일이라 여기 있다 —
+   *  자격증명은 Action 유니온을 지나지 않는다 (hello 의 일부다). */
+  panel?: "account";
 }
 
 /** 최상위 커맨드. 지금 할 수 있는 것만 올라온다. */
@@ -222,6 +225,18 @@ export function rootItems(st: UiState): MenuItem[] {
 
   items.push({ id: "say", label: "말하기", focus: "말하기 " });
   items.push({ id: "yell", label: "외치기", focus: "외치기 " });
+  /* 계정은 맨 끝이다. 세계의 동사가 아니라 살림이라 순서가 마지막이고,
+     그래서 앞의 항목들 사이에 끼어들어 커서 위치를 바꾸지도 않는다.
+     라벨이 두 가지인 이유는 하는 일이 두 가지이기 때문이다 — 익명이면
+     '만들기' 가 기본이고, 이미 묶여 있으면 다른 기기에서 '들어가기' 다.
+     자격이 되는지는 클라이언트가 판정하지 않는다: 폼은 언제나 열리고
+     판정은 서버가 한다. 계정 이름도 여기 붙이지 않는다 — 상태창이 이미
+     @이름 으로 보여 주고, 같은 사실을 두 곳에서 말하면 한쪽이 낡는다. */
+  items.push({
+    id: "account",
+    label: st.self?.account ? "계정" : "계정 만들기",
+    panel: "account",
+  });
   return items;
 }
 
