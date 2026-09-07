@@ -63,6 +63,8 @@ export interface Session {
   // 레이트리밋 상태 (토큰 버킷). 프레임 버킷은 연결 단위라 net/server.ts 가 따로 든다.
   actionTokens: number;
   resyncTokens: number;
+  /** 지역 발화 예산. 분 단위라 다른 둘과 채우는 속도가 다르다. */
+  yellTokens: number;
   lastRefill: number;
   awaitingPong: number;
 }

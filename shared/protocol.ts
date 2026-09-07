@@ -56,6 +56,13 @@ export interface Limits {
   framesPerSec: number;
   maxFrameBytes: number;
   pingIntervalMs: number;
+  /** 지역 발화의 길이 상한. say 보다 짧다 — 팬아웃이 접속자 수에 비례하므로
+   *  같은 200자가 N 배만큼 비싸다. */
+  yellMaxLen: number;
+  /** 지역 발화의 예산. 초당이 아니라 '분당' 인 이유: 초당 버킷은 '1초에 한
+   *  번씩 영원히' 를 허용하는데, 지역 채널의 학대는 순간 폭주가 아니라
+   *  지속성이다. */
+  yellPerMin: number;
   maxPending: number;
 }
 
@@ -130,7 +137,18 @@ export type Action =
   | { type: "turn_in"; npcId: string; missionId: string }
   /* 돌려주기. NPC 를 받지 않는다 — 못 끝낼 임무를 들고 게시한 사람에게
      돌아가야 한다면, 그 사람이 사라진 경우 탈출구가 없다. */
-  | { type: "abandon_mission"; missionId: string };
+  | { type: "abandon_mission"; missionId: string }
+  /** 같은 방의 다른 플레이어에게 물건 하나를 건넨다. 제안-수락이 아니라
+   *  즉시 확정이라 중간 상태가 없다 — 만료도, 타이머도, 소유자도 생기지 않는다.
+   *  상대가 실제로 이 방에 있는지, 그것을 가지고 있는지, 건넬 수 있는 것인지는
+   *  서버가 다시 본다: 클라이언트의 재실자 목록도 가방 목록도 안내일 뿐이다.
+   *  수량이 없다 — use_item 과 같이 한 번에 하나다. 한 번의 오조작이 가방을
+   *  통째로 비우면 안 된다. */
+  | { type: "give"; targetId: PlayerId; itemId: string }
+  /** 같은 '지역' 전체에 닿는 외침. say 가 방이라면 이것은 지역이고,
+   *  팬아웃의 상한은 canSee(server/net/session.ts)와 같은 것이다 —
+   *  지역이 관심영역의 상한이라는 결정이 여기서 두 번째 값을 낸다. */
+  | { type: "yell"; text: string };
 
 export interface Hello {
   t: "hello";
@@ -389,6 +407,7 @@ export type LogKind =
   | "sys" // 엔진 피드백: 벽 부딪힘, 안내 배너
   | "presence" // "○○ 님이 들어왔다"
   | "say" // 플레이어 발화 (speaker 필드가 반드시 있다)
+  | "yell" // 지역 전체에 닿는 외침 — say 와 같이 speaker 필드가 반드시 있다
   | "npc" // NPC 의 대사
   | "world" // 세계가 바뀌었다 — "멀리서 무언가 무너지는 소리가 들린다"
   | "combat" // 평범한 타격 한 번. 연속된 combat 줄은 클라이언트가 접는다.
@@ -545,8 +564,10 @@ export interface LogEvent {
   id: string;
   kind: LogKind;
   text: string;
-  /** kind==="say" 일 때만. 플레이어 문자열이 서사 문장에 합성되지 않고
-   *  구조화 필드로 분리되므로, say 로 presence 줄을 위조할 수 없다. */
+  /** kind 가 "say" 또는 "yell" 일 때만. 플레이어 문자열이 서사 문장에
+   *  합성되지 않고 구조화 필드로 분리되므로, 발화로 presence 줄을 위조할 수
+   *  없다. 화자를 나르는 kind 를 새로 만들 때는 반드시 이 필드를 함께 싣는다 —
+   *  클라이언트가 이름을 붙이기 시작하면 불변식 (1)이 깨진다. */
   speaker?: PlayerBrief;
   roomId?: RoomId;
   source?: TextSource;

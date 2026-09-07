@@ -32,5 +32,13 @@ export function parse(input: string): Action {
   const say = raw.match(/^(?:말하기|say)\s+(.+)$/i);
   if (say?.[1]) return { type: "say", text: say[1] };
 
+  const yell = raw.match(/^(?:외치기|yell)\s+(.+)$/i);
+  if (yell?.[1]) return { type: "yell", text: yell[1] };
+
+  /* 건네기 문법은 없다. 자유 텍스트로 이름을 지목하면 클라이언트가 이름 -> id
+     를 풀어야 하고, 그건 클라이언트가 권위를 갖는 모양이다. 건네기는 메뉴
+     어댑터만 갖는다 — 어댑터마다 모든 동사를 지원할 의무는 없다 (D패드가
+     이동만 만드는 것과 같다). */
+
   return { type: "unparsed", raw };
 }

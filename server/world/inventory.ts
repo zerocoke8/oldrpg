@@ -10,8 +10,10 @@
  *   그 확정된 수치를 기록·방출만 한다. */
 
 import type { ItemStack } from "../../shared/protocol";
+import { roomIdOf } from "../../shared/ids";
 import type { Award } from "../engine/combat";
 import type { Balance } from "../engine/enemies";
+import { givable } from "../engine/items";
 import type { Queries } from "../db/queries";
 import { lines } from "../narration/lines";
 import type { Emit } from "../net/emit";
@@ -28,6 +30,9 @@ export interface InventoryService {
   /** 쓸 수 있는가 — 예약하기 '전에' 보는 검사. 전투 중에 예약해 두고
    *  0.5초 뒤에야 "가지고 있지 않다" 를 듣는 것은 거짓말에 가깝다. */
   check(s: Session, itemId: string): string | null;
+  /** 같은 방의 사람에게 하나 건넨다. 실패하면 이유 문장을 돌려준다
+   *  (거절이 아니라 문장이다 — use 와 같은 규칙). */
+  give(s: Session, targetId: string, itemId: string): string | null;
   /** 가방이 바뀐 것을 알린다. 가방을 건드리는 다른 서비스(길드 승급 차감)가
    *  같은 표현을 쓰도록 밖으로 낸다 — 두 곳이 각자 만들면 모양이 갈린다. */
   push(s: Session): void;
@@ -132,5 +137,53 @@ export function makeInventory(
     return null;
   }
 
-  return { of, award, use, check, push: pushBag };
+  /** 같은 방의 사람에게 하나 건넨다.
+   *
+   *  ★ 대상을 reg.get 이 아니라 reg.inRoom 에서 얻는다. 두 가지를 동시에
+   *    한다: 사거리 재검증(combat.ts 의 c.fighters.has 와 같은 모양)이고,
+   *    reapStalePlayers 로 지워진 id 에 addItem 해서 FK 로 트랜잭션이 깨지는
+   *    것을 막는다 (player_items 는 REFERENCES players(id) ON DELETE CASCADE).
+   *
+   *  ★ 실패 이유를 갈라 말하지 않는다 — giveNoOne 의 주석에 그 논거가 있다. */
+  function give(s: Session, targetId: string, itemId: string): string | null {
+    if (targetId === s.playerId) return lines.giveSelf;
+    const target = reg.inRoom(roomIdOf(s.pos)).find((o) => o.playerId === targetId);
+    if (!target) return lines.giveNoOne;
+
+    const def = balance.items[itemId];
+    const have = q.itemsOf.all(s.playerId).find((r) => r.item_id === itemId);
+    // 정의가 없는 것과 가지고 있지 않은 것이 같은 문장이다 (check 와 같은 이유).
+    if (!def || !have) return lines.noSuchItem;
+    if (!givable(def)) return lines.notGivable(def.name);
+
+    const now = clock();
+    try {
+      /* 차감과 지급이 한 트랜잭션이다. 갈라지면 '냈는데 안 갔다' 가 생기고
+         그건 되돌릴 방법이 없다 — 승급의 차감과 정확히 같은 논거다. */
+      tx(() => {
+        const args = { player_id: s.playerId, item_id: itemId, qty: 1, now };
+        /* 두 문장의 WHERE 가 qty<=1 / qty>1 로 배타적이라 하나만 돈다.
+           (그래서 순서를 바꿔도 결과가 같다 — 그 함정은 가드 절이 이미 막았다.
+            진짜 함정은 가드를 지우고 UPDATE 하나로 합치는 쪽이다: 정확히
+            하나 가진 사람에서 CHECK (qty > 0) 이 터진다.) */
+        const changed = q.spendItemAll.run(args).changes || q.spendItemSome.run(args).changes;
+        // 0행 = 그 사이 다른 탭이 마지막 하나를 썼거나 다른 사람에게 건넸다.
+        if (changed === 0) throw new Error("EMPTY");
+        q.addItem.run({ player_id: target.playerId, item_id: itemId, qty: 1, now });
+      });
+    } catch (err) {
+      if (err instanceof Error && err.message === "EMPTY") return lines.noSuchItem;
+      console.error("[inventory] give", err);
+      return lines.noSuchItem;
+    }
+
+    // 커밋이 끝난 뒤에 양쪽에. 둘은 서로 다른 문장을 듣는다.
+    pushBag(s);
+    pushBag(target);
+    emit.log(s, "good", lines.gave(def.name, target.brief.name));
+    emit.log(target, "good", lines.received(def.name, s.brief.name));
+    return null;
+  }
+
+  return { of, award, use, check, give, push: pushBag };
 }

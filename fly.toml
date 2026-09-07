@@ -1,0 +1,61 @@
+# fly.io 배포 설정.
+#
+# ★ 이 앱은 '항상 켜져 있는 프로세스 하나 + 디스크 하나' 다. Dockerfile 머리
+#   주석에 그 논거가 있다 — 권위 상태가 메모리에 있다(세션 레지스트리, 0.5초
+#   전투 틱, 리스폰 대기, 유예 타이머, 승급 큐). 그래서 아래 세 줄이 이
+#   파일에서 가장 중요하다:
+#
+#     auto_stop_machines   머신이 잠들면 '지금 싸우던 것' 이 통째로 사라진다.
+#                          DB 는 남지만 전투는 안 남는다. 비용 설정이 아니라
+#                          게임성 결정이라, 끄는 것이 기본이다.
+#     auto_start_machines  깨우는 경로도 두지 않는다 (잠들지 않으므로).
+#     min_machines_running 1. 0 이면 위와 모순이다.
+#
+#   그리고 `fly scale count` 를 1 보다 크게 두지 말 것. 인스턴스 둘은 세계 둘이다.
+#
+# ★ 세 값이 Dockerfile 과 묶여 있고 test/deploy.ts ⓪-f 가 그것을 대조한다:
+#     internal_port          == ENV MUD_PORT == EXPOSE   (8787)
+#     mounts.destination     == dirname(ENV MUD_DB)      (/data)
+#     checks.path            == static.ts 가 처리하는 경로 (/healthz)
+#
+# ★ 아직 실기로 배포해 본 적이 없다. 아래 값 중 사람이 정해야 하는 것:
+#   app 이름 · primary_region · 볼륨 이름과 크기 · VM 크기.
+
+app = 'oldrpg'
+primary_region = 'nrt'
+
+[build]
+
+[env]
+  # MUD_PORT / MUD_DB 는 Dockerfile 의 ENV 가 이미 정한다. 여기서 다시 쓰면
+  # 두 곳이 어긋날 수 있어 쓰지 않는다.
+  #
+  # ★ 프록시 뒤에서는 이것을 켜야 IP 예산이 사람 단위로 센다. 기본이 0 이라
+  #   그대로 두면 접속자 전원이 한 IP 버킷이 된다. 다만 fly-proxy 가
+  #   X-Forwarded-For 를 어떻게 쌓는지 실측하기 전에는 1 이 맞는지 모른다 —
+  #   배포한 뒤 로그로 확인하고 고칠 것.
+  MUD_TRUST_PROXY = '1'
+
+[http_service]
+  internal_port = 8787
+  force_https = true
+  auto_stop_machines = 'off'
+  auto_start_machines = false
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    interval = '30s'
+    timeout = '3s'
+    grace_period = '10s'
+    method = 'GET'
+    path = '/healthz'
+
+[mounts]
+  source = 'oldrpg_data'
+  destination = '/data'
+  initial_size = '1GB'
+
+[[vm]]
+  memory = '512mb'
+  cpu_kind = 'shared'
+  cpus = 1

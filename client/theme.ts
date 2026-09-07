@@ -29,6 +29,9 @@ const LOG_COLOR: Record<string, string> = {
   world: "#b98cd6",
   combat: "#9fb0d8",
   say: C.other,
+  // 방 발화와 눈에 띄게 달라야 한다 — 라벨("(구역)")을 클라이언트가 붙이면
+  // 불변식 (1) 위반이라, 이 둘을 가르는 표시는 색뿐이다.
+  yell: "#8ec5a8",
   npc: C.npc,
   good: C.green,
   bad: C.red,

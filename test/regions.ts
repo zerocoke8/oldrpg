@@ -488,6 +488,20 @@ async function main() {
   check("다른 지역 사람의 좌표가 와이어에 아예 없다", alice.of("presence.join").length === 0);
   check("Bob 의 이름조차 나가지 않았다", !alice.raw.some((r) => r.includes(bSnap.self.name)));
 
+  /* ★ 외침의 상한이 곧 canSee 다. 지역이 '관심영역의 상한' 이라는 결정이
+     여기서 두 번째 값을 낸다 — 지역 채널을 만들면서 팬아웃 경계를 새로
+     정할 필요가 없었다. 그 경계가 진짜인지는 와이어에서만 확인된다. */
+  alice.clear();
+  const yellSeq = bob.act({ type: "yell", text: "지역을-넘지-않는다" });
+  await bob.until((m) => m.t === "ack" && m.seq === yellSeq);
+  await sleep(120);
+  check("★ 다른 지역의 외침은 들리지 않는다",
+    alice.logs("yell").length === 0, JSON.stringify(alice.logs("yell").map((l) => l.text)));
+  check("그 문자열이 와이어에 아예 없다 (안개 검사와 같은 수준)",
+    !alice.raw.some((r) => r.includes("지역을-넘지-않는다")));
+  check("(대조) 외친 사람 자신은 들었다 — 팬아웃이 죽은 것이 아니라 경계에서 끊겼다",
+    bob.logs("yell").some((l) => l.text === "지역을-넘지-않는다"));
+
   // Bob 이 문을 지나 같은 지역으로 오면 그때 보인다.
   alice.clear();
   await bob.walk(["south", "south", "east"]); // (5,3)->(5,5)->b2(1,3)

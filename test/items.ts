@@ -460,6 +460,108 @@ const BALANCE = FIXTURE_BALANCE;
     q.itemsOf.all(again.id).every((r) => r.item_id !== "minor_potion"),
     JSON.stringify(q.itemsOf.all(again.id)));
 
+  /* ── ⑪~⑮ 건네기 ────────────────────────────────────────────────────
+     ★ 무엇을 고치는가: 전리품은 '피해를 준 사람 전원' 에게 나뉘는데(④),
+       물건을 건넬 방법이 없었다. 둘이 함께 싸운 뒤 물약 한 개를 넘겨 주는
+       것조차 못 했다는 뜻이다.
+     제안-수락이 아니라 즉시 확정이다 — 지금 건넬 수 있는 것이 물약 하나뿐인데
+     방어 기계가 그보다 크면 그건 값을 못 번다. 대신 '한 거래 안에서 한쪽만
+     손해 보는 상태' 는 트랜잭션이 구조로 막는다. */
+  section("⑪ 건네기 — 한 트랜잭션, 서로 다른 문장");
+  /* again(=alice) 과 bob 을 같은 방에 세운다. bob 은 ④ 이후 (3,5) 에 있고
+     again 은 재접속 뒤 (5,2) 다. (5,2)->(5,3)->(5,4)->(5,5)->(4,5)->(3,5). */
+  await again.walk(["south", "south", "south", "west", "west"]);
+  const bobSess = server.ctx.reg.get(bob.id)!;
+  const aliceSess = server.ctx.reg.get(again.id)!;
+  check("(준비) 둘이 같은 방에 있다",
+    aliceSess.pos.region === bobSess.pos.region &&
+      aliceSess.pos.x === bobSess.pos.x &&
+      aliceSess.pos.y === bobSess.pos.y,
+    `${JSON.stringify(aliceSess.pos)} vs ${JSON.stringify(bobSess.pos)}`);
+  q.addItem.run({ player_id: again.id, item_id: "minor_potion", qty: 2, now: 1 });
+  const bobBefore = q.itemsOf.all(bob.id).find((r) => r.item_id === "minor_potion")?.qty ?? 0;
+  again.clear();
+  bob.clear();
+  await again.actAndWait({ type: "give", targetId: bob.id, itemId: "minor_potion" });
+  await sleep(60);
+  check("★ 준 쪽이 하나 줄었다",
+    (q.itemsOf.all(again.id).find((r) => r.item_id === "minor_potion")?.qty ?? 0) === 1);
+  check("★ 받은 쪽이 하나 늘었다",
+    (q.itemsOf.all(bob.id).find((r) => r.item_id === "minor_potion")?.qty ?? 0) === bobBefore + 1);
+  check("★ 양쪽 가방이 화면까지 갱신됐다 (한쪽만 보내면 다른 쪽은 유령을 본다)",
+    again.of("self.patch").some((m) => m.items !== undefined) &&
+      bob.of("self.patch").some((m) => m.items !== undefined));
+  check("★ 둘이 서로 다른 문장을 듣는다",
+    again.texts("good").some((t) => t.includes("건넸다")) &&
+      bob.texts("good").some((t) => t.includes("받았다")),
+    JSON.stringify([again.texts("good"), bob.texts("good")]));
+
+  section("⑫ 마지막 하나를 두 사람에게 동시에 건넬 수 없다");
+  // 정확히 하나만 남긴다.
+  for (let i = 0; i < 30; i++) {
+    const r = q.itemsOf.all(again.id).find((x) => x.item_id === "minor_potion");
+    if (!r) break;
+    if (r.qty > 1) q.consumeItem.run({ player_id: again.id, item_id: "minor_potion", now: 1 });
+    else break;
+  }
+  const one = q.itemsOf.all(again.id).find((r) => r.item_id === "minor_potion")?.qty ?? 0;
+  const bobBefore2 = q.itemsOf.all(bob.id).find((r) => r.item_id === "minor_potion")?.qty ?? 0;
+  again.clear();
+  again.act({ type: "give", targetId: bob.id, itemId: "minor_potion" });
+  again.act({ type: "give", targetId: bob.id, itemId: "minor_potion" });
+  await sleep(150);
+  check(`한 개뿐이었다 (${one}개)`, one === 1, String(one));
+  check("★ 한 번만 건네졌다",
+    (q.itemsOf.all(bob.id).find((r) => r.item_id === "minor_potion")?.qty ?? 0) === bobBefore2 + 1);
+  check("★ 준 쪽의 행이 지워졌다 (0개를 가진 행은 없다)",
+    q.itemsOf.all(again.id).every((r) => r.item_id !== "minor_potion"),
+    JSON.stringify(q.itemsOf.all(again.id)));
+  check("두 번째는 '가지고 있지 않다'",
+    again.texts("sys").some((t) => t.includes("가지고 있지 않다")),
+    JSON.stringify(again.texts("sys")));
+
+  section("⑬ 증표는 넘길 수 없다 — 등급 사다리는 기록이지 선물이 아니다");
+  const shardBefore = q.itemsOf.all(bob.id).find((r) => r.item_id === "warden_shard")?.qty ?? 0;
+  again.clear();
+  await again.actAndWait({ type: "give", targetId: bob.id, itemId: "warden_shard" });
+  await sleep(60);
+  check("★ 넘길 수 있는 것이 아니라고 답한다",
+    again.texts("sys").some((t) => t.includes("넘길 수 있는 것이 아니다")),
+    JSON.stringify(again.texts("sys")));
+  check("★ 양쪽 가방이 그대로다",
+    (q.itemsOf.all(again.id).find((r) => r.item_id === "warden_shard")?.qty ?? 0) === 1 &&
+      (q.itemsOf.all(bob.id).find((r) => r.item_id === "warden_shard")?.qty ?? 0) === shardBefore);
+
+  section("⑭ 사거리 — 없는 사람·다른 방·다른 지역이 '같은 한 문장' 이다");
+  q.addItem.run({ player_id: again.id, item_id: "minor_potion", qty: 3, now: 1 });
+  await bob.walk(["west"]); // 옆 방으로
+  const said: string[] = [];
+  for (const target of [bob.id, "p_nobody_at_all", again.id.split("").reverse().join("")]) {
+    again.clear();
+    await again.actAndWait({ type: "give", targetId: target, itemId: "minor_potion" });
+    await sleep(40);
+    said.push(again.texts("sys").join("|"));
+  }
+  /* ★ 셋이 글자 그대로 같아야 한다. 갈라지면 건네기가 전 세계 위치 탐침이
+     된다 — 아무 id 나 넣어 보는 것만으로 그 사람이 접속했는지, 어느 방에
+     있는지를 알아낼 수 있다. */
+  check("★ 다른 방·없는 id·엉뚱한 id 가 전부 같은 문장이다",
+    said[0] === said[1] && said[1] === said[2] && said[0]!.includes("그런 이는 여기에 없다"),
+    JSON.stringify(said));
+  check("어느 가방도 움직이지 않았다",
+    (q.itemsOf.all(again.id).find((r) => r.item_id === "minor_potion")?.qty ?? 0) === 3);
+
+  section("⑮ 자기 자신에게는 건넬 수 없다");
+  again.clear();
+  await again.actAndWait({ type: "give", targetId: again.id, itemId: "minor_potion" });
+  await sleep(40);
+  /* ★ 수량만 보면 안 잡힌다 — 자기에게 spend+add 는 순증 0이라 통과한다.
+     문장을 봐야 '자기 자신' 갈래가 진짜로 도는지 알 수 있다. */
+  check("★ 문장으로 거절한다", again.texts("sys").some((t) => t.includes("자기 자신에게")),
+    JSON.stringify(again.texts("sys")));
+  check("가방이 그대로다",
+    (q.itemsOf.all(again.id).find((r) => r.item_id === "minor_potion")?.qty ?? 0) === 3);
+
   // ── 정리 ────────────────────────────────────────────────────────────
   again.close();
   bob.close();

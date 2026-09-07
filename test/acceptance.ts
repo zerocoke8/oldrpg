@@ -244,6 +244,36 @@ async function main() {
     heard.speaker?.id === enter.player.id);
   check("발화자 자신도 받는다", bob.logs("say").length === 1);
 
+  /* ── ⑥' yell: 지역 단위 팬아웃 ─────────────────────────────────────
+     ★ 무엇을 고치는가: 방이 164개라 두 사람이 같은 방에 있을 확률이 0.6% 다.
+       멀티플레이어인데 서로를 만날 방법이 없었다 — say 는 방 단위라 아무에게도
+       안 들린다. 외침이 만나게 하고, 만난 뒤에 걸어가서 건네는 것이다.
+     여기서 지키는 것 둘: 외침은 방 경계를 넘고, say 는 여전히 넘지 않는다.
+     넓히는 것이 대체가 되면 그건 손실이다. */
+  section("⑥' yell — 지역 단위 팬아웃 (say 의 방 경계는 그대로다)");
+  await bob.ack(bob.move("west")); // Bob 만 옆 방으로. 둘은 같은 지역, 다른 방이다.
+  alice.clear();
+  bob.clear();
+  const noSeq = bob.send({ type: "say", text: "이건 방 밖으로 안 간다" });
+  await bob.ack(noSeq);
+  const ySeq = bob.send({ type: "yell", text: "누구 있나" });
+  await bob.ack(ySeq);
+  /* until() 로 기다리지 않는다 — 팬아웃이 끊기면 그건 throw 가 되어 절 전체가
+     멈추고, 그 뒤의 검사들(특히 'say 는 여전히 방 밖으로 안 간다')이 아예
+     돌지 않는다. 시간을 주고 나서 인박스를 본다: 없으면 FAIL 한 줄이다. */
+  await sleep(200);
+  const yelled = alice.logs("yell")[0];
+  check("★ 외침은 방 경계를 넘어 같은 지역에 닿는다", yelled?.text === "누구 있나",
+    JSON.stringify(alice.logs().map((l) => [l.kind, l.text])));
+  check("화자가 구조화 필드다 (say 와 같은 규약)", yelled?.speaker?.id === enter.player.id);
+  check("★ 문장에 이름이 합성되어 있지 않다", !yelled?.text.includes(enter.player.name));
+  check("외친 사람 자신도 받는다", bob.logs("yell").length === 1);
+  /* ★ 같은 자리에서 say 는 가지 않았다. 이걸 안 보면 '넓혔다' 와 '갈아치웠다'
+     를 구별할 수 없다. */
+  check("★ 같은 순간의 say 는 옆 방에 가지 않았다",
+    alice.logs("say").length === 0, JSON.stringify(alice.logs().map((l) => l.text)));
+  await bob.ack(bob.move("east")); // 원래 방으로 — 뒤 절들이 같은 방을 전제한다.
+
   // ── ⑦ 새로고침이 조용한가 (유예) ────────────────────────────────────
   section("⑦ Bob 새로고침 — 유예 안에서는 아무 일도 없어야 한다");
   alice.clear();
@@ -336,6 +366,27 @@ async function main() {
   const unk = await alice.ack(unkSeq);
   check("모르는 액션은 ack{unknown_action} (크래시도 error 도 아님)",
     unk.t === "ack" && unk.reason === "unknown_action");
+  /* 새 동사 둘도 같은 계약 아래 있다 — strict 스키마 위반과 길이 초과가
+     error 가 아니라 ack 로 온다. */
+  const scopeSeq = alice.send({ type: "yell", scope: "region", text: "hi" });
+  const scoped = await alice.ack(scopeSeq);
+  check("★ yell 에 모르는 필드를 끼우면 ack{bad_args} (scope 축을 안 만든 이유)",
+    scoped.t === "ack" && scoped.reason === "bad_args");
+  const longYellSeq = alice.send({ type: "yell", text: "가".repeat(500) });
+  const longAck = await alice.ack(longYellSeq);
+  check("★ 긴 외침은 자르지 않고 ack{too_long} 으로 거절한다",
+    longAck.t === "ack" && longAck.reason === "too_long");
+  check("잘린 외침이 아무에게도 가지 않았다",
+    alice.logs("yell").length === 0, JSON.stringify(alice.logs("yell").map((l) => l.text)));
+  const giveBadSeq = alice.send({ type: "give", targetId: "x" });
+  const giveBad = await alice.ack(giveBadSeq);
+  check("give 에 itemId 가 없으면 ack{bad_args}",
+    giveBad.t === "ack" && giveBad.reason === "bad_args");
+  const giveQtySeq = alice.send({ type: "give", targetId: "x", itemId: "y", qty: 99 });
+  const giveQty = await alice.ack(giveQtySeq);
+  check("★ give 에 qty 를 끼워 넣으면 ack{bad_args} (수량 축이 없다)",
+    giveQty.t === "ack" && giveQty.reason === "bad_args");
+
   // 아는 동사에 모르는 필드를 끼워 넣으면 bad_args 다 (strict 스키마).
   const strictSeq = alice.send({ type: "attack", targetId: "x" });
   const strict = await alice.ack(strictSeq);

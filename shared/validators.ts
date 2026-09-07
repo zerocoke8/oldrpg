@@ -91,6 +91,18 @@ export function makeActionSchemas(limits: { sayMaxLen: number; unparsedMaxLen: n
     abandon_mission: z
       .object({ type: z.literal("abandon_mission"), missionId: z.string().max(64) })
       .strict(),
+    /* targetId 가 실제로 이 방에 있는지, itemId 를 가지고 있고 남에게 넘길 수
+       있는 것인지는 핸들러가 다시 본다 (use_item·talk 과 같은 분업). */
+    give: z
+      .object({
+        type: z.literal("give"),
+        targetId: z.string().max(64),
+        itemId: z.string().max(64),
+      })
+      .strict(),
+    /* 길이를 스키마에 넣지 않는 것은 say 와 같은 이유다 — too_long 과
+       bad_args 를 구별해서 답해야 한다. */
+    yell: z.object({ type: z.literal("yell"), text: z.string() }).strict(),
     maxLen: { say: limits.sayMaxLen, unparsed: limits.unparsedMaxLen },
   };
 }

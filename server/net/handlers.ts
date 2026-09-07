@@ -38,7 +38,7 @@ import { rankName } from "../engine/guild";
 import type { Balance } from "../engine/enemies";
 import type { Emit } from "./emit";
 import type { Presence } from "./presence";
-import { GRACE_MS, type Registry, type Session } from "./session";
+import { canSee, GRACE_MS, type Registry, type Session } from "./session";
 
 export const LIMITS: Limits = {
   sayMaxLen: 200,
@@ -46,6 +46,8 @@ export const LIMITS: Limits = {
   nameMaxLen: 16,
   actionsPerSec: 20,
   resyncPerSec: 1,
+  yellMaxLen: 120,
+  yellPerMin: 6,
   framesPerSec: 40,
   maxFrameBytes: 16 * 1024,
   pingIntervalMs: 15_000,
@@ -299,6 +301,7 @@ export function handleHello(
     linger: null,
     actionTokens: LIMITS.actionsPerSec,
     resyncTokens: LIMITS.resyncPerSec,
+    yellTokens: LIMITS.yellPerMin,
     lastRefill: now,
     awaitingPong: 0,
   };
@@ -345,6 +348,8 @@ function refill(s: Session, now: number): void {
   if (dt === 0) return;
   s.actionTokens = Math.min(LIMITS.actionsPerSec, s.actionTokens + dt * LIMITS.actionsPerSec);
   s.resyncTokens = Math.min(LIMITS.resyncPerSec, s.resyncTokens + dt * LIMITS.resyncPerSec);
+  // 외침만 분 단위다 — 지역 채널의 학대는 순간 폭주가 아니라 지속성이다.
+  s.yellTokens = Math.min(LIMITS.yellPerMin, s.yellTokens + (dt * LIMITS.yellPerMin) / 60);
 }
 
 const reject = (ctx: Ctx, s: Session, seq: number, reason: RejectReason): void => {
@@ -458,6 +463,18 @@ export function handleAction(
       action = p.data;
       break;
     }
+    case "give": {
+      const p = SCHEMAS.give.safeParse(raw);
+      if (!p.success) return reject(ctx, s, seq, "bad_args");
+      action = p.data;
+      break;
+    }
+    case "yell": {
+      const p = SCHEMAS.yell.safeParse(raw);
+      if (!p.success) return reject(ctx, s, seq, "bad_args");
+      action = p.data;
+      break;
+    }
     default:
       // 이 서버가 구현하지 않은 variant. 옛 서버가 새 클라이언트를 만나는
       // 경우가 정확히 이것이고, 크래시가 아니라 거절이어야 한다.
@@ -503,6 +520,12 @@ export function handleAction(
       );
     case "abandon_mission":
       return doWorldCommand(ctx, s, seq, () => ctx.missions.abandon(s, action.missionId));
+    case "give":
+      return doWorldCommand(ctx, s, seq, () =>
+        ctx.inventory.give(s, action.targetId, action.itemId),
+      );
+    case "yell":
+      return doYell(ctx, s, seq, action.text);
   }
 }
 
@@ -636,6 +659,49 @@ function doSay(ctx: Ctx, s: Session, seq: number, rawText: string): void {
   // say 로 presence 줄을 위조할 수 없다.
   for (const o of ctx.reg.inRoom(roomId)) {
     ctx.emit.log(o, "say", text, { speaker: s.brief });
+  }
+}
+
+/** say 의 지역판. 팬아웃만 다르고 나머지는 같은 모양이다.
+ *
+ *  ★ 왜 필요한가: 두 사람이 같은 방에 있을 확률이 0.6% 다 (방이 164개다).
+ *    멀티플레이어인데 서로를 만날 방법이 없었다 — say 는 방 단위라 아무에게도
+ *    안 들린다. 외침이 만나게 하고, 만난 뒤에 걸어가서 건네는 것이다.
+ *
+ *  ★ 별도 버킷을 쓰는 이유는 doResync 와 같다 — 응답 크기가 접속자 수에
+ *    비례해 비유계다. say 는 방 하나라 괜찮았지만 지역은 아니다.
+ *
+ *  ★ 거절에 문장을 붙이는 것이 필수다: 클라이언트의 리듀서가 ack 를 화면에
+ *    전혀 올리지 않으므로, 조용히 거절하면 플레이어에게는 아무 일도 안
+ *    일어난 것으로 보인다. */
+function doYell(ctx: Ctx, s: Session, seq: number, rawText: string): void {
+  const text = sanitize(rawText);
+  if (!text) {
+    reject(ctx, s, seq, "empty");
+    ctx.emit.log(s, "sys", lines.sayEmpty);
+    return;
+  }
+  if (text.length > LIMITS.yellMaxLen) {
+    // 자르지 않고 거절한다 (say 와 같은 이유: 자르면 의도가 조용히 바뀐다).
+    reject(ctx, s, seq, "too_long");
+    ctx.emit.log(s, "sys", lines.yellTooLong);
+    return;
+  }
+  if (s.yellTokens < 1) {
+    reject(ctx, s, seq, "rate_limited");
+    ctx.emit.log(s, "sys", lines.yellCooling);
+    return;
+  }
+  s.yellTokens -= 1;
+  ctx.emit.send(s, { t: "ack", seq, ok: true, reason: null, pos: s.pos });
+  /* 팬아웃. emit.toRegion 헬퍼를 만들지 않는다 — toRoom 은 호출자가 여럿이라
+     헬퍼이고 이건 하나이며, doSay 도 루프를 인라인한다. byRegion 인덱스도
+     만들지 않는다: presence 가 이미 매 스냅샷마다 같은 전수 스캔을 돌고,
+     두 번째 인덱스는 pos 와 어긋날 수 있는 자리를 하나 더 만든다.
+     자기 자신도 reg.all() 에 있어 외친 사람도 자기 줄을 받는다 (say 와 같다). */
+  for (const o of ctx.reg.all()) {
+    if (!canSee(o.pos, s.pos)) continue;
+    ctx.emit.log(o, "yell", text, { speaker: s.brief });
   }
 }
 

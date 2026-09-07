@@ -30,11 +30,25 @@ ENV NODE_ENV=production \
     MUD_PORT=8787 \
     MUD_DB=/data/mud.db
 # 서버는 TS 를 그대로 돈다(tsx). 빌드 산출물과 소스가 갈라지지 않는 것이
-# 이 규모에서는 이득이 크다 — 프롬프트(.md)와 스키마(.sql)도 server/ 아래에 있다.
+# 이 규모에서는 이득이 크다.
+#
+# ★ 런타임이 fs 로 읽는 뿌리는 여섯이고, 그중 둘은 server/ 밖에 있다:
+#     server/db/schema.sql            migrate.ts
+#     server/db/migrations/           migrate.ts
+#     server/narration/prompts/       prompts.ts (.md — 프롬프트·톤·무드·목소리)
+#     dist/                           net/static.ts (MUD_STATIC 기본값)
+#     content/world/                  content/world.ts   ← server/ 밖
+#     content/balance/                content/balance.ts ← server/ 밖
+#   한때 이 목록이 "프롬프트와 스키마도 server/ 아래에 있다" 였고, 정확히
+#   content/ 만 빼고 맞는 문장이었다. 그래서 이 이미지는 100% 시작 실패했다 —
+#   boot() 이 DB 를 열기도 전에 loadBalance()/loadWorld() 를 부른다.
+#   목록이 바뀌면 test/deploy.ts ⓪-c 가 빨개진다:
+#     grep -rn "readFileSync\|readdirSync\|createReadStream" server/
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/server ./server
 COPY --from=build /app/shared ./shared
+COPY --from=build /app/content ./content
 COPY --from=build /app/package.json ./
 # SQLite 파일이 사는 곳. 볼륨을 여기 붙인다.
 RUN mkdir -p /data && chown -R node:node /data

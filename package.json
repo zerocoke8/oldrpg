@@ -1,6 +1,9 @@
 {
   "name": "oldrpg",
   "private": true,
+  "engines": {
+    "node": ">=22"
+  },
   "version": "0.1.0",
   "type": "module",
   "scripts": {
@@ -20,6 +23,8 @@
     "test:npc": "tsx test/npc.ts",
     "test:items": "tsx test/items.ts",
     "pregen": "tsx server/tools/pregen.ts",
+    "backup": "tsx server/tools/backup.ts",
+    "restore": "tsx server/tools/restore.ts",
     "author": "tsx server/tools/authorRegion.ts",
     "sim": "tsx server/tools/balanceSim.ts",
     "start": "node --import tsx server/index.ts",

@@ -73,6 +73,8 @@ export const lines = {
   unparsed: (raw: string): string => `"${raw}" — 무엇을 하려는지 알 수 없다.`,
   sayEmpty: "할 말이 없다.",
   sayTooLong: "그렇게 긴 말은 숨이 차서 못 한다.",
+  yellTooLong: "그렇게 길게는 외칠 수 없다.",
+  yellCooling: "목이 아직 트이지 않았다.",
 
   // ── 전투 ──────────────────────────────────────────────────────────────
   /* ★ 전부 결정론적이다. 0.5초 스윙에 모델을 기다릴 수 없다 (규칙 4).
@@ -161,6 +163,16 @@ export const lines = {
   noSuchItem: "가지고 있지 않다.",
   itemNotUsable: (item: string): string => `${item}은(는) 쓸 수 있는 것이 아니다.`,
   itemAtFullHp: (item: string): string => `상처가 이미 아물어 있다. ${item}을(를) 아껴 둔다.`,
+  /* 건네기. 주는 쪽과 받는 쪽이 다른 문장을 듣는다 — skillHealOther /
+     skillHealedBy 의 선례 그대로다. */
+  gave: (item: string, who: string): string => `${who}에게 ${item}을(를) 건넸다.`,
+  received: (item: string, who: string): string => `${who}에게서 ${item}을(를) 받았다.`,
+  giveSelf: "자기 자신에게 건넬 것은 없다.",
+  /** ★ 없는 id · 다른 방 · 다른 지역이 전부 이 한 문장이다. 갈라지면 건네기가
+   *  전 세계 위치 탐침이 된다 — 아무 id 나 넣어 보는 것만으로 그 사람이
+   *  접속했는지, 어느 방에 있는지를 알아낼 수 있다 (noSuchMission 과 같은 판단). */
+  giveNoOne: "그런 이는 여기에 없다.",
+  notGivable: (item: string): string => `${item}은(는) 남에게 넘길 수 있는 것이 아니다.`,
 
   // ── NPC 대화 (4b) ─────────────────────────────────────────────────────
   /* ★ 여기 있는 것은 전부 '틀' 이다. 대사 본문은 여기 없다 —

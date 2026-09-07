@@ -228,6 +228,36 @@ export function makeQueries(db: Db) {
     ),
     countNpcLines: db.prepare<[], { n: number }>("SELECT count(*) AS n FROM npc_lines"),
 
+    // ── 백업·복원 (server/tools/backup.ts · restore.ts) ──────────────────
+    /** 백업본에서 전부 읽는다. 정렬은 검사가 행 단위 동일성을 주장할 수 있게. */
+    allRoomText: db.prepare<[], RoomTextFullRow>(
+      "SELECT * FROM room_text ORDER BY room_id, state_hash",
+    ),
+    allNpcLines: db.prepare<[], NpcLineFullRow>(
+      "SELECT * FROM npc_lines ORDER BY npc_id, topic, state_hash",
+    ),
+    /** 고아 선별용. room_text.room_id 는 rooms 로 FK 라 없는 방에 넣으면
+     *  FOREIGN KEY constraint failed 로 트랜잭션이 통째로 죽는다. */
+    allNpcIds: db.prepare<[], { id: string }>("SELECT id FROM npcs"),
+    /* ★ insertRoomTextIfAbsent / insertNpcLineIfAbsent 와 ON CONFLICT 절이
+       글자 그대로 같아야 한다 — 한쪽만 고치면 조용히 어긋난다. 다른 점은
+       하나뿐이다: 두 타임스탬프를 @now 로 박지 않고 인자로 받는다. 그대로
+       @now 를 쓰면 복원본이 '언제 이 문장에 돈을 썼는가' 를 잃는다. */
+    restoreRoomText: db.prepare(
+      `INSERT INTO room_text (room_id, state_hash, text, source, flags_json,
+                              model, prompt_version, created_at, updated_at)
+       VALUES (@room_id, @state_hash, @text, @source, @flags_json,
+               @model, @prompt_version, @created_at, @updated_at)
+       ON CONFLICT (room_id, state_hash) DO NOTHING`,
+    ),
+    restoreNpcLine: db.prepare(
+      `INSERT INTO npc_lines (npc_id, topic, state_hash, text, source, flags_json,
+                              model, prompt_version, created_at, updated_at)
+       VALUES (@npc_id, @topic, @state_hash, @text, @source, @flags_json,
+               @model, @prompt_version, @created_at, @updated_at)
+       ON CONFLICT (npc_id, topic, state_hash) DO NOTHING`,
+    ),
+
     // ── player_items ────────────────────────────────────────────────────
     /** 그 사람의 전부. PK 의 앞자리가 player_id 라 이 질의가 PK 인덱스를 탄다.
      *  item_id 로 정렬해 목록의 순서가 요청마다 흔들리지 않게 한다 —

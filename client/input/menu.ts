@@ -168,6 +168,32 @@ export function rootItems(st: UiState): MenuItem[] {
     });
   }
 
+  /* 건네기 — 이 방에 사람이 있고 내가 가진 것이 있을 때만. 메뉴가 상태의
+     순수 함수라 상대가 방을 떠나면 이 가지가 저절로 사라진다.
+     사람 -> 물건 순인 이유: 물건 -> 사람이면 가방 가지가 하위 메뉴를 하나 더
+     갖게 되어 물약을 마시는 데 키가 하나 더 든다.
+     ★ 증표를 회색으로 처리하지 않는다. usable 을 '건넬 수 있는가' 로 다시
+       읽으면 클라이언트가 규칙을 갖게 된다 — 가방 가지가 이미 '눌러도 서버가
+       문장으로 답한다' 를 택해 두었고, 여기서도 같다. */
+  const here = st.room?.occupants ?? [];
+  if (here.length && st.items.length) {
+    items.push({
+      id: "give",
+      label: "건네기",
+      items: here.map((p) => ({
+        id: `to:${p.id}`,
+        label: p.name,
+        items: st.items.map((it) => ({
+          id: `give:${p.id}:${it.id}`,
+          label: it.name,
+          ...(it.qty > 1 ? { note: `x${it.qty}` } : {}),
+          action: { type: "give", targetId: p.id, itemId: it.id } as Action,
+        })),
+        empty: "…",
+      })),
+    });
+  }
+
   /* 일지 — 맡은 것이 있을 때만. 가방과 같은 규칙이다. 전부 비활성이다:
      읽는 곳이지 누르는 곳이 아니고, 제출은 게시한 사람 앞에서만 된다. */
   const journal = st.self?.missions ?? [];
@@ -195,6 +221,7 @@ export function rootItems(st: UiState): MenuItem[] {
   }
 
   items.push({ id: "say", label: "말하기", focus: "말하기 " });
+  items.push({ id: "yell", label: "외치기", focus: "외치기 " });
   return items;
 }
 
