@@ -70,6 +70,12 @@ export function Minimap(props: {
    *  장소의 성질이라 변하지 않고, 그래서 스냅샷 한 번으로 충분하다. */
   const foes = new Set(region.foes);
 
+  /** 다른 지역으로 나가는 길이 있는 칸. 지도가 없으면 '다음 지역에 어떻게
+   *  가는가' 를 알 방법이 벽에 부딪혀 보는 것뿐이다 — 열 칸짜리 지역에서는
+   *  그게 놀이지만 마흔 칸짜리에서는 그냥 막막함이다.
+   *  어디로 이어지는지는 안 그린다: 가 보면 서버가 답한다 (규칙 1). */
+  const gates = new Set(region.gates);
+
   return (
     <div style={{ ...win, padding: 8 }}>
       <div
@@ -84,13 +90,17 @@ export function Minimap(props: {
             const here = sameRegion && x === at.x && y === at.y;
             const guests = othersAt.get(`${x},${y}`) ?? [];
             const foe = foes.has(`${x},${y}`);
+            const gate = gates.has(`${x},${y}`);
             const dir = dirTo(x, y);
             return (
               <div
                 key={`${x}-${y}`}
                 title={
-                  [...guests.map((g) => g.name), ...(foe ? ["적이 나오는 자리"] : [])].join(", ") ||
-                  undefined
+                  [
+                    ...guests.map((g) => g.name),
+                    ...(foe ? ["적이 나오는 자리"] : []),
+                    ...(gate ? ["다른 지역으로 나가는 길"] : []),
+                  ].join(", ") || undefined
                 }
                 {...(dir
                   ? {
@@ -114,6 +124,10 @@ export function Minimap(props: {
                   background: here ? C.gold : foe ? "#6b3340" : bg(x, y),
                   outline: guests.length ? `2px solid ${C.other}` : "none",
                   outlineOffset: -2,
+                  /* 출구는 안쪽 테두리로 그린다. 바깥 테두리(outline)는 사람이
+                     쓰고 있고, 배경은 적이 쓴다 — 셋이 한 칸에 겹쳐도 각각
+                     보여야 한다. 초록은 미니맵에서 여기서만 쓴다. */
+                  boxShadow: gate ? `inset 0 0 0 2px ${C.green}` : "none",
                   cursor: dir ? "pointer" : "default",
                   touchAction: "manipulation",
                   display: "flex",

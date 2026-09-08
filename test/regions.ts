@@ -508,6 +508,28 @@ async function main() {
   check("★ 타일은 두 경우가 글자 그대로 같다 (더 보내는 것이 아니다)",
     JSON.stringify(cleared.view("b2").tiles) === JSON.stringify(withFoes.view("b2").tiles));
 
+  /* ④'' 다른 지역으로 나가는 길을 지도가 찍는다.
+     ★ 없으면 '다음 지역에 어떻게 가는가' 를 아는 방법이 벽에 부딪혀 보는 것
+       뿐이다. 열 칸짜리 지역에서는 그게 놀이지만 마흔 칸짜리에서는 막막함이다.
+     ★ 싣는 것은 '서는 칸' 이다 — 출구는 걷는 칸에서 벽 쪽으로 나가므로
+       문 자체는 격자에 칸이 없다. 사람이 알아야 하는 것도 어디에 서는가다. */
+  const gateCells = withFoes.view("b2").gates;
+  const wantGates = [...new Set(b2def.exits.map((e) => e.at))].sort();
+  check("★ 출구가 있는 칸이 그대로 실린다",
+    JSON.stringify(gateCells) === JSON.stringify(wantGates),
+    JSON.stringify([gateCells, wantGates]));
+  check("★ 그 칸은 전부 걷는 칸이다 (벽을 찍으면 갈 수 없는 곳을 가리킨다)",
+    gateCells.every((k) => {
+      const [x, y] = k.split(",").map(Number);
+      return withFoes.walkable("b2", x!, y!);
+    }), JSON.stringify(gateCells));
+  /* ★ 어디로 이어지는지도, 무엇이 필요한지도 안 싣는다. 지도가 미리 말하면
+     그건 진행을 지도에 적어 두는 것이다 — 가 보면 서버가 문장으로 답한다. */
+  const slice = JSON.stringify(withFoes.view("b2"));
+  check("★ 목적지 지역도 잠금 조건도 실리지 않는다 (좌표뿐이다)",
+    !b2def.exits.some((e) => slice.includes(e.to.region) || (e.requires ? slice.includes(e.requires) : false)),
+    slice.slice(0, 200));
+
   // ── ⑤ 관심영역 ─────────────────────────────────────────────────────
   section("⑤ 관심영역 — 다른 지역의 사람은 보이지 않는다");
   alice.clear();

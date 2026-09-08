@@ -173,6 +173,15 @@ async function main() {
       JSON.stringify(map.view(r.id).foes) === JSON.stringify(placed),
       JSON.stringify([map.view(r.id).foes, placed]));
   }
+  /* 나가는 길도 같다. 지역마다 최소 하나는 있어야 한다 — 없는 지역은
+     들어가면 못 나오는 곳이고, 그건 오타로 만들어진다 (부팅 검증이 왕복
+     짝을 보지만, '지도에 찍힌다' 는 여기서만 확인된다). */
+  for (const r of map.regions()) {
+    const want = [...new Set(r.exits.map((e) => e.at))].sort();
+    check(`${r.id}: 나가는 길이 지도에 실린다 (${want.length}곳)`,
+      want.length > 0 && JSON.stringify(map.view(r.id).gates) === JSON.stringify(want),
+      JSON.stringify([map.view(r.id).gates, want]));
+  }
 
   section("② 씨앗은 한 글자도 바뀌지 않았다 (규칙 3)");
   /* seed_id 는 내용 파생이다 — 하나라도 어긋나면 그 방의 생성된 텍스트가

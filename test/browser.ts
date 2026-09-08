@@ -185,10 +185,11 @@ async function main() {
      문장이 읽기 어려워진다. */
   check("★ 지난 방의 묘사는 사라졌다 (지금 있는 곳의 문장이 묻히지 않는다)",
     !bLog2.some((t) => t.includes("석조 교차로")), JSON.stringify(bLog2));
-  /* ★ 그런데 걷어내는 것은 묘사뿐이다. 말·전투·시스템 문구까지 지우면
-     그건 편의가 아니라 손실이다 — 걸었다고 방금 나눈 대화가 사라지면 안 된다. */
-  check("★ 묘사가 아닌 줄은 남는다 (로그를 통째로 비우지 않는다)",
-    bLog2.some((t) => t.includes("서 있다")), JSON.stringify(bLog2));
+  /* ★ 묘사만 걷었더니 "누가 이곳에 있다" 같은 인물·구조 줄이 다음 방까지
+     따라와서, 없는 사람이 있는 것처럼 읽혔다. 절반만 지우는 것이 아무것도
+     안 지우는 것보다 나쁜 자리였다 — 로그는 통째로 빈다. */
+  check("★ 지난 방의 인물·구조 줄도 사라진다 (절반만 지우지 않는다)",
+    !bLog2.some((t) => t.includes("서 있다")), JSON.stringify(bLog2));
   await a.screenshot({ path: join(SHOTS, "2-A가본-이동.png") });
   await b.screenshot({ path: join(SHOTS, "3-B가본-새방.png") });
 

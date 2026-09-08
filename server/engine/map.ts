@@ -124,6 +124,15 @@ export interface RegionSlice {
    *  ★ 스포일러가 아니다: 격자와 벽/바닥은 전에도 전부 실려 있었고, 씨앗도
    *    문장도 여기 없다 (프로토콜 불변식 2). 적의 정체도 안 나간다 — 좌표뿐이다. */
   foes: string[];
+  /** 다른 지역으로 나가는 길이 있는 칸들 (`"x,y"`). 미니맵이 표시를 찍는다.
+   *
+   *  ★ '서는 칸' 이다. 출구는 걷는 칸에서 **벽 쪽으로** 나가므로(ExitDef 주석),
+   *    문 자체는 격자에 칸이 없다. 사람이 알아야 하는 것도 '어디에 서서
+   *    나가는가' 지 벽의 어느 면인가가 아니다.
+   *  ★ 좌표만 나간다 — 어느 지역으로 이어지는지도, 등급이나 플래그가
+   *    필요한지도 싣지 않는다. 그건 가 보면 서버가 문장으로 답한다(규칙 1).
+   *    지도가 미리 말하면 그건 진행을 지도에 적어 두는 것이다. */
+  gates: string[];
 }
 
 const sha = (s: string, n: number): string =>
@@ -331,6 +340,8 @@ export function makeMap(data: MapData): GameMap {
         height: r.tiles.length,
         tiles: [...r.tiles],
         foes: Object.keys(r.enemies).sort(),
+        /* 한 칸에 방향이 다른 출구가 둘일 수 있다 — 칸은 하나로 센다. */
+        gates: [...new Set(r.exits.map((e) => e.at))].sort(),
       };
     },
   };
