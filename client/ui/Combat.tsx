@@ -19,7 +19,7 @@ export function Combat({ combat, selfId }: { combat: CombatView; selfId: string 
     <div style={{ ...win, padding: "8px 10px", borderColor: combat.winding ? C.gold : C.red }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <span style={{ fontSize: 13, color: C.red, width: 24 }}>敵</span>
-        <div style={{ flex: 1, height: 10, background: "#0a0f2a", border: `1px solid ${C.dim}` }}>
+        <div style={{ flex: 1, height: 10, background: C.trough, border: `1px solid ${C.dim}` }}>
           <div
             style={{
               width: `${ratio * 100}%`,

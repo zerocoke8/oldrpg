@@ -25,9 +25,12 @@ import { Dpad } from "./ui/Dpad";
 import { Log } from "./ui/Log";
 import { Minimap } from "./ui/Minimap";
 import { Status } from "./ui/Status";
-import { Account } from "./ui/Account";
 import { TextInput } from "./ui/TextInput";
-import { C, FONT, win } from "./theme";
+import {
+  C, FONT, applyPalette, loadPalette, savePalette, win, type PaletteId,
+} from "./theme";
+import { Settings } from "./ui/Settings";
+import { AUTO_SKILL_MS, loadAutoSkill, nextAutoSkill, saveAutoSkill } from "./state/prefs";
 
 export default function App() {
   const [st, dispatch] = useReducer(reduce, undefined, initialState);
@@ -38,8 +41,13 @@ export default function App() {
 
   /* 커맨드 창의 상태. 서버는 이걸 전혀 모른다 — 순수한 화면 상태다. */
   const [mode, setMode] = useState<Mode>("field");
-  /** 계정 폼이 열려 있는가. 메뉴에서 켜고 폼이 스스로 끈다. */
-  const [showAccount, setShowAccount] = useState(false);
+  /** 설정 창이 열려 있는가. 메뉴에서 켜고 창이 스스로 끈다. */
+  const [showSettings, setShowSettings] = useState(false);
+  /* 색과 자동전투는 **이 브라우저의 것**이다. 서버로 보내지 않는다 —
+     색이 서버로 가면 지역화와 레이아웃이 서버에 묶인다(불변식 1 의 주석이
+     HUD 크롬을 클라이언트에 둔 이유로 정확히 그것을 적었다). */
+  const [palette, setPalette] = useState<PaletteId>(loadPalette);
+  const [autoSkill, setAutoSkill] = useState(loadAutoSkill);
   const [path, setPath] = useState<string[]>([]);
   const [cursor, setCursor] = useState(0);
   const [cmd, setCmd] = useState("");
@@ -104,6 +112,40 @@ export default function App() {
   }, [st, path]);
   const cur = Math.min(cursor, Math.max(0, menu.items.length - 1));
 
+  /* ── 자동전투 ────────────────────────────────────────────────────────
+     규칙은 한 줄이다: **교전 중이고 예약 자리가 비어 있으면, combat.skills 를
+     주어진 순서대로 훑어 쿨다운이 아닌 첫 번째를 예약한다.**
+
+     ★ 판단이 없다. "지금은 치유가 맞다" 를 고르기 시작하면 그건 입력 자동화가
+       아니라 클라이언트가 전투를 판정하는 것이고, 규칙 1 이 걸린다. 순서는
+       서버가 준 순서 그대로이고 여기서 정렬도 점수도 매기지 않는다.
+       (쓰고 나면 그 스킬이 쿨다운으로 빠지므로 다음번엔 자연히 그다음 것이
+        나간다 — 순환은 규칙에서 저절로 따라 나오지 별도 상태가 아니다.)
+
+     ★ 사람과 싸우지 않는다. queuedSkill/queuedItem 이 차 있으면 건너뛴다 —
+       예약 자리는 하나뿐이고 나중 입력이 이기므로, 안 그러면 사람이 고른 것을
+       자동이 덮어쓴다.
+
+     ★ 대상은 언제나 자기 자신이다 (targetId 를 생략한다). 남에게 걸 사람을
+       고르는 것이 바로 위에서 배제한 그 판단이다.
+
+     ★ 새 권한이 하나도 없다. 여기서 나가는 것은 사람이 커맨드 창에서 누를 수
+       있었던 것과 **글자 그대로 같은 액션**이고, 서버는 소지·쿨다운·대상·
+       같은 방인지를 전부 다시 판정한다.
+
+     ★ 상태를 ref 로 읽는 이유: combat 은 0.5초마다 갱신된다. 그것을 의존성에
+       넣으면 타이머가 매번 헐리고 새로 서서 영영 안 터진다. */
+  const live = useRef(st);
+  live.current = st;
+  useEffect(() => {
+    if (!autoSkill) return;
+    const id = setInterval(() => {
+      const skillId = nextAutoSkill(live.current.combat);
+      if (skillId) act({ type: "skill", skillId });
+    }, AUTO_SKILL_MS);
+    return () => clearInterval(id);
+  }, [autoSkill, act]);
+
   const activate = useCallback(
     (i: number) => {
       const it = menu.items[i];
@@ -113,11 +155,11 @@ export default function App() {
       if (it.items) {
         setPath((p) => [...p, it.id]);
         setCursor(0);
-      } else if (it.panel === "account") {
-        /* 커맨드 창을 닫고 폼에 조종을 넘긴다 — 입력창으로 갈 때와 같은
-           이유다. 폼 위에서 화살표가 여전히 메뉴 커서면 사람은 자기가 어느
+      } else if (it.panel === "settings") {
+        /* 커맨드 창을 닫고 창에 조종을 넘긴다 — 입력창으로 갈 때와 같은
+           이유다. 창 위에서 화살표가 여전히 메뉴 커서면 사람은 자기가 어느
            모드에 있는지 알 수 없다. */
-        setShowAccount(true);
+        setShowSettings(true);
         setMode("field");
       } else if (it.focus !== undefined) {
         /* 입력창에 조종을 넘기고 메뉴는 닫는다. 커맨드 모드로 남겨 두면
@@ -214,14 +256,25 @@ export default function App() {
     gap: 10,
   };
 
-  const accountPanel = showAccount ? (
-    <Account
+  const accountPanel = showSettings ? (
+    <Settings
       account={st.self?.account ?? null}
       nameMaxLen={st.limits?.accountNameMaxLen ?? 24}
       passwordMinLen={st.limits?.passwordMinLen ?? 8}
-      onClose={() => setShowAccount(false)}
+      palette={palette}
+      onPalette={(p) => {
+        setPalette(p);
+        applyPalette(p);
+        savePalette(p);
+      }}
+      autoSkill={autoSkill}
+      onAutoSkill={(on) => {
+        setAutoSkill(on);
+        saveAutoSkill(on);
+      }}
+      onClose={() => setShowSettings(false)}
       onSubmit={(kind, name, password) => {
-        setShowAccount(false);
+        setShowSettings(false);
         /* 계정은 hello 의 일부라, '로그인' 은 곧 자격을 들고 다시 붙는 것이다.
            비밀번호는 여기서 소켓으로만 가고 어디에도 저장되지 않는다. */
         sock.current?.authenticate({ kind, name, password });

@@ -8,7 +8,11 @@
     <style>
       /* 최소 리셋. 5단계의 100dvh 레이아웃이 body 기본 여백에 밀리지 않게 하고,
          모바일에서 더블탭 확대와 고무줄 스크롤을 끈다. */
-      html, body { margin: 0; padding: 0; background: #0b1020; overscroll-behavior: none; }
+      /* ★ var(--ink) 로 칠하되 폴백을 남긴다. 이 배경은 껍데기(div) '밖' 이라
+         (560px 컬럼 양옆의 레터박스와 스크롤 고무줄이 여기다) 인라인 스타일로는
+         닿지 않는다. 폴백은 main.tsx 가 변수를 심기 전의 한 프레임을 위한 것이고,
+         그 값은 theme.ts 의 BASE.ink 와 같아야 한다 — 두 곳에 사는 유일한 색이다. */
+      html, body { margin: 0; padding: 0; background: var(--ink, #0b1020); overscroll-behavior: none; }
       body { -webkit-text-size-adjust: 100%; }
       button { touch-action: manipulation; }
     </style>

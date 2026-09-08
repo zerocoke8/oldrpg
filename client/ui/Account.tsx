@@ -23,14 +23,19 @@ export function Account(props: {
   passwordMinLen: number;
   onSubmit(kind: "register" | "login", name: string, password: string): void;
   onClose(): void;
+  /** 설정 창 안에 들어갈 때. 자기 창틀과 닫기 버튼을 내려놓는다 —
+   *  창 안의 창은 테두리만 두 겹이고, 닫기가 둘이면 어느 것이 무엇을 닫는지
+   *  알 수 없다. 폼의 내용과 '비밀번호는 이 컴포넌트 state 에만 산다' 는
+   *  불변식은 그대로다. */
+  embedded?: boolean;
 }) {
-  const { account, nameMaxLen, passwordMinLen, onSubmit, onClose } = props;
+  const { account, nameMaxLen, passwordMinLen, onSubmit, onClose, embedded = false } = props;
   const [kind, setKind] = useState<"register" | "login">(account ? "login" : "register");
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
 
   const field = {
-    background: "#0a0f2a",
+    background: C.trough,
     border: `1px solid ${C.dim}`,
     color: C.text,
     fontFamily: FONT,
@@ -52,7 +57,13 @@ export function Account(props: {
   const ready = name.trim().length > 0 && password.length >= passwordMinLen;
 
   return (
-    <div style={{ ...win, display: "flex", flexDirection: "column", gap: 8 }}>
+    <div
+      style={
+        embedded
+          ? { display: "flex", flexDirection: "column", gap: 8 }
+          : { ...win, display: "flex", flexDirection: "column", gap: 8 }
+      }
+    >
       <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
         <button type="button" style={tab("register")} onClick={() => setKind("register")}>
           계정 만들기
@@ -61,21 +72,23 @@ export function Account(props: {
           로그인
         </button>
         <span style={{ flex: 1 }} />
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="닫기"
-          style={{
-            background: "none",
-            border: "none",
-            color: C.dim,
-            fontFamily: FONT,
-            fontSize: 14,
-            cursor: "pointer",
-          }}
-        >
-          ✕
-        </button>
+        {!embedded && (
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="닫기"
+            style={{
+              background: "none",
+              border: "none",
+              color: C.dim,
+              fontFamily: FONT,
+              fontSize: 14,
+              cursor: "pointer",
+            }}
+          >
+            ✕
+          </button>
+        )}
       </div>
 
       {/* 지금 하는 일이 무엇인지 한 줄. 라벨이지 서사가 아니다. */}

@@ -34,7 +34,7 @@ export function Status(props: {
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <span style={{ fontSize: 13, color: C.dim, width: 24 }}>HP</span>
-        <div style={{ flex: 1, height: 10, background: "#0a0f2a", border: `1px solid ${C.dim}` }}>
+        <div style={{ flex: 1, height: 10, background: C.trough, border: `1px solid ${C.dim}` }}>
           <div
             style={{
               width: `${ratio * 100}%`,

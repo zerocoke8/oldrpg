@@ -36,7 +36,7 @@ export interface MenuItem {
   empty?: string;
   /** 고르면 계정 폼을 연다. 액션이 아니라 화면의 일이라 여기 있다 —
    *  자격증명은 Action 유니온을 지나지 않는다 (hello 의 일부다). */
-  panel?: "account";
+  panel?: "settings";
 }
 
 /** 최상위 커맨드. 지금 할 수 있는 것만 올라온다. */
@@ -232,10 +232,15 @@ export function rootItems(st: UiState): MenuItem[] {
      자격이 되는지는 클라이언트가 판정하지 않는다: 폼은 언제나 열리고
      판정은 서버가 한다. 계정 이름도 여기 붙이지 않는다 — 상태창이 이미
      @이름 으로 보여 주고, 같은 사실을 두 곳에서 말하면 한쪽이 낡는다. */
+  /* ★ 이름이 "계정 만들기" 였을 때 사람이 **로그인을 못 찾았다** — 폼 안에
+     탭이 둘 다 있었는데도. 이름 하나가 기능 하나를 통째로 감춘 셈이다.
+     이제 색과 자동전투도 여기 있으므로 이름은 그것들을 다 담아야 한다.
+     항목을 늘리지 않고 이 자리를 바꾼 이유: 최상위 목록의 순서가 바뀌면
+     'Esc 뒤 아래 한 번 = 말하기' 를 보는 검사가 함께 흔들린다. */
   items.push({
-    id: "account",
-    label: st.self?.account ? "계정" : "계정 만들기",
-    panel: "account",
+    id: "settings",
+    label: st.self?.account ? "설정 · 계정" : "설정 · 로그인",
+    panel: "settings",
   });
   return items;
 }

@@ -823,8 +823,17 @@ async function main() {
   const beforePos = await posOf(a);
   check("(전제) 아직 익명이다 — 상태창에 계정 표시가 없다",
     !(await a.locator("body").innerText()).includes("@"));
-  await a.getByRole("button", { name: "계정 만들기", exact: true }).click();
+  /* ★ 메뉴 항목은 이제 '설정 · 로그인' 이다. 전에는 '계정 만들기' 였는데,
+     그 이름 때문에 사람이 **로그인을 못 찾았다** — 폼 안에 탭이 둘 다 있는데도.
+     이 검사가 그 이름을 붙들고 있으면 같은 실수가 다시 들어와도 초록이다. */
+  await a.getByRole("button", { name: "설정 · 로그인", exact: true }).click();
   await sleep(200);
+  check("설정 창이 열렸다", (await a.locator("text=자동전투").count()) > 0);
+  check("★ 그 안에 로그인이 보인다 (이름 하나에 기능이 숨지 않는다)",
+    (await a.locator("button:text-is('로그인')").count()) > 0);
+  check("색 팔레트 넷을 고를 수 있다",
+    (await a.locator("button:text-is('어두운 남색')").count()) > 0 &&
+      (await a.locator("button:text-is('밝은 색')").count()) > 0);
   check("계정 폼이 열렸다", (await a.locator("input[type=password]").count()) > 0);
   await a.locator("input[autocomplete=username]").fill("브라우저계정");
   await a.locator("input[type=password]").fill("열려라참깨여덟자");
@@ -843,8 +852,8 @@ async function main() {
      ★ 이제 메뉴 라벨이 '계정' 이고 폼의 기본 탭이 '로그인' 이다 (이미 묶여
      있으므로). 만들기 탭으로 옮겨야 같은 갈래를 탄다. */
   /* 커맨드 창의 라벨은 span 안에 있어 :text-is 가 안 잡는다. 접근성 이름으로
-     고른다 — '계정' 과 '계정 만들기' 를 정확히 갈라야 하는 자리다. */
-  await a.getByRole("button", { name: "계정", exact: true }).click();
+     고른다. 계정에 묶인 뒤에는 항목이 '설정 · 계정' 이 된다. */
+  await a.getByRole("button", { name: "설정 · 계정", exact: true }).click();
   await sleep(200);
   await a.locator("button:text-is('계정 만들기')").click();
   await a.locator("input[autocomplete=username]").fill("브라우저계정");
@@ -854,6 +863,72 @@ async function main() {
   check("★ 중복 이름은 서버가 만든 문장으로 거절된다",
     (await a.locator("body").innerText()).includes("이미 쓰이고"),
     (await a.locator("body").innerText()).slice(-200));
+
+  /* ── ⑲ 색 팔레트 ────────────────────────────────────────────────────
+     ★ 여기서만 확인되는 것: var() 가 실제로 **합성**되는가. 정의되지 않은
+       var 는 예외도 콘솔 경고도 없이 그 선언만 무효화하므로, 타입이 맞아도
+       화면에서만 색이 사라질 수 있다. 계산된 색을 읽는 것이 유일한 증거다. */
+  console.log("\n⑲ 색 팔레트 — var() 가 실제로 합성된다");
+  const bodyBg = () => a.evaluate(() => getComputedStyle(document.body).backgroundColor);
+  const logColorOf = () =>
+    a.evaluate(() => {
+      const p = document.querySelector('[data-mud="log"] p');
+      return p ? getComputedStyle(p).color : "";
+    });
+  const navyBg = await bodyBg();
+  const navyText = await logColorOf();
+  check("기본 팔레트가 실제로 칠해져 있다 (var 가 빈 값이 아니다)",
+    navyBg === "rgb(11, 16, 32)" && navyText !== "" && navyText !== "rgb(0, 0, 0)",
+    `${navyBg} / ${navyText}`);
+
+  await a.getByRole("button", { name: "설정 · 계정", exact: true }).click();
+  await sleep(200);
+  await a.locator("button:text-is('밝은 색')").click();
+  await sleep(250);
+  const lightBg = await bodyBg();
+  const lightText = await logColorOf();
+  check("★ 팔레트를 바꾸면 껍데기 밖(body)까지 바뀐다",
+    lightBg === "rgb(228, 217, 189)", lightBg);
+  check("★ 로그 글자색도 함께 바뀐다 (한 토큰만 안 따라가는 일이 없다)",
+    lightText !== navyText && lightText === "rgb(31, 25, 15)", `${navyText} -> ${lightText}`);
+  await a.screenshot({ path: join(SHOTS, "27-밝은-색.png") });
+
+  /* 새로고침해도 남는가. 색은 이 브라우저의 것이고 서버는 모른다. */
+  await a.reload();
+  await a.waitForSelector("text=화살표로 이동", { timeout: 15_000 });
+  await sleep(400);
+  check("★ 새로고침해도 고른 색이 남는다 (localStorage)",
+    (await bodyBg()) === "rgb(228, 217, 189)", await bodyBg());
+  await a.getByRole("button", { name: "설정 · 계정", exact: true }).click();
+  await sleep(200);
+  await a.locator("button:text-is('어두운 남색')").click();
+  await sleep(250);
+  check("되돌릴 수 있다", (await bodyBg()) === "rgb(11, 16, 32)", await bodyBg());
+
+  /* ── ⑳ 자동전투 ─────────────────────────────────────────────────────
+     규칙: 교전 중이고 예약 자리가 비어 있으면 combat.skills 를 **주어진
+     순서대로** 훑어 쿨다운이 아닌 첫 번째를 예약한다. 판단이 없다. */
+  console.log("\n⑳ 자동전투 — 쿨다운이 아닌 첫 스킬을 차례로 쓴다");
+  check("설정에 자동전투 스위치가 있다",
+    (await a.locator("button:text-is('꺼짐')").count()) > 0);
+  await a.locator("button:text-is('꺼짐')").click();
+  await sleep(150);
+  check("★ 켜진다", (await a.locator("button:text-is('켜짐')").count()) > 0);
+  await a.getByRole("button", { name: "설정 닫기", exact: true }).click();
+  await sleep(200);
+
+  /* ★ 여기서는 '스위치가 배선됐는가' 까지만 본다. 무엇을 쓸지 고르는 **규칙**은
+     test/autoskill.ts 가 순수 함수로 전부 본다 — 쿨다운·순서·사람의 예약·
+     교전 아님까지. 진짜 전투를 만들어야만 확인할 수 있는 규칙이면 그 갈래
+     대부분은 영영 안 밟힌다. */
+  await a.reload();
+  await a.waitForSelector("text=화살표로 이동", { timeout: 15_000 });
+  await sleep(400);
+  await a.getByRole("button", { name: "설정 · 계정", exact: true }).click();
+  await sleep(200);
+  check("★ 자동전투도 새로고침 후에 남는다",
+    (await a.locator("button:text-is('켜짐')").count()) > 0);
+  await a.screenshot({ path: join(SHOTS, "28-설정.png") });
 
   await browser.close();
   await vite.close();

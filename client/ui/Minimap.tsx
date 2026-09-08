@@ -64,7 +64,7 @@ export function Minimap(props: {
      관심영역' 이라는 서버측 안개다) 이것은 순수한 렌더링 결정이다 —
      프로토콜이 나르는 것은 늘지 않는다. 지역 밖의 지도는 여전히 안 온다.
      self.seen 은 그대로 살아 있다: '탐색한 방 N' 이 그것을 쓴다. */
-  const bg = (x: number, y: number): string => (tile(x, y) === "#" ? "#2b3563" : "#5b6bab");
+  const bg = (x: number, y: number): string => (tile(x, y) === "#" ? C.wall : C.floor);
 
   /** 적이 배치된 칸. '지금 살아 있는가' 가 아니라 '여기서 나온다' 다 —
    *  장소의 성질이라 변하지 않고, 그래서 스냅샷 한 번으로 충분하다. */
@@ -121,7 +121,7 @@ export function Minimap(props: {
                   // 적이 나오는 칸은 바닥을 붉게 물들인다. 가운데에 그리지 않는
                   // 이유: 거기는 사람의 자리다. 같은 칸에 사람과 적이 겹쳐도
                   // 둘 다 보여야 하고, 그건 정확히 흔한 상황이다.
-                  background: here ? C.gold : foe ? "#6b3340" : bg(x, y),
+                  background: here ? C.gold : foe ? C.foe : bg(x, y),
                   outline: guests.length ? `2px solid ${C.other}` : "none",
                   outlineOffset: -2,
                   /* 출구는 안쪽 테두리로 그린다. 바깥 테두리(outline)는 사람이
