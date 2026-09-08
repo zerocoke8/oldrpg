@@ -291,24 +291,40 @@ async function main() {
     await sleep(300);
   }
 
-  // 5단계: 명령은 전부 커맨드 창 한 곳에 있다. 싸우기 -> 공격.
-  await c.locator("button:has-text('싸우기')").first().click();
-  await sleep(150);
+  /* 5단계: 명령은 전부 커맨드 창 한 곳에 있다.
+     ★ 교전 전의 '싸우기' 는 갈래가 '공격' 하나뿐이라 **접혀 있다** — 누르면
+       하위 목록을 열지 않고 곧장 공격이 나간다. 전에는 두 번 눌렀다. */
+  const fightBtn = c.locator("button:has-text('싸우기')").first();
+  check("★ 교전 전의 '싸우기' 는 하위 목록 표시(▸)가 없다 (접혀 있다)",
+    !(await fightBtn.innerText()).includes("▸"), await fightBtn.innerText());
   /* ★ 전투 패널이 뜨기 '전' 의 조작부 위치를 잡아 둔다. 패널은 로그 위에
      끼어드는 창이라, 껍데기가 뷰포트보다 커지면 그만큼 아래가 밀린다 —
      싸우기 시작할 때마다 D패드가 움직인다는 뜻이고 실제로 그랬다. */
   const padBefore = await dpadTop(c);
-  await c.locator("button:has-text('공격')").first().click();
-  await sleep(200);
+  await fightBtn.click();
+  await sleep(250);
+  check("★ 한 번 눌러 교전이 시작됐다 (공격을 다시 고르지 않았다)",
+    (await c.locator("text=그림자 파수꾼").count()) > 0);
   check("전투 패널이 떴다", (await c.locator("text=그림자 파수꾼").count()) > 0);
   const padDuring = await dpadTop(c);
   check("★ 전투 패널이 떠도 D패드는 같은 자리다 (조작부가 움직이지 않는다)",
     padBefore > 0 && padBefore === padDuring, `${padBefore} -> ${padDuring}`);
+  /* ★ 반대 방향도 본다: 갈래가 늘어나면 다시 펴져야 한다. 접기가 '싸우기는
+     언제나 즉시 공격' 이 되어 버리면 교전 중에 스킬을 고를 길이 사라진다. */
+  check("★ 교전 중에는 다시 펴진다 (▸ 가 돌아온다)",
+    (await c.locator("button:has-text('싸우기')").first().innerText()).includes("▸"),
+    await c.locator("button:has-text('싸우기')").first().innerText());
+  /* ★ 이제 스킬은 '싸우기' 안에 있다. 교전 전에는 접혀서 한 번에 공격이
+     나갔고, 교전이 시작돼 갈래가 늘어난 지금은 다시 펴진다 — 그래서 세려면
+     열어야 한다. 이 한 번의 클릭이 '접기가 되돌아왔다' 의 증거이기도 하다. */
+  await c.locator("button:has-text('싸우기')").first().click();
+  await sleep(200);
   const skillCount = await c
     .locator("button:has-text('강타'), button:has-text('응급 치료'), button:has-text('방어 태세')")
     .count();
   check("교전이 시작되자 스킬이 같은 창에 나타났다 (메뉴는 상태의 함수)",
     skillCount === 3, String(skillCount));
+
 
   // ★ 한 번만 눌렀는데 계속 오가는가 — 진짜 시계로 2.5초 지켜본다
   const linesAfterEngage = (await logText(c)).length;
@@ -351,10 +367,13 @@ async function main() {
      그대로이고, 그래서 대상 후보로도 남는다. */
   await c.locator("button:has-text('물러나기')").first().click();
   await sleep(150);
+  /* b 도 접힌 '싸우기' 를 한 번 누른다 (교전 전이므로 한 번에 공격이 나간다).
+     ★ 그러면 메뉴는 최상위에 남는다 — 물러나기는 '싸우기' 안에 있으므로
+       교전이 시작돼 다시 펴진 그 항목을 한 번 더 눌러 들어가야 한다. */
   await b.locator("button:has-text('싸우기')").first().click();
-  await sleep(150);
-  await b.locator("button:has-text('공격')").first().click();
   await sleep(300);
+  await b.locator("button:has-text('싸우기')").first().click();
+  await sleep(200);
   await b.locator("button:has-text('물러나기')").first().click();
   await sleep(200);
   /* 이름은 서버가 지은 것이라 여기서 만들지 않는다 — 로스터 줄에서 읽는다. */
@@ -823,9 +842,16 @@ async function main() {
   const beforePos = await posOf(a);
   check("(전제) 아직 익명이다 — 상태창에 계정 표시가 없다",
     !(await a.locator("body").innerText()).includes("@"));
-  /* ★ 메뉴 항목은 이제 '설정 · 로그인' 이다. 전에는 '계정 만들기' 였는데,
-     그 이름 때문에 사람이 **로그인을 못 찾았다** — 폼 안에 탭이 둘 다 있는데도.
-     이 검사가 그 이름을 붙들고 있으면 같은 실수가 다시 들어와도 초록이다. */
+  /* ★ 이제 상태창의 ⚙ 다 (커맨드 창에서 옮겼다 — 복제가 아니다).
+     접근성 이름은 옮기기 전과 글자 그대로 같아서 이 로케이터가 그대로 통한다.
+     그 이름이 '계정 만들기' 였을 때 사람이 **로그인을 못 찾았다** — 폼 안에
+     탭이 둘 다 있는데도. 검사가 그 이름을 붙들어 같은 실수를 막는다. */
+  /* ★ 접근성 이름으로 센다. 기어의 보이는 글자는 '⚙' 라 has-text 로는 안 잡히고,
+     정작 지켜야 하는 것은 '같은 이름의 버튼이 둘이 아니다' 이다 — 복제하면
+     아래 exact 로케이터 여섯 곳이 Playwright strict mode 로 통째로 죽는다. */
+  check("★ '설정 · 로그인' 버튼은 화면에 하나뿐이다 (복제가 아니라 이동이다)",
+    (await a.getByRole("button", { name: "설정 · 로그인", exact: true }).count()) === 1,
+    String(await a.getByRole("button", { name: "설정 · 로그인", exact: true }).count()));
   await a.getByRole("button", { name: "설정 · 로그인", exact: true }).click();
   await sleep(200);
   check("설정 창이 열렸다", (await a.locator("text=자동전투").count()) > 0);

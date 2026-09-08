@@ -516,12 +516,32 @@ async function main() {
   const gateCells = withFoes.view("b2").gates;
   const wantGates = [...new Set(b2def.exits.map((e) => e.at))].sort();
   check("★ 출구가 있는 칸이 그대로 실린다",
-    JSON.stringify(gateCells) === JSON.stringify(wantGates),
+    JSON.stringify(gateCells.map((g) => g.at)) === JSON.stringify(wantGates),
     JSON.stringify([gateCells, wantGates]));
   check("★ 그 칸은 전부 걷는 칸이다 (벽을 찍으면 갈 수 없는 곳을 가리킨다)",
-    gateCells.every((k) => {
-      const [x, y] = k.split(",").map(Number);
+    gateCells.every((g) => {
+      const [x, y] = g.at.split(",").map(Number);
       return withFoes.walkable("b2", x!, y!);
+    }), JSON.stringify(gateCells));
+  /* ★ 방향이 실린다. 이것이 없으면 미니맵은 '이 칸에서 나간다' 까지만 알고
+     '어느 쪽으로' 를 모른다 — 그리고 격자로는 유도할 수 없다(아래 검사). */
+  check("★ 칸마다 방향이 하나 이상 실린다",
+    gateCells.length > 0 && gateCells.every((g) => g.dirs.length > 0),
+    JSON.stringify(gateCells));
+  check("★ 실리는 방향이 그 칸의 출구와 정확히 같다",
+    gateCells.every((g) => {
+      const want = [...new Set(b2def.exits.filter((e) => e.at === g.at).map((e) => e.dir))].sort();
+      return JSON.stringify([...g.dirs].sort()) === JSON.stringify(want);
+    }), JSON.stringify(gateCells));
+  /* ★ 그 방향의 이웃은 벽이다 — 출구는 걷는 칸에서 벽 쪽으로 난다.
+     막대를 그 변에 그리는 것이 '벽에 난 문' 으로 읽히는 근거다. */
+  const STEP: Record<string, [number, number]> = {
+    north: [0, -1], south: [0, 1], east: [1, 0], west: [-1, 0],
+  };
+  check("★ 그 방향의 이웃 칸은 벽이다 (문은 벽 자리에 있다)",
+    gateCells.every((g) => {
+      const [x, y] = g.at.split(",").map(Number);
+      return g.dirs.every((d) => !withFoes.walkable("b2", x! + STEP[d]![0], y! + STEP[d]![1]));
     }), JSON.stringify(gateCells));
   /* ★ 어디로 이어지는지도, 무엇이 필요한지도 안 싣는다. 지도가 미리 말하면
      그건 진행을 지도에 적어 두는 것이다 — 가 보면 서버가 문장으로 답한다. */

@@ -43,6 +43,16 @@ export default function App() {
   const [mode, setMode] = useState<Mode>("field");
   /** 설정 창이 열려 있는가. 메뉴에서 켜고 창이 스스로 끈다. */
   const [showSettings, setShowSettings] = useState(false);
+  /* ★ 여는 곳도 닫는 곳도 하나여야 한다. 닫기가 세 군데(⚙ · ✕ · 로그인 제출)
+     있는데 한 곳만 mode 를 되돌리면, 그 경로로 닫은 뒤 키보드가 통째로 죽는다. */
+  const openSettings = useCallback(() => {
+    setShowSettings(true);
+    setMode("field"); // 창 위에서 화살표가 메뉴 커서면 어느 모드인지 알 수 없다
+  }, []);
+  const closeSettings = useCallback(() => {
+    setShowSettings(false);
+    setMode("field");
+  }, []);
   /* 색과 자동전투는 **이 브라우저의 것**이다. 서버로 보내지 않는다 —
      색이 서버로 가면 지역화와 레이아웃이 서버에 묶인다(불변식 1 의 주석이
      HUD 크롬을 클라이언트에 둔 이유로 정확히 그것을 적었다). */
@@ -155,12 +165,6 @@ export default function App() {
       if (it.items) {
         setPath((p) => [...p, it.id]);
         setCursor(0);
-      } else if (it.panel === "settings") {
-        /* 커맨드 창을 닫고 창에 조종을 넘긴다 — 입력창으로 갈 때와 같은
-           이유다. 창 위에서 화살표가 여전히 메뉴 커서면 사람은 자기가 어느
-           모드에 있는지 알 수 없다. */
-        setShowSettings(true);
-        setMode("field");
       } else if (it.focus !== undefined) {
         /* 입력창에 조종을 넘기고 메뉴는 닫는다. 커맨드 모드로 남겨 두면
            타이핑을 마치고 입력창을 나왔을 때 화살표가 여전히 커서라서,
@@ -193,6 +197,18 @@ export default function App() {
         el.closest("button, a[href]")
       )
         return;
+      /* ★ 설정 창이 열려 있는 동안은 창이 키를 소유한다. 이게 없으면 Esc 가
+         오버레이 '뒤' 의 커맨드 창을 여는데, 그건 보이지도 않으면서 창을 닫는
+         순간 메뉴 모드로 깨어난다 — 사람은 화살표가 왜 커서가 됐는지 모른다.
+         닫는 것 말고는 아무것도 받지 않는다: 폼의 입력은 위에서 이미 통과했고
+         (input 안에서는 가로채지 않는다), 버튼은 탭과 Enter 로 닿는다. */
+      if (showSettings) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          closeSettings();
+        }
+        return;
+      }
       const intent = intentForKey(e.key, mode);
       if (!intent) return;
       e.preventDefault();
@@ -222,7 +238,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [act, mode, menu, cur, activate, back]);
+  }, [act, mode, menu, cur, activate, back, showSettings, closeSettings]);
 
   /* 스와이프: 로그 창을 쓸면 그 방향으로 한 칸. D패드와 같은 Action 이다. */
   const swipe = useMemo(() => makeSwipe((dir) => act({ type: "move", dir })), [act]);
@@ -254,9 +270,34 @@ export default function App() {
     display: "flex",
     flexDirection: "column",
     gap: 10,
+    /* 설정 오버레이(position:absolute)의 기준. 이것이 없으면 오버레이가
+       뷰포트 기준으로 앉아 560px 열을 벗어난다. */
+    position: "relative",
   };
 
+  /* ★ 껍데기 '안쪽' 을 덮는 오버레이다 (position:absolute; inset:0).
+     전에는 컬럼의 한 칸이라 로그와 자리를 나눴고, 그래서 360x640 에서 창
+     높이가 162px 인데 내용이 464px 이었다 — 65% 가 스크롤 밖이었다.
+     절대 위치라 컬럼 흐름 밖이고, 그래서 Log 의 flex:1 1 0px 과 D패드 줄의
+     flex-end 를 **구조적으로** 건드릴 수 없다.
+     ★ fixed 가 아니라 absolute 인 이유: fixed 는 뷰포트 기준이라 maxWidth 560
+       열을 벗어나 데스크톱 전체를 덮고 모바일 키보드에 튄다.
+     ★ 장막을 눌러도 닫힌다 — 덮은 화면이 죽은 영역이면 사람이 갇힌 것처럼
+       느낀다. 창 자신은 stopPropagation 으로 그 클릭을 먹지 않는다. */
   const accountPanel = showSettings ? (
+    <div
+      onClick={closeSettings}
+      style={{
+        position: "absolute",
+        inset: 0,
+        background: C.ink,
+        padding: "12px 12px calc(12px + env(safe-area-inset-bottom))",
+        boxSizing: "border-box",
+        display: "flex",
+        zIndex: 10,
+      }}
+    >
+    <div style={{ display: "flex", flex: 1, minHeight: 0 }} onClick={(e) => e.stopPropagation()}>
     <Settings
       account={st.self?.account ?? null}
       nameMaxLen={st.limits?.accountNameMaxLen ?? 24}
@@ -272,14 +313,16 @@ export default function App() {
         setAutoSkill(on);
         saveAutoSkill(on);
       }}
-      onClose={() => setShowSettings(false)}
+      onClose={closeSettings}
       onSubmit={(kind, name, password) => {
-        setShowSettings(false);
+        closeSettings();
         /* 계정은 hello 의 일부라, '로그인' 은 곧 자격을 들고 다시 붙는 것이다.
            비밀번호는 여기서 소켓으로만 가고 어디에도 저장되지 않는다. */
         sock.current?.authenticate({ kind, name, password });
       }}
     />
+    </div>
+    </div>
   ) : null;
 
   if (!st.self || !st.region) {
@@ -296,6 +339,7 @@ export default function App() {
       <div style={{ display: "flex", gap: 10 }}>
         <Minimap region={st.region} at={at} others={others} act={act} />
         <Status
+          onSettings={openSettings}
           self={st.self}
           region={st.region}
           room={st.room}

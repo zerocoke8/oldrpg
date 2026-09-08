@@ -22,6 +22,7 @@
 
 import { createHash } from "node:crypto";
 import type { Dir, Pos, RegionId, RoomId } from "../../shared/ids";
+import type { GateView } from "../../shared/protocol";
 import type { MissionDef } from "./missions";
 import { roomIdOf } from "../../shared/ids";
 import type { NpcDef, NpcPlacement } from "./npcs";
@@ -124,15 +125,30 @@ export interface RegionSlice {
    *  ★ 스포일러가 아니다: 격자와 벽/바닥은 전에도 전부 실려 있었고, 씨앗도
    *    문장도 여기 없다 (프로토콜 불변식 2). 적의 정체도 안 나간다 — 좌표뿐이다. */
   foes: string[];
-  /** 다른 지역으로 나가는 길이 있는 칸들 (`"x,y"`). 미니맵이 표시를 찍는다.
+  /** 나가는 길이 있는 칸과, 그 칸의 어느 벽면인가.
    *
-   *  ★ '서는 칸' 이다. 출구는 걷는 칸에서 **벽 쪽으로** 나가므로(ExitDef 주석),
-   *    문 자체는 격자에 칸이 없다. 사람이 알아야 하는 것도 '어디에 서서
-   *    나가는가' 지 벽의 어느 면인가가 아니다.
-   *  ★ 좌표만 나간다 — 어느 지역으로 이어지는지도, 등급이나 플래그가
-   *    필요한지도 싣지 않는다. 그건 가 보면 서버가 문장으로 답한다(규칙 1).
-   *    지도가 미리 말하면 그건 진행을 지도에 적어 두는 것이다. */
-  gates: string[];
+   *  ★ '서는 칸' 은 그대로다. 출구는 걷는 칸에서 **벽 쪽으로** 나가므로
+   *    (ExitDef 주석) 문 자체는 격자에 칸이 없다. dirs 는 '그 칸의 어느 면' 이지
+   *    '문이 있는 칸' 이 아니다.
+   *  ★ 그래도 방향은 실어야 한다: 출구 칸은 벽 이웃이 셋인 것이 보통이라
+   *    (운영 세계 열 곳 전부) 클라이언트가 유도하면 3지선다가 된다.
+   *  ★ 목적지도 잠금 조건도 여전히 안 나간다. 그건 가 보면 서버가 문장으로
+   *    답한다(규칙 1) — 지도가 미리 말하면 진행을 지도에 적어 두는 것이다. */
+  gates: GateView[];
+}
+
+/** 방향의 정규 순서. 와이어에 나가는 배열의 순서를 여기서 못 박는다. */
+const DIRECTIONS: readonly Dir[] = ["north", "south", "east", "west"];
+
+/** 그 지역의 '나가는 칸 -> 방향들'. 한 칸에 출구가 둘일 수 있다. */
+function gatesOf(r: RegionDef): Map<string, Set<Dir>> {
+  const out = new Map<string, Set<Dir>>();
+  for (const e of r.exits) {
+    const set = out.get(e.at) ?? new Set<Dir>();
+    set.add(e.dir);
+    out.set(e.at, set);
+  }
+  return out;
 }
 
 const sha = (s: string, n: number): string =>
@@ -340,8 +356,13 @@ export function makeMap(data: MapData): GameMap {
         height: r.tiles.length,
         tiles: [...r.tiles],
         foes: Object.keys(r.enemies).sort(),
-        /* 한 칸에 방향이 다른 출구가 둘일 수 있다 — 칸은 하나로 센다. */
-        gates: [...new Set(r.exits.map((e) => e.at))].sort(),
+        /* 한 칸에 방향이 다른 출구가 둘일 수 있다 — 칸으로 묶고 방향을 모은다.
+           ★ 전에는 [...new Set(at)] 이라 그런 칸의 방향 하나가 조용히 버려졌다.
+           ★ 방향을 DIRECTIONS 로 정렬한다. 콘텐츠 파일의 exits 배열 순서가
+             검사 결과를 정하면 안 된다. */
+        gates: [...gatesOf(r).entries()]
+          .map(([at, dirs]) => ({ at, dirs: DIRECTIONS.filter((d) => dirs.has(d)) }))
+          .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0)),
       };
     },
   };

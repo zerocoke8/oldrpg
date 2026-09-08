@@ -178,10 +178,32 @@ async function main() {
      짝을 보지만, '지도에 찍힌다' 는 여기서만 확인된다). */
   for (const r of map.regions()) {
     const want = [...new Set(r.exits.map((e) => e.at))].sort();
+    const got = map.view(r.id).gates;
     check(`${r.id}: 나가는 길이 지도에 실린다 (${want.length}곳)`,
-      want.length > 0 && JSON.stringify(map.view(r.id).gates) === JSON.stringify(want),
-      JSON.stringify([map.view(r.id).gates, want]));
+      want.length > 0 && JSON.stringify(got.map((g) => g.at)) === JSON.stringify(want),
+      JSON.stringify([got, want]));
   }
+  /* ★ 방향을 와이어에 싣는 결정의 근거를 여기서 잰다.
+     "출구는 벽 자리에만 있으니 클라이언트가 격자로 유도하면 되지 않나" —
+     안 된다. 유도하려면 '벽인 이웃' 이 하나여야 하는데, 운영 세계의 출구 칸은
+     그렇지 않다. 이 수치가 바뀌면(유도 가능한 세계가 되면) 그때 다시 판단할
+     수 있도록, 산문이 아니라 검사로 남긴다. */
+  const STEP: Record<string, [number, number]> = {
+    north: [0, -1], south: [0, 1], east: [1, 0], west: [-1, 0],
+  };
+  let ambiguous = 0;
+  let total = 0;
+  for (const r of map.regions()) {
+    for (const g of map.view(r.id).gates) {
+      total++;
+      const [x, y] = g.at.split(",").map(Number);
+      const walls = Object.values(STEP).filter(([dx, dy]) => !map.walkable(r.id, x! + dx, y! + dy));
+      if (walls.length > 1) ambiguous++;
+    }
+  }
+  check(`★ 방향은 격자로 유도할 수 없다 — 출구 ${total}곳 중 ${ambiguous}곳이 벽 이웃 둘 이상`,
+    total > 0 && ambiguous === total,
+    `유도 가능한 칸이 ${total - ambiguous}곳 있다 — 그러면 이 필드의 근거가 약해진다`);
 
   section("② 씨앗은 한 글자도 바뀌지 않았다 (규칙 3)");
   /* seed_id 는 내용 파생이다 — 하나라도 어긋나면 그 방의 생성된 텍스트가
