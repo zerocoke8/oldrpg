@@ -197,8 +197,14 @@ export default function App() {
     background: C.ink,
     color: C.text,
     fontFamily: FONT,
-    // dvh: 모바일 브라우저의 주소창이 접혔다 펴져도 레이아웃이 튀지 않는다.
-    minHeight: "100dvh",
+    /* dvh: 모바일 브라우저의 주소창이 접혔다 펴져도 레이아웃이 튀지 않는다.
+       ★ min-height 가 아니라 height 다. min 이면 내용이 뷰포트를 넘길 때
+         껍데기가 통째로 자라고, 그러면 아래쪽 D패드와 커맨드 창이 화면 밖으로
+         밀려 내려간다 — 전투 패널이나 알림이 위에 하나 뜰 때마다 조작부가
+         움직인다는 뜻이다. 높이를 뷰포트에 못 박으면 그 차이를 로그가 흡수하고
+         (Log 의 flex: 1 1 0px), 조작부는 늘 같은 자리에 있다. */
+    height: "100dvh",
+    overflow: "hidden",
     maxWidth: 560,
     margin: "0 auto",
     padding: "12px 12px calc(12px + env(safe-area-inset-bottom))",
@@ -256,7 +262,12 @@ export default function App() {
 
       {accountPanel}
 
-      <div style={{ display: "flex", gap: 10, alignItems: "stretch" }}>
+      {/* ★ 아래를 기준점으로 정렬한다. stretch 였을 때는 커맨드 창의 높이가
+          그 줄의 높이를 정하고 D패드는 그 줄의 '위' 에 붙었다 — 전투가 시작돼
+          스킬 버튼이 생기면 창이 높아지고 D패드가 통째로 위로 올라갔다
+          (실측 99px). 아래로 붙이면 창이 몇 줄이든 D패드의 밑변은 껍데기의
+          밑변이라 움직이지 않는다. */}
+      <div style={{ display: "flex", gap: 10, alignItems: "flex-end" }}>
         <Dpad act={act} />
         <CommandWindow
           items={menu.items}

@@ -11,7 +11,7 @@
  * ★ 방출 순서 규칙: presence.* 를 room.* 보다 먼저 보낸다.
  *   로그에 "사라졌다" 가 찍히는 순간 미니맵의 점은 이미 옮겨져 있어야 한다. */
 
-import type { Dir, Pos, RoomId } from "../../shared/ids";
+import type { Dir, Pos, RegionId, RoomId } from "../../shared/ids";
 import { OPPOSITE, roomIdOf } from "../../shared/ids";
 import type {
   CombatView,
@@ -25,7 +25,7 @@ import type {
   WorldFlagView,
 } from "../../shared/protocol";
 import { lines } from "../narration/lines";
-import type { GameMap } from "../engine/map";
+import type { GameMap, RegionSlice } from "../engine/map";
 import type { Emit } from "./emit";
 import { canSee, type Registry, type Session } from "./session";
 
@@ -72,6 +72,27 @@ export function makePresence(
       .map((o) => ({ player: o.brief, pos: o.pos }));
   }
 
+  /** 클라이언트에 나갈 지역 격자. map.view() 는 **배치**를 싣는데, 지도가
+   *  말해야 하는 것은 '지금 거기 있는가' 다 — 잡은 적이 지도에 계속 붉게
+   *  남아 있으면 그건 틀린 지도다.
+   *
+   *  ★ 살아 있는 적은 배치의 부분집합이다 (적은 배치된 자리에만 선다).
+   *    그래서 걸러내기만 하면 되고, engine 은 전투를 몰라도 된다 —
+   *    hasEnemy 가 주입인 이유와 같은 자리다.
+   *  ★ 이 값이 바뀌는 순간(죽음·리스폰)에는 index.ts 가 그 지역 전체에
+   *    self.patch{region} 을 민다. 스냅샷만으로는 서 있는 사람의 지도가
+   *    영원히 낡는다. */
+  function regionView(regionId: RegionId): RegionSlice {
+    const base = map.view(regionId);
+    return {
+      ...base,
+      foes: base.foes.filter((at) => {
+        const [x, y] = at.split(",").map(Number);
+        return hasEnemy(roomIdOf({ region: regionId, x: x!, y: y! }));
+      }),
+    };
+  }
+
   function snapshotFor(self: Session, reason: Snapshot["reason"], ackSeq: number): Snapshot {
     return {
       t: "snapshot",
@@ -89,7 +110,7 @@ export function makePresence(
         missions: missionsOf(self.playerId),
         account: self.account,
       },
-      region: map.view(self.pos.region),
+      region: regionView(self.pos.region),
       room: roomView(self.pos, self),
       presence: visiblePresence(self),
       world: publicFlags(),
@@ -171,7 +192,7 @@ export function makePresence(
        순서가 뒤집히면 클라이언트가 한 프레임 동안 옛 지역의 격자 위에
        새 좌표를 찍는다 — 미니맵의 점이 벽 안에 들어가 있거나 아예 밖으로 나간다. */
     if (from.region !== to.region) {
-      emit.send(self, { t: "self.patch", region: map.view(to.region) });
+      emit.send(self, { t: "self.patch", region: regionView(to.region) });
     }
     emit.send(self, { t: "room.describe", room: roomView(to, self) });
     if (fromRoom !== toRoom) sendRoster(self, toRoom);
@@ -179,6 +200,7 @@ export function makePresence(
 
   return {
     roomView,
+    regionView,
     visiblePresence,
     snapshotFor,
     sendRoster,

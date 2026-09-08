@@ -198,6 +198,9 @@ export function makeCombat(
       emit.log(s, "bad", lines.enemyReturns(def.name));
       onRoomChanged?.(s);
     });
+    /* ★ 방 밖에도 알린다. 미니맵은 지역 전체를 그리므로, 옆 방에 서 있는
+       사람의 지도도 지금 바뀌었다. onRoomChanged 는 그 방 사람에게만 간다. */
+    onFoesChanged?.(roomId);
     maybeStopTimer();
   }
 
@@ -779,6 +782,8 @@ export function makeCombat(
        이걸 빼면 서 있는 사람의 커맨드 창에 '싸우기' 가 남아 있다가, 누르면
        "여기에는 맞설 것이 없다" 는 답을 듣는다. 여기서도 묘사는 보내지 않는다. */
     emit.toRoom(c.roomId, null, (s) => onRoomChanged?.(s));
+    // 죽음도 지도의 변화다 — 돌아온 것과 대칭이다 (respawnEnemy 참조).
+    onFoesChanged?.(c.roomId);
   }
 
   function defeat(c: Combat, playerId: PlayerId): void {
@@ -834,6 +839,9 @@ export function makeCombat(
   /** 방의 '구조화 상태' 만 다시 보낸다 (room.describe). onRespawn 과 달리
    *  방 묘사(log{narr})는 보내지 않는다 — 서 있는 화면을 갈아치우지 않는다. */
   let onRoomChanged: ((s: Session) => void) | null = null;
+  /** 그 방의 적이 죽거나 돌아왔다. 방이 아니라 **지역** 에 알려야 하는 변화라
+   *  세션이 아니라 roomId 를 준다 — 누구에게 보낼지는 index.ts 가 정한다. */
+  let onFoesChanged: ((roomId: RoomId) => void) | null = null;
 
   /* ── 타이머 ───────────────────────────────────────────────────────── */
 
@@ -867,6 +875,9 @@ export function makeCombat(
     activeCount: () => combats.size,
     // 테스트가 틱을 손으로 돌린다.
     ...(opts.manualTick ? { tick } : {}),
+    setOnFoesChanged(fn: (roomId: RoomId) => void) {
+      onFoesChanged = fn;
+    },
     setOnRespawn(fn: (s: Session) => void) {
       onRespawn = fn;
     },

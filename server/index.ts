@@ -274,6 +274,24 @@ function bootOn(
   ).setOnRoomChanged((s) => {
     emit.send(s, { t: "room.describe", room: presence.roomView(s.pos, s) });
   });
+  /* 적이 죽거나 돌아온 것은 **지역 전체의 지도**가 바뀐 것이다 — 미니맵은
+     지역을 그리므로 옆 방에 서 있는 사람의 화면도 지금 낡았다.
+     방 단위인 setOnRoomChanged 와 나눈 이유가 그것이다.
+
+     ★ 새 메시지를 만들지 않는다. self.patch{region} 은 지역을 옮길 때 이미
+       같은 일을 하고(격자 교체), 클라이언트도 이미 그 필드를 그렇게 다룬다.
+       채널을 하나 더 여는 것은 그 둘이 어긋날 자리를 하나 더 만드는 것이다.
+     ★ 지역 전체에 보내지만 팬아웃의 상한은 그대로다 — 지역이 곧 관심영역이고
+       (canSee 가 지역 동일성이다), 그건 yell 이 쓰는 상한과 같은 것이다. */
+  (
+    combatSvc as unknown as { setOnFoesChanged(fn: (roomId: RoomId) => void): void }
+  ).setOnFoesChanged((roomId) => {
+    const region = roomId.slice(0, roomId.indexOf(":"));
+    const view = presence.regionView(region);
+    for (const s of reg.all()) {
+      if (s.pos.region === region) emit.send(s, { t: "self.patch", region: view });
+    }
+  });
 
   const listening = startServer(ctx, port, (fn: () => void) => db.transaction(fn)());
   const wss = listening.wss;

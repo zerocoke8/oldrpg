@@ -51,6 +51,12 @@ async function regionNameOf(p: Page): Promise<string> {
   return m ? m[1]!.trim() : "?";
 }
 
+/** D패드 '북' 버튼의 화면 좌표. 조작부가 움직이는지는 이것 하나로 잰다. */
+async function dpadTop(p: Page): Promise<number> {
+  const box = await p.getByRole("button", { name: "북쪽으로" }).boundingBox();
+  return box ? Math.round(box.y) : -1;
+}
+
 /** 미니맵에서 '다른 플레이어' 테두리가 칠해진 칸의 인덱스. */
 async function otherCells(p: Page): Promise<number[]> {
   return p.evaluate(() => {
@@ -288,9 +294,16 @@ async function main() {
   // 5단계: 명령은 전부 커맨드 창 한 곳에 있다. 싸우기 -> 공격.
   await c.locator("button:has-text('싸우기')").first().click();
   await sleep(150);
+  /* ★ 전투 패널이 뜨기 '전' 의 조작부 위치를 잡아 둔다. 패널은 로그 위에
+     끼어드는 창이라, 껍데기가 뷰포트보다 커지면 그만큼 아래가 밀린다 —
+     싸우기 시작할 때마다 D패드가 움직인다는 뜻이고 실제로 그랬다. */
+  const padBefore = await dpadTop(c);
   await c.locator("button:has-text('공격')").first().click();
   await sleep(200);
   check("전투 패널이 떴다", (await c.locator("text=그림자 파수꾼").count()) > 0);
+  const padDuring = await dpadTop(c);
+  check("★ 전투 패널이 떠도 D패드는 같은 자리다 (조작부가 움직이지 않는다)",
+    padBefore > 0 && padBefore === padDuring, `${padBefore} -> ${padDuring}`);
   const skillCount = await c
     .locator("button:has-text('강타'), button:has-text('응급 치료'), button:has-text('방어 태세')")
     .count();

@@ -373,6 +373,17 @@ async function main() {
   check("적이 사라진 것도 구조화 상태로 간다 (커맨드 창의 '싸우기' 가 내려간다)",
     erin.of("room.describe").at(-1)?.room.hasEnemy === false,
     JSON.stringify(erin.of("room.describe").at(-1)?.room));
+  /* ★ 지도도 갱신된다. 미니맵은 '적이 나오는 자리' 를 붉게 칠하는데, 잡은
+     적이 계속 붉게 남아 있으면 그건 틀린 지도다. 방이 아니라 **지역** 단위로
+     밀린다 — 미니맵이 그리는 것이 지역이고, 옆 방에 서 있는 사람의 지도도
+     지금 바뀌었기 때문이다. 새 메시지가 아니라 self.patch{region} 을 쓴다
+     (지역을 옮길 때 이미 같은 일을 하는 필드다). */
+  const foesAfterKill = erin.of("self.patch").filter((m) => m.region).at(-1)?.region?.foes;
+  check("★ 잡은 자리가 지도에서 빠진다 (self.patch{region} 으로 밀린다)",
+    foesAfterKill !== undefined && !foesAfterKill.includes("4,1"),
+    JSON.stringify(foesAfterKill));
+  check("다른 자리의 적은 그대로 남는다 (그 방만 지운다)",
+    (foesAfterKill ?? []).includes("5,2"), JSON.stringify(foesAfterKill));
 
   erin.clear();
   await advance(20_000); // 아직 45초가 되지 않았다
@@ -393,6 +404,11 @@ async function main() {
   check("구조화 상태만 갱신된다 (hasEnemy 가 다시 true)",
     erin.of("room.describe").at(-1)?.room.hasEnemy === true,
     JSON.stringify(erin.of("room.describe").at(-1)?.room));
+  /* ★ 돌아온 것도 대칭으로 밀린다. 죽을 때만 지우고 돌아올 때 안 되돌리면
+     지도가 영원히 '적 없음' 으로 남아 더 나쁘다 — 없는 안전을 약속한다. */
+  const foesAfterBack = erin.of("self.patch").filter((m) => m.region).at(-1)?.region?.foes;
+  check("★ 돌아온 자리가 지도에 다시 찍힌다",
+    (foesAfterBack ?? []).includes("4,1"), JSON.stringify(foesAfterBack));
 
   erin.clear();
   await erin.actAndWait({ type: "attack" });
